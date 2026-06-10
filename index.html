@@ -5,25 +5,91 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>Keuangan MBG — Koperasi ISS</title>
 <script src="https://cdn.tailwindcss.com"></script>
-<script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
-<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
-<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
-<script src="https://unpkg.com/recharts@2.12.7/umd/Recharts.js"></script>
 <style>
-  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #F4F2EC; }
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #F4F2EC; margin: 0; }
   * { -webkit-tap-highlight-color: transparent; }
   .num { font-variant-numeric: tabular-nums; }
+
+  #loading-screen {
+    position: fixed; inset: 0; display: flex; align-items: center; justify-content: center;
+    background: #F4F2EC; z-index: 9999; flex-direction: column; gap: 16px;
+  }
+  #loading-screen .sp {
+    width: 36px; height: 36px; border: 3px solid #E3E0D6; border-top-color: #15663E;
+    border-radius: 50%; animation: spin 0.8s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  #error-banner {
+    position: fixed; top: 0; left: 0; right: 0; padding: 14px 18px; background: #B7472E; color: white;
+    font-size: 13px; z-index: 10000; display: none; white-space: pre-wrap; line-height: 1.5;
+    font-family: ui-monospace, monospace;
+  }
+  #error-banner b { font-family: -apple-system, sans-serif; font-size: 14px; }
 </style>
 </head>
 <body>
+
+<div id="error-banner"></div>
+
+<div id="loading-screen">
+  <div class="sp"></div>
+  <div style="color: #6E7B70; font-size: 14px;">Memuat Keuangan MBG…</div>
+</div>
+
 <div id="root"></div>
 
+<script>
+  // Global error handler — supaya error apa pun langsung kelihatan, tidak silent
+  function showError(msg, src) {
+    var b = document.getElementById('error-banner');
+    if (!b) return;
+    b.style.display = 'block';
+    b.innerHTML = '<b>⚠️ Terjadi error saat memuat aplikasi</b><br><br>' +
+                  (src ? '<i>' + src + '</i><br>' : '') +
+                  String(msg) + '<br><br>' +
+                  'Coba: <b>Ctrl+Shift+R</b> untuk hard refresh. ' +
+                  'Kalau masih gagal, screenshot pesan ini dan kirim ke admin.';
+    var ls = document.getElementById('loading-screen');
+    if (ls) ls.style.display = 'none';
+  }
+  window.addEventListener('error', function(e) {
+    showError((e.message || 'Unknown error') + '\n' + (e.filename || ''), 'window.onerror');
+  });
+  window.addEventListener('unhandledrejection', function(e) {
+    showError(String(e.reason || 'Promise rejected'), 'unhandledrejection');
+  });
+
+  // Safety net: kalau setelah 15 detik root masih kosong, tampilkan error
+  setTimeout(function() {
+    var root = document.getElementById('root');
+    if (root && root.children.length === 0) {
+      showError('React tidak ter-render dalam 15 detik. Kemungkinan CDN library lambat atau diblokir.', 'timeout');
+    }
+  }, 15000);
+</script>
+
+<!-- React + dependencies -->
+<script crossorigin src="https://unpkg.com/react@18.2.0/umd/react.production.min.js"></script>
+<script crossorigin src="https://unpkg.com/react-dom@18.2.0/umd/react-dom.production.min.js"></script>
+<script crossorigin src="https://unpkg.com/prop-types@15.8.1/prop-types.min.js"></script>
+<script crossorigin src="https://unpkg.com/recharts@2.12.7/umd/Recharts.js"></script>
+<script src="https://unpkg.com/@babel/standalone@7.24.0/babel.min.js"></script>
+
 <script type="text/babel" data-presets="env,react">
+try {
+
 const { useState, useEffect, useMemo, useCallback } = React;
-const { PieChart, Pie, Cell, ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip, CartesianGrid } = Recharts;
+
+// Recharts defensive load — kalau gagal, app tetap jalan (chart kosong)
+const _R = window.Recharts || {};
+const PieChart = _R.PieChart, Pie = _R.Pie, Cell = _R.Cell;
+const ResponsiveContainer = _R.ResponsiveContainer;
+const BarChart = _R.BarChart, Bar = _R.Bar;
+const XAxis = _R.XAxis, YAxis = _R.YAxis;
+const Tooltip = _R.Tooltip, CartesianGrid = _R.CartesianGrid;
+const RECHARTS_OK = !!(PieChart && BarChart);
 
 // ====== KONFIGURASI ======
-// GANTI URL ini dengan exec URL Apps Script milikmu setelah deploy
 const API_URL = 'https://script.google.com/macros/s/AKfycbxYfD1f8wr73FxdXCOw8EagYmQhK3TKPB0VgRKGopXt7wKzwIgQK5bM-AmfkOskMkkEfA/exec';
 
 // ====== KONSTANTA ======
@@ -43,11 +109,11 @@ const fmtShort = n => {
 };
 
 // ====== API CLIENT ======
-async function api(action, params = {}) {
-  // Pakai GET untuk simpel; semua diserialize sbg query string
+async function api(action, params) {
+  params = params || {};
   const url = new URL(API_URL);
   url.searchParams.set('action', action);
-  Object.keys(params).forEach(k => {
+  Object.keys(params).forEach(function(k) {
     if (params[k] !== undefined && params[k] !== null) {
       url.searchParams.set(k, typeof params[k] === 'object' ? JSON.stringify(params[k]) : String(params[k]));
     }
@@ -60,14 +126,12 @@ async function api(action, params = {}) {
   }
 }
 
-// Upload file pakai POST karena base64-nya panjang
 async function apiUpload(action, params) {
   try {
     const res = await fetch(API_URL, {
-      method: 'POST',
-      redirect: 'follow',
+      method: 'POST', redirect: 'follow',
       headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-      body: JSON.stringify({ action, ...params }),
+      body: JSON.stringify(Object.assign({ action: action }, params)),
     });
     return await res.json();
   } catch (e) {
@@ -75,86 +139,96 @@ async function apiUpload(action, params) {
   }
 }
 
-// ====== SIMPAN SESSION ======
+// ====== SESSION ======
 const SESS_KEY = 'mbg_session_v1';
-const loadSession = () => { try { return JSON.parse(sessionStorage.getItem(SESS_KEY) || 'null'); } catch { return null; } };
-const saveSession = (s) => sessionStorage.setItem(SESS_KEY, JSON.stringify(s));
-const clearSession = () => sessionStorage.removeItem(SESS_KEY);
+function loadSession() { try { return JSON.parse(sessionStorage.getItem(SESS_KEY) || 'null'); } catch (e) { return null; } }
+function saveSession(s) { sessionStorage.setItem(SESS_KEY, JSON.stringify(s)); }
+function clearSession() { sessionStorage.removeItem(SESS_KEY); }
 
-// ====== IKON SVG SEDERHANA (hindari dependency tambahan) ======
-const Icon = ({ d, size = 18, className = '' }) => (
-  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor"
-    strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>{d}</svg>
-);
+// ====== ICON ======
+function Svg(props) {
+  return <svg width={props.size||18} height={props.size||18} viewBox="0 0 24 24" fill="none"
+    stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
+    className={props.className||''}>{props.children}</svg>;
+}
 const I = {
-  wallet:    <Icon d={<><path d="M19 7H5a2 2 0 00-2 2v8a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2z"/><path d="M16 12a1 1 0 100 2 1 1 0 000-2z"/><path d="M3 7l4-4h10v4"/></>} />,
-  dash:      <Icon d={<><rect x="3" y="3" width="7" height="9"/><rect x="14" y="3" width="7" height="5"/><rect x="14" y="12" width="7" height="9"/><rect x="3" y="16" width="7" height="5"/></>} />,
-  plus:      <Icon d={<><circle cx="12" cy="12" r="10"/><path d="M12 8v8M8 12h8"/></>} />,
-  settings:  <Icon d={<><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 11-2.83 2.83l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 008 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06a1.65 1.65 0 00.33-1.82 1.65 1.65 0 00-1.51-1H2a2 2 0 010-4h.09A1.65 1.65 0 004.6 8a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06a1.65 1.65 0 001.82.33H9a1.65 1.65 0 001-1.51V2a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06a1.65 1.65 0 00-.33 1.82V9a1.65 1.65 0 001.51 1H22a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/></>} />,
-  list:      <Icon d={<><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></>} />,
-  users:     <Icon d={<><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 00-3-3.87M16 3.13a4 4 0 010 7.75"/></>} />,
-  logout:    <Icon d={<><path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></>} />,
-  download:  <Icon d={<><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></>} />,
-  arrowR:    <Icon d={<><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></>} />,
-  arrowL:    <Icon d={<><line x1="19" y1="12" x2="5" y2="12"/><polyline points="12 19 5 12 12 5"/></>} />,
-  check:     <Icon d={<polyline points="20 6 9 17 4 12"/>} />,
-  receipt:   <Icon d={<><path d="M14 2H6a2 2 0 00-2 2v16l4-2 4 2 4-2 4 2V8z"/><line x1="9" y1="9" x2="15" y2="9"/><line x1="9" y1="13" x2="15" y2="13"/></>} />,
-  trend:     <Icon d={<><polyline points="23 18 13.5 8.5 8.5 13.5 1 6"/><polyline points="17 18 23 18 23 12"/></>} />,
-  team:      <Icon d={<><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/></>} />,
-  shield:    <Icon d={<><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></>} />,
-  building:  <Icon d={<><rect x="4" y="2" width="16" height="20" rx="2" ry="2"/><line x1="9" y1="22" x2="9" y2="2"/><line x1="15" y1="22" x2="15" y2="2"/></>} />,
-  file:      <Icon d={<><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/></>} />,
-  image:     <Icon d={<><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></>} />,
-  spinner:   <Icon d={<><line x1="12" y1="2" x2="12" y2="6"/><line x1="12" y1="18" x2="12" y2="22"/><line x1="4.93" y1="4.93" x2="7.76" y2="7.76"/><line x1="16.24" y1="16.24" x2="19.07" y2="19.07"/><line x1="2" y1="12" x2="6" y2="12"/><line x1="18" y1="12" x2="22" y2="12"/><line x1="4.93" y1="19.07" x2="7.76" y2="16.24"/><line x1="16.24" y1="7.76" x2="19.07" y2="4.93"/></>} className="animate-spin" />,
+  wallet:   <Svg><path d="M19 7H5a2 2 0 00-2 2v8a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2z"/><path d="M16 12a1 1 0 100 2 1 1 0 000-2z"/><path d="M3 7l4-4h10v4"/></Svg>,
+  dash:     <Svg><rect x="3" y="3" width="7" height="9"/><rect x="14" y="3" width="7" height="5"/><rect x="14" y="12" width="7" height="9"/><rect x="3" y="16" width="7" height="5"/></Svg>,
+  plus:     <Svg><circle cx="12" cy="12" r="10"/><path d="M12 8v8M8 12h8"/></Svg>,
+  settings: <Svg><circle cx="12" cy="12" r="3"/><path d="M12 1v6m0 10v6M4.22 4.22l4.24 4.24m7.08 7.08l4.24 4.24M1 12h6m10 0h6M4.22 19.78l4.24-4.24m7.08-7.08l4.24-4.24"/></Svg>,
+  list:     <Svg><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></Svg>,
+  users:    <Svg><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 00-3-3.87M16 3.13a4 4 0 010 7.75"/></Svg>,
+  logout:   <Svg><path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></Svg>,
+  download: <Svg><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></Svg>,
+  arrowR:   <Svg><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></Svg>,
+  arrowL:   <Svg><line x1="19" y1="12" x2="5" y2="12"/><polyline points="12 19 5 12 12 5"/></Svg>,
+  check:    <Svg><polyline points="20 6 9 17 4 12"/></Svg>,
+  receipt:  <Svg><path d="M14 2H6a2 2 0 00-2 2v16l4-2 4 2 4-2 4 2V8z"/><line x1="9" y1="9" x2="15" y2="9"/><line x1="9" y1="13" x2="15" y2="13"/></Svg>,
+  trend:    <Svg><polyline points="23 18 13.5 8.5 8.5 13.5 1 6"/><polyline points="17 18 23 18 23 12"/></Svg>,
+  team:     <Svg><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/></Svg>,
+  file:     <Svg><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/></Svg>,
+  image:    <Svg><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></Svg>,
+  spinner:  <Svg className="animate-spin"><line x1="12" y1="2" x2="12" y2="6"/><line x1="12" y1="18" x2="12" y2="22"/><line x1="4.93" y1="4.93" x2="7.76" y2="7.76"/><line x1="16.24" y1="16.24" x2="19.07" y2="19.07"/><line x1="2" y1="12" x2="6" y2="12"/><line x1="18" y1="12" x2="22" y2="12"/><line x1="4.93" y1="19.07" x2="7.76" y2="16.24"/><line x1="16.24" y1="7.76" x2="19.07" y2="4.93"/></Svg>,
 };
 
-// ====== UI ATOM ======
-const Eyebrow = ({ children }) => (
-  <div className="text-[11px] font-semibold uppercase mb-1" style={{ color: COLORS.muted, letterSpacing: '0.14em' }}>{children}</div>
-);
-const Btn = ({ children, onClick, kind='solid', disabled, full, type='button' }) => {
+// ====== ATOMS ======
+function Eyebrow(props) {
+  return <div className="text-[11px] font-semibold uppercase mb-1"
+    style={{ color: COLORS.muted, letterSpacing: '0.14em' }}>{props.children}</div>;
+}
+function Btn(props) {
+  const kind = props.kind || 'solid';
   const styles = kind === 'solid'
-    ? { background: disabled ? COLORS.muted : COLORS.green, color: '#fff' }
+    ? { background: props.disabled ? COLORS.muted : COLORS.green, color: '#fff' }
     : kind === 'danger' ? { background: COLORS.danger, color: '#fff' }
-    : { background: 'transparent', color: COLORS.green, border: `1px solid ${COLORS.line}` };
-  return <button type={type} onClick={onClick} disabled={disabled}
-    style={{ ...styles, opacity: disabled ? 0.6 : 1, width: full ? '100%' : 'auto' }}
-    className="inline-flex items-center justify-center gap-2 rounded-lg px-4 py-2.5 text-sm font-semibold transition">{children}</button>;
-};
-const Card = ({ children, pad=true, className='' }) => (
-  <div className={"rounded-xl " + className} style={{ background: COLORS.surface, border: `1px solid ${COLORS.line}`, padding: pad ? 20 : 0 }}>{children}</div>
-);
-const Field = ({ label, children, hint }) => (
-  <label className="block mb-4">
-    <div className="text-sm font-medium mb-1.5" style={{ color: COLORS.ink }}>{label}</div>
-    {children}
-    {hint && <div className="text-xs mt-1" style={{ color: COLORS.muted }}>{hint}</div>}
-  </label>
-);
-const inputStyle = { width: '100%', border: `1px solid ${COLORS.line}`, borderRadius: 8, padding: '10px 12px', fontSize: 14, background: '#fff', color: COLORS.ink, outline: 'none' };
+    : { background: 'transparent', color: COLORS.green, border: '1px solid ' + COLORS.line };
+  return <button type={props.type||'button'} onClick={props.onClick} disabled={props.disabled}
+    style={Object.assign({}, styles, { opacity: props.disabled ? 0.6 : 1, width: props.full ? '100%' : 'auto' })}
+    className="inline-flex items-center justify-center gap-2 rounded-lg px-4 py-2.5 text-sm font-semibold transition">
+    {props.children}
+  </button>;
+}
+function Card(props) {
+  const pad = props.pad !== false;
+  return <div className={'rounded-xl ' + (props.className||'')}
+    style={{ background: COLORS.surface, border: '1px solid ' + COLORS.line, padding: pad ? 20 : 0 }}>
+    {props.children}
+  </div>;
+}
+function Field(props) {
+  return <label className="block mb-4">
+    <div className="text-sm font-medium mb-1.5" style={{ color: COLORS.ink }}>{props.label}</div>
+    {props.children}
+    {props.hint && <div className="text-xs mt-1" style={{ color: COLORS.muted }}>{props.hint}</div>}
+  </label>;
+}
+const inputStyle = { width: '100%', border: '1px solid ' + COLORS.line, borderRadius: 8, padding: '10px 12px', fontSize: 14, background: '#fff', color: COLORS.ink, outline: 'none' };
 
-const Toast = ({ msg, type, onClose }) => {
-  useEffect(() => { const t = setTimeout(onClose, 3500); return () => clearTimeout(t); }, []);
+function Toast(props) {
+  useEffect(function() {
+    const t = setTimeout(props.onClose, 3500);
+    return function() { clearTimeout(t); };
+  }, []);
   return <div className="fixed top-4 left-1/2 -translate-x-1/2 z-50 rounded-lg px-4 py-2.5 text-sm font-medium shadow-lg"
-    style={{ background: type === 'error' ? COLORS.danger : COLORS.deep, color: '#fff' }}>{msg}</div>;
-};
+    style={{ background: props.type === 'error' ? COLORS.danger : COLORS.deep, color: '#fff' }}>{props.msg}</div>;
+}
 
 // ============================================================
 //  LOGIN
 // ============================================================
-function Login({ onLogin, toast }) {
+function Login(props) {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
 
-  const submit = async () => {
-    if (!username || !password) { toast('Isi username dan password', 'error'); return; }
+  async function submit() {
+    if (!username || !password) { props.toast('Isi username dan password', 'error'); return; }
     setLoading(true);
-    const res = await api('login', { username, password });
+    const res = await api('login', { username: username, password: password });
     setLoading(false);
-    if (res.ok) onLogin(res.data);
-    else toast(res.error || 'Login gagal', 'error');
-  };
+    if (res.ok) props.onLogin(res.data);
+    else props.toast(res.error || 'Login gagal', 'error');
+  }
 
   return (
     <div className="min-h-screen flex items-center justify-center p-5" style={{ background: COLORS.paper }}>
@@ -171,10 +245,11 @@ function Login({ onLogin, toast }) {
         <Card>
           <Eyebrow>Masuk ke akun</Eyebrow>
           <Field label="Username">
-            <input value={username} onChange={e=>setUsername(e.target.value)} style={inputStyle} placeholder="cth. akuntan1" autoCapitalize="off" />
+            <input value={username} onChange={function(e){setUsername(e.target.value);}} style={inputStyle} placeholder="cth. akuntan1" autoCapitalize="off" />
           </Field>
           <Field label="Password">
-            <input type="password" value={password} onChange={e=>setPassword(e.target.value)} onKeyDown={e=>e.key==='Enter'&&submit()} style={inputStyle} placeholder="••••••••" />
+            <input type="password" value={password} onChange={function(e){setPassword(e.target.value);}}
+              onKeyDown={function(e){ if(e.key==='Enter') submit(); }} style={inputStyle} placeholder="••••••••" />
           </Field>
           <Btn full onClick={submit} disabled={loading}>
             {loading ? I.spinner : I.arrowR} {loading ? 'Memeriksa…' : 'Masuk'}
@@ -191,26 +266,27 @@ function Login({ onLogin, toast }) {
 // ============================================================
 //  DASHBOARD
 // ============================================================
-function KPICard({ icon, label, value, sub, accent }) {
+function KPICard(props) {
   return (
     <Card>
       <div className="flex items-start justify-between">
         <div className="min-w-0 flex-1">
-          <div className="text-xs font-medium truncate" style={{ color: COLORS.muted }}>{label}</div>
-          <div className="text-xl sm:text-2xl font-bold mt-1 num truncate" style={{ color: COLORS.ink }}>{value}</div>
-          {sub && <div className="text-xs mt-1 truncate" style={{ color: accent || COLORS.muted }}>{sub}</div>}
+          <div className="text-xs font-medium truncate" style={{ color: COLORS.muted }}>{props.label}</div>
+          <div className="text-xl sm:text-2xl font-bold mt-1 num truncate" style={{ color: COLORS.ink }}>{props.value}</div>
+          {props.sub && <div className="text-xs mt-1 truncate" style={{ color: props.accent || COLORS.muted }}>{props.sub}</div>}
         </div>
-        <div className="rounded-lg flex items-center justify-center shrink-0 ml-2" style={{ width: 38, height: 38, background: COLORS.paper, color: COLORS.green }}>{icon}</div>
+        <div className="rounded-lg flex items-center justify-center shrink-0 ml-2" style={{ width: 38, height: 38, background: COLORS.paper, color: COLORS.green }}>{props.icon}</div>
       </div>
     </Card>
   );
 }
 
-function Dashboard({ session, scope, toast }) {
+function Dashboard(props) {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
+  const session = props.session, scope = props.scope, toast = props.toast;
 
-  const load = useCallback(async () => {
+  const load = useCallback(async function() {
     setLoading(true);
     const res = await api('getDashboard', {
       role: session.user.role, dapur: session.user.dapur || '', scope: scope || 'ALL'
@@ -220,7 +296,7 @@ function Dashboard({ session, scope, toast }) {
     else toast(res.error || 'Gagal memuat dashboard', 'error');
   }, [session, scope]);
 
-  useEffect(() => { load(); }, [load]);
+  useEffect(function() { load(); }, [load]);
 
   if (loading) return <Card><div className="flex items-center gap-2 text-sm" style={{ color: COLORS.muted }}>{I.spinner} Memuat…</div></Card>;
   if (!data) return <Card>Tidak ada data.</Card>;
@@ -230,72 +306,83 @@ function Dashboard({ session, scope, toast }) {
     <div>
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-3">
         <KPICard icon={I.team} label="Penerima Manfaat" value={new Intl.NumberFormat('id-ID').format(k.penerima)} sub="porsi/hari" />
-        <KPICard icon={I.wallet} label="Total Dana" value={fmtShort(k.totalDana)} sub={`VA ${fmtShort(k.saldoVA)}`} />
-        <KPICard icon={I.trend} label="Pengeluaran (riil)" value={fmtShort(k.totalRiil)} sub={`${k.serap}% terserap`} accent={COLORS.amber} />
-        <KPICard icon={I.receipt} label="Sisa Saldo" value={fmtShort(k.sisa)} sub={`dari ${fmtShort(k.totalDana)}`} accent={COLORS.green} />
+        <KPICard icon={I.wallet} label="Total Dana" value={fmtShort(k.totalDana)} sub={'VA ' + fmtShort(k.saldoVA)} />
+        <KPICard icon={I.trend} label="Pengeluaran (riil)" value={fmtShort(k.totalRiil)} sub={k.serap + '% terserap'} accent={COLORS.amber} />
+        <KPICard icon={I.receipt} label="Sisa Saldo" value={fmtShort(k.sisa)} sub={'dari ' + fmtShort(k.totalDana)} accent={COLORS.green} />
       </div>
 
-      <div className="grid lg:grid-cols-3 gap-3 mb-3">
-        <Card>
-          <Eyebrow>Distribusi per Jenis</Eyebrow>
-          {data.byJenis.length === 0 ? <p className="text-sm py-8 text-center" style={{ color: COLORS.muted }}>Belum ada transaksi.</p> : (
-            <div style={{ height: 220 }}>
-              <ResponsiveContainer width="100%" height="100%">
-                <PieChart>
-                  <Pie data={data.byJenis} dataKey="value" nameKey="name" innerRadius={48} outerRadius={80} paddingAngle={2}>
-                    {data.byJenis.map((_,i)=><Cell key={i} fill={CAT_COLORS[i%CAT_COLORS.length]}/>)}
-                  </Pie>
-                  <Tooltip formatter={v=>fmt(v)}/>
-                </PieChart>
-              </ResponsiveContainer>
-            </div>
-          )}
-          <div className="flex flex-wrap gap-x-3 gap-y-1 mt-2">
-            {data.byJenis.map((j,i)=>(
-              <div key={j.name} className="flex items-center gap-1.5 text-xs" style={{ color: COLORS.muted }}>
-                <span style={{ width: 9, height: 9, borderRadius: 2, background: CAT_COLORS[i%CAT_COLORS.length] }}/>{j.name}
+      {RECHARTS_OK && (
+        <>
+          <div className="grid lg:grid-cols-3 gap-3 mb-3">
+            <Card>
+              <Eyebrow>Distribusi per Jenis</Eyebrow>
+              {data.byJenis.length === 0 ? <p className="text-sm py-8 text-center" style={{ color: COLORS.muted }}>Belum ada transaksi.</p> : (
+                <div style={{ height: 220 }}>
+                  <ResponsiveContainer width="100%" height="100%">
+                    <PieChart>
+                      <Pie data={data.byJenis} dataKey="value" nameKey="name" innerRadius={48} outerRadius={80} paddingAngle={2}>
+                        {data.byJenis.map(function(_, i){ return <Cell key={i} fill={CAT_COLORS[i%CAT_COLORS.length]}/>; })}
+                      </Pie>
+                      <Tooltip formatter={function(v){return fmt(v);}}/>
+                    </PieChart>
+                  </ResponsiveContainer>
+                </div>
+              )}
+              <div className="flex flex-wrap gap-x-3 gap-y-1 mt-2">
+                {data.byJenis.map(function(j, i){
+                  return <div key={j.name} className="flex items-center gap-1.5 text-xs" style={{ color: COLORS.muted }}>
+                    <span style={{ width: 9, height: 9, borderRadius: 2, background: CAT_COLORS[i%CAT_COLORS.length] }}/>
+                    {j.name}
+                  </div>;
+                })}
               </div>
-            ))}
-          </div>
-        </Card>
+            </Card>
 
-        <Card className="lg:col-span-2">
-          <Eyebrow>Penggunaan Anggaran per Kategori</Eyebrow>
-          {data.byKategori.length === 0 ? <p className="text-sm py-8 text-center" style={{ color: COLORS.muted }}>Belum ada data.</p> : (
-            <div style={{ height: 260 }}>
-              <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={data.byKategori} layout="vertical" margin={{ left: 4, right: 16 }}>
-                  <CartesianGrid horizontal={false} stroke={COLORS.line} />
-                  <XAxis type="number" tickFormatter={fmtShort} tick={{ fontSize: 11, fill: COLORS.muted }}/>
-                  <YAxis type="category" dataKey="name" width={110} tick={{ fontSize: 11, fill: COLORS.ink }}/>
-                  <Tooltip formatter={v=>fmt(v)} />
-                  <Bar dataKey="value" fill={COLORS.green} radius={[0,4,4,0]} />
-                </BarChart>
-              </ResponsiveContainer>
+            <Card className="lg:col-span-2">
+              <Eyebrow>Penggunaan Anggaran per Kategori</Eyebrow>
+              {data.byKategori.length === 0 ? <p className="text-sm py-8 text-center" style={{ color: COLORS.muted }}>Belum ada data.</p> : (
+                <div style={{ height: 260 }}>
+                  <ResponsiveContainer width="100%" height="100%">
+                    <BarChart data={data.byKategori} layout="vertical" margin={{ left: 4, right: 16 }}>
+                      <CartesianGrid horizontal={false} stroke={COLORS.line} />
+                      <XAxis type="number" tickFormatter={fmtShort} tick={{ fontSize: 11, fill: COLORS.muted }}/>
+                      <YAxis type="category" dataKey="name" width={110} tick={{ fontSize: 11, fill: COLORS.ink }}/>
+                      <Tooltip formatter={function(v){return fmt(v);}} />
+                      <Bar dataKey="value" fill={COLORS.green} radius={[0,4,4,0]} />
+                    </BarChart>
+                  </ResponsiveContainer>
+                </div>
+              )}
+            </Card>
+          </div>
+
+          <Card>
+            <Eyebrow>Pengeluaran Harian (riil)</Eyebrow>
+            {data.byDay.length === 0 ? <p className="text-sm py-8 text-center" style={{ color: COLORS.muted }}>Belum ada transaksi.</p> : (
+              <div style={{ height: 220 }}>
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart data={data.byDay} margin={{ left: 4, right: 8 }}>
+                    <CartesianGrid vertical={false} stroke={COLORS.line} />
+                    <XAxis dataKey="tanggal" tick={{ fontSize: 10, fill: COLORS.muted }}/>
+                    <YAxis tickFormatter={fmtShort} tick={{ fontSize: 11, fill: COLORS.muted }} width={62}/>
+                    <Tooltip formatter={function(v){return fmt(v);}} />
+                    <Bar dataKey="value" fill={COLORS.lime} radius={[4,4,0,0]} />
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+            )}
+            <div className="text-xs mt-2" style={{ color: COLORS.muted }}>
+              Total unriil (pengajuan): <b style={{ color: COLORS.ink }}>{fmt(k.totalUnriil)}</b> · Selisih vs riil: {fmt(k.totalUnriil - k.totalRiil)}
             </div>
-          )}
-        </Card>
-      </div>
+          </Card>
+        </>
+      )}
 
-      <Card>
-        <Eyebrow>Pengeluaran Harian (riil)</Eyebrow>
-        {data.byDay.length === 0 ? <p className="text-sm py-8 text-center" style={{ color: COLORS.muted }}>Belum ada transaksi.</p> : (
-          <div style={{ height: 220 }}>
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={data.byDay} margin={{ left: 4, right: 8 }}>
-                <CartesianGrid vertical={false} stroke={COLORS.line} />
-                <XAxis dataKey="tanggal" tick={{ fontSize: 10, fill: COLORS.muted }}/>
-                <YAxis tickFormatter={fmtShort} tick={{ fontSize: 11, fill: COLORS.muted }} width={62}/>
-                <Tooltip formatter={v=>fmt(v)} />
-                <Bar dataKey="value" fill={COLORS.lime} radius={[4,4,0,0]} />
-              </BarChart>
-            </ResponsiveContainer>
-          </div>
-        )}
-        <div className="text-xs mt-2" style={{ color: COLORS.muted }}>
-          Total unriil (pengajuan): <b style={{ color: COLORS.ink }}>{fmt(k.totalUnriil)}</b> · Selisih vs riil: {fmt(k.totalUnriil - k.totalRiil)}
-        </div>
-      </Card>
+      {!RECHARTS_OK && (
+        <Card>
+          <p className="text-sm" style={{ color: COLORS.muted }}>Grafik tidak ter-load (library Recharts gagal dimuat). KPI di atas tetap akurat. Coba hard refresh (Ctrl+Shift+R).</p>
+        </Card>
+      )}
     </div>
   );
 }
@@ -303,7 +390,8 @@ function Dashboard({ session, scope, toast }) {
 // ============================================================
 //  INPUT TRANSAKSI
 // ============================================================
-function InputTransaksi({ session, toast, onSaved }) {
+function InputTransaksi(props) {
+  const session = props.session, toast = props.toast, onSaved = props.onSaved;
   const [kategoriMap, setKategoriMap] = useState({});
   const [step, setStep] = useState(1);
   const [jenis, setJenis] = useState(null);
@@ -311,22 +399,26 @@ function InputTransaksi({ session, toast, onSaved }) {
     tanggal: new Date().toISOString().substring(0,10),
     sumber: 'VA', uraian: '', kategori: '', riil: '', unriil: '',
   });
-  const [bukti, setBukti] = useState(null); // File
+  const [bukti, setBukti] = useState(null);
   const [uploading, setUploading] = useState(false);
 
-  useEffect(() => { api('getKategori').then(r => r.ok && setKategoriMap(r.data)); }, []);
+  useEffect(function() {
+    api('getKategori').then(function(r){ if (r.ok) setKategoriMap(r.data); });
+  }, []);
 
-  const set = (k,v) => setForm(f => ({ ...f, [k]: v }));
+  function set(k, v) { setForm(function(f){ const n = Object.assign({}, f); n[k] = v; return n; }); }
   const valid = form.uraian && form.kategori && form.riil;
 
-  const fileToBase64 = (file) => new Promise((res, rej) => {
-    const r = new FileReader();
-    r.onload = () => res(r.result.split(',')[1]);
-    r.onerror = rej;
-    r.readAsDataURL(file);
-  });
+  function fileToBase64(file) {
+    return new Promise(function(res, rej) {
+      const r = new FileReader();
+      r.onload = function(){ res(r.result.split(',')[1]); };
+      r.onerror = rej;
+      r.readAsDataURL(file);
+    });
+  }
 
-  const submit = async () => {
+  async function submit() {
     setUploading(true);
     let bukti_url = '';
     if (bukti) {
@@ -337,8 +429,8 @@ function InputTransaksi({ session, toast, onSaved }) {
     }
     const res = await api('addTransaksi', {
       role: session.user.role, user_id: session.user.id, dapur: session.user.dapur,
-      tanggal: form.tanggal, jenis, kategori: form.kategori, uraian: form.uraian,
-      sumber: form.sumber, riil: form.riil, unriil: form.unriil || form.riil, bukti_url,
+      tanggal: form.tanggal, jenis: jenis, kategori: form.kategori, uraian: form.uraian,
+      sumber: form.sumber, riil: form.riil, unriil: form.unriil || form.riil, bukti_url: bukti_url,
     });
     setUploading(false);
     if (res.ok) {
@@ -347,7 +439,7 @@ function InputTransaksi({ session, toast, onSaved }) {
       setForm({ tanggal: new Date().toISOString().substring(0,10), sumber: 'VA', uraian: '', kategori: '', riil: '', unriil: '' });
       onSaved && onSaved();
     } else toast(res.error || 'Gagal menyimpan', 'error');
-  };
+  }
 
   if (step === 1) {
     return (
@@ -356,14 +448,14 @@ function InputTransaksi({ session, toast, onSaved }) {
         <h2 className="text-lg font-bold mb-1" style={{ color: COLORS.ink }}>Pilih jenis transaksi</h2>
         <p className="text-sm mb-4" style={{ color: COLORS.muted }}>Menentukan daftar kategori di langkah berikutnya.</p>
         <div className="grid grid-cols-2 gap-2.5">
-          {Object.keys(kategoriMap).map(j => (
-            <button key={j} onClick={()=>{ setJenis(j); setStep(2); }}
+          {Object.keys(kategoriMap).map(function(j){
+            return <button key={j} onClick={function(){ setJenis(j); setStep(2); }}
               className="rounded-lg p-4 text-left transition hover:bg-gray-50"
-              style={{ border: `1px solid ${COLORS.line}`, background: '#fff' }}>
+              style={{ border: '1px solid ' + COLORS.line, background: '#fff' }}>
               <div className="font-semibold text-sm" style={{ color: COLORS.ink }}>{j}</div>
               <div className="text-xs mt-0.5" style={{ color: COLORS.muted }}>{kategoriMap[j].length} kategori</div>
-            </button>
-          ))}
+            </button>;
+          })}
         </div>
       </Card>
     );
@@ -371,39 +463,39 @@ function InputTransaksi({ session, toast, onSaved }) {
 
   return (
     <Card>
-      <button onClick={()=>setStep(1)} className="inline-flex items-center gap-1.5 text-sm mb-3" style={{ color: COLORS.green }}>
+      <button onClick={function(){setStep(1);}} className="inline-flex items-center gap-1.5 text-sm mb-3" style={{ color: COLORS.green }}>
         {I.arrowL} {jenis}
       </button>
       <Eyebrow>Langkah 2 dari 2 · Detail transaksi</Eyebrow>
       <div className="grid sm:grid-cols-2 gap-x-4 mt-2">
-        <Field label="Tanggal transaksi"><input type="date" value={form.tanggal} onChange={e=>set('tanggal', e.target.value)} style={inputStyle}/></Field>
+        <Field label="Tanggal transaksi"><input type="date" value={form.tanggal} onChange={function(e){set('tanggal', e.target.value);}} style={inputStyle}/></Field>
         <Field label="Sumber dana">
           <div className="flex gap-2">
-            {['VA','Petty Cash'].map(s=>(
-              <button key={s} onClick={()=>set('sumber', s)} className="flex-1 rounded-lg py-2.5 text-sm font-medium"
-                style={{ border: `1px solid ${form.sumber===s?COLORS.green:COLORS.line}`,
+            {['VA','Petty Cash'].map(function(s){
+              return <button key={s} onClick={function(){set('sumber', s);}} className="flex-1 rounded-lg py-2.5 text-sm font-medium"
+                style={{ border: '1px solid ' + (form.sumber===s?COLORS.green:COLORS.line),
                          background: form.sumber===s?COLORS.paper:'#fff',
-                         color: form.sumber===s?COLORS.green:COLORS.muted }}>{s}</button>
-            ))}
+                         color: form.sumber===s?COLORS.green:COLORS.muted }}>{s}</button>;
+            })}
           </div>
         </Field>
         <Field label="Kategori">
-          <select value={form.kategori} onChange={e=>set('kategori', e.target.value)} style={inputStyle}>
+          <select value={form.kategori} onChange={function(e){set('kategori', e.target.value);}} style={inputStyle}>
             <option value="">Pilih kategori…</option>
-            {(kategoriMap[jenis]||[]).map(k=><option key={k} value={k}>{k}</option>)}
+            {(kategoriMap[jenis]||[]).map(function(k){ return <option key={k} value={k}>{k}</option>; })}
           </select>
         </Field>
-        <Field label="Uraian transaksi"><input value={form.uraian} onChange={e=>set('uraian', e.target.value)} placeholder="cth. Ayam potong 60kg" style={inputStyle}/></Field>
-        <Field label="Jumlah riil" hint="Realisasi aktual yang dibayar"><input type="number" value={form.riil} onChange={e=>set('riil', e.target.value)} placeholder="0" style={inputStyle}/></Field>
-        <Field label="Jumlah unriil" hint="Nilai pengajuan / anggaran (boleh dikosongkan)"><input type="number" value={form.unriil} onChange={e=>set('unriil', e.target.value)} placeholder="0" style={inputStyle}/></Field>
+        <Field label="Uraian transaksi"><input value={form.uraian} onChange={function(e){set('uraian', e.target.value);}} placeholder="cth. Ayam potong 60kg" style={inputStyle}/></Field>
+        <Field label="Jumlah riil" hint="Realisasi aktual yang dibayar"><input type="number" value={form.riil} onChange={function(e){set('riil', e.target.value);}} placeholder="0" style={inputStyle}/></Field>
+        <Field label="Jumlah unriil" hint="Nilai pengajuan/anggaran (boleh kosong)"><input type="number" value={form.unriil} onChange={function(e){set('unriil', e.target.value);}} placeholder="0" style={inputStyle}/></Field>
       </div>
-      <Field label="Bukti transaksi" hint="Foto nota, gambar, atau PDF — akan tersimpan ke Google Drive">
+      <Field label="Bukti transaksi" hint="Foto nota, gambar, atau PDF — tersimpan ke Google Drive">
         <label className="flex flex-col items-center justify-center gap-1 rounded-lg py-6 cursor-pointer"
-          style={{ border: `1.5px dashed ${COLORS.line}`, color: COLORS.muted }}>
+          style={{ border: '1.5px dashed ' + COLORS.line, color: COLORS.muted }}>
           <div className="flex items-center gap-2">{I.image} {I.file}</div>
           <span className="text-sm">{bukti ? bukti.name : 'Ketuk untuk pilih / ambil foto'}</span>
           <input type="file" className="hidden" accept="image/*,application/pdf" capture="environment"
-            onChange={e=>setBukti(e.target.files[0])}/>
+            onChange={function(e){setBukti(e.target.files[0]);}}/>
         </label>
       </Field>
       <Btn full disabled={!valid || uploading} onClick={submit}>
@@ -416,20 +508,21 @@ function InputTransaksi({ session, toast, onSaved }) {
 // ============================================================
 //  SETUP PERIODE
 // ============================================================
-function SetupPeriode({ session, toast }) {
+function SetupPeriode(props) {
+  const session = props.session, toast = props.toast;
   const [f, setF] = useState({ periode: '', penerima: '', saldoVA: '', saldoPetty: '' });
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
-  const set = (k,v) => setF(p => ({ ...p, [k]: v }));
+  function set(k, v) { setF(function(p){ const n = Object.assign({}, p); n[k] = v; return n; }); }
 
-  useEffect(() => {
-    api('getSetup', { dapur: session.user.dapur }).then(r => {
+  useEffect(function() {
+    api('getSetup', { dapur: session.user.dapur }).then(function(r){
       setLoading(false);
       if (r.ok && r.data) setF({ periode: r.data.periode, penerima: r.data.penerima, saldoVA: r.data.saldoVA, saldoPetty: r.data.saldoPetty });
     });
   }, []);
 
-  const submit = async () => {
+  async function submit() {
     if (!f.periode) { toast('Isi periode', 'error'); return; }
     setSaving(true);
     const res = await api('saveSetup', {
@@ -439,7 +532,7 @@ function SetupPeriode({ session, toast }) {
     setSaving(false);
     if (res.ok) toast('Setup tersimpan');
     else toast(res.error || 'Gagal menyimpan', 'error');
-  };
+  }
 
   if (loading) return <Card>{I.spinner}</Card>;
 
@@ -448,10 +541,10 @@ function SetupPeriode({ session, toast }) {
       <Eyebrow>Awal periode</Eyebrow>
       <h2 className="text-lg font-bold mb-4" style={{ color: COLORS.ink }}>Setup data awal</h2>
       <div className="grid sm:grid-cols-2 gap-x-4">
-        <Field label="Periode" hint="cth. Juni 2026"><input value={f.periode} onChange={e=>set('periode', e.target.value)} style={inputStyle}/></Field>
-        <Field label="Jumlah penerima manfaat" hint="porsi per hari"><input type="number" value={f.penerima} onChange={e=>set('penerima', e.target.value)} style={inputStyle}/></Field>
-        <Field label="Saldo VA awal"><input type="number" value={f.saldoVA} onChange={e=>set('saldoVA', e.target.value)} style={inputStyle}/></Field>
-        <Field label="Saldo Petty Cash awal"><input type="number" value={f.saldoPetty} onChange={e=>set('saldoPetty', e.target.value)} style={inputStyle}/></Field>
+        <Field label="Periode" hint="cth. Juni 2026"><input value={f.periode} onChange={function(e){set('periode', e.target.value);}} style={inputStyle}/></Field>
+        <Field label="Jumlah penerima manfaat" hint="porsi per hari"><input type="number" value={f.penerima} onChange={function(e){set('penerima', e.target.value);}} style={inputStyle}/></Field>
+        <Field label="Saldo VA awal"><input type="number" value={f.saldoVA} onChange={function(e){set('saldoVA', e.target.value);}} style={inputStyle}/></Field>
+        <Field label="Saldo Petty Cash awal"><input type="number" value={f.saldoPetty} onChange={function(e){set('saldoPetty', e.target.value);}} style={inputStyle}/></Field>
       </div>
       <Btn onClick={submit} disabled={saving}>{saving ? I.spinner : I.check} Simpan setup</Btn>
     </Card>
@@ -459,61 +552,69 @@ function SetupPeriode({ session, toast }) {
 }
 
 // ============================================================
-//  RIWAYAT + EXPORT CSV
+//  RIWAYAT + EXPORT
 // ============================================================
 function exportCSV(rows, dapurMap) {
   const head = ['Tanggal','Dapur','Jenis','Kategori','Uraian','Sumber','Riil','Unriil','Bukti'];
-  const esc = (v) => {
+  function esc(v) {
     const s = String(v == null ? '' : v);
     return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
-  };
-  const body = rows.map(r => [r.tanggal, dapurMap[r.dapur]||r.dapur, r.jenis, r.kategori, r.uraian, r.sumber, r.riil, r.unriil, r.bukti_url].map(esc).join(','));
-  // BOM agar buka di Excel utf-8 aman
+  }
+  const body = rows.map(function(r){
+    return [r.tanggal, dapurMap[r.dapur]||r.dapur, r.jenis, r.kategori, r.uraian, r.sumber, r.riil, r.unriil, r.bukti_url].map(esc).join(',');
+  });
   const csv = '\ufeff' + [head.join(','), ...body].join('\n');
   const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
-  a.download = `laporan-keuangan-mbg-${new Date().toISOString().substring(0,10)}.csv`;
+  a.download = 'laporan-keuangan-mbg-' + new Date().toISOString().substring(0,10) + '.csv';
   a.click();
 }
 
-function Riwayat({ session, scope, toast }) {
+function Riwayat(props) {
+  const session = props.session, scope = props.scope;
   const [rows, setRows] = useState([]);
   const [dapur, setDapur] = useState([]);
   const [loading, setLoading] = useState(true);
   const [q, setQ] = useState('');
 
-  useEffect(() => {
+  useEffect(function() {
     Promise.all([
       api('getTransaksi', { role: session.user.role, dapur: session.user.dapur || '', scope: scope || 'ALL' }),
       api('getDapur'),
-    ]).then(([t, d]) => {
+    ]).then(function(arr){
       setLoading(false);
-      if (t.ok) setRows(t.data);
-      if (d.ok) setDapur(d.data);
+      if (arr[0].ok) setRows(arr[0].data);
+      if (arr[1].ok) setDapur(arr[1].data);
     });
   }, [scope]);
 
-  const dapurMap = useMemo(() => Object.fromEntries(dapur.map(d => [d.id, d.nama])), [dapur]);
-  const filtered = useMemo(() => {
+  const dapurMap = useMemo(function(){
+    const m = {}; dapur.forEach(function(d){ m[d.id] = d.nama; }); return m;
+  }, [dapur]);
+  const filtered = useMemo(function() {
     if (!q.trim()) return rows;
     const t = q.toLowerCase();
-    return rows.filter(r => (r.uraian||'').toLowerCase().includes(t) || (r.kategori||'').toLowerCase().includes(t) || (r.jenis||'').toLowerCase().includes(t));
+    return rows.filter(function(r){
+      return (r.uraian||'').toLowerCase().indexOf(t) >= 0 ||
+             (r.kategori||'').toLowerCase().indexOf(t) >= 0 ||
+             (r.jenis||'').toLowerCase().indexOf(t) >= 0;
+    });
   }, [rows, q]);
 
   if (loading) return <Card>{I.spinner}</Card>;
 
   return (
     <Card pad={false}>
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-4" style={{ borderBottom: `1px solid ${COLORS.line}` }}>
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-4" style={{ borderBottom: '1px solid ' + COLORS.line }}>
         <div>
           <div className="font-bold" style={{ color: COLORS.ink }}>Riwayat Transaksi</div>
           <div className="text-xs" style={{ color: COLORS.muted }}>{filtered.length} transaksi</div>
         </div>
         <div className="flex items-center gap-2">
-          <input value={q} onChange={e=>setQ(e.target.value)} placeholder="Cari uraian / kategori…"
-            style={{ ...inputStyle, width: 220, padding: '8px 10px', fontSize: 13 }} />
-          <Btn kind="ghost" onClick={()=>exportCSV(filtered, dapurMap)}>{I.download} Unduh Sheet</Btn>
+          <input value={q} onChange={function(e){setQ(e.target.value);}} placeholder="Cari uraian / kategori…"
+            style={Object.assign({}, inputStyle, { width: 220, padding: '8px 10px', fontSize: 13 })} />
+          <Btn kind="ghost" onClick={function(){exportCSV(filtered, dapurMap);}}>{I.download} Unduh Sheet</Btn>
         </div>
       </div>
       <div className="overflow-x-auto">
@@ -533,8 +634,8 @@ function Riwayat({ session, scope, toast }) {
           <tbody>
             {filtered.length === 0 ? (
               <tr><td colSpan="8" className="px-4 py-8 text-center" style={{ color: COLORS.muted }}>Belum ada transaksi.</td></tr>
-            ) : filtered.map(r => (
-              <tr key={r.id} style={{ borderTop: `1px solid ${COLORS.line}` }}>
+            ) : filtered.map(function(r){
+              return <tr key={r.id} style={{ borderTop: '1px solid ' + COLORS.line }}>
                 <td className="px-4 py-2.5" style={{ color: COLORS.muted }}>{r.tanggal}</td>
                 {scope === 'ALL' && <td className="px-4 py-2.5 text-xs" style={{ color: COLORS.muted }}>{dapurMap[r.dapur]||r.dapur}</td>}
                 <td className="px-4 py-2.5" style={{ color: COLORS.ink }}>{r.uraian}
@@ -550,8 +651,8 @@ function Riwayat({ session, scope, toast }) {
                 <td className="px-4 py-2.5">
                   {r.bukti_url ? <a href={r.bukti_url} target="_blank" rel="noopener" className="inline-flex items-center gap-1 text-xs" style={{ color: COLORS.green }}>{I.file} lihat</a> : <span className="text-xs" style={{ color: COLORS.muted }}>—</span>}
                 </td>
-              </tr>
-            ))}
+              </tr>;
+            })}
           </tbody>
         </table>
       </div>
@@ -562,45 +663,46 @@ function Riwayat({ session, scope, toast }) {
 // ============================================================
 //  USERS (admin)
 // ============================================================
-function Pengguna({ session, toast }) {
+function Pengguna(props) {
+  const session = props.session, toast = props.toast;
   const [rows, setRows] = useState([]);
   const [dapur, setDapur] = useState([]);
   const [loading, setLoading] = useState(true);
   const [open, setOpen] = useState(false);
   const [f, setF] = useState({ username:'', password:'', nama:'', target_role:'akuntan', dapur:'' });
 
-  const load = () => {
+  function load() {
     setLoading(true);
     Promise.all([
       api('getUsers', { role: session.user.role }),
       api('getDapur'),
-    ]).then(([u, d]) => {
+    ]).then(function(arr){
       setLoading(false);
-      if (u.ok) setRows(u.data);
-      if (d.ok) setDapur(d.data);
+      if (arr[0].ok) setRows(arr[0].data);
+      if (arr[1].ok) setDapur(arr[1].data);
     });
-  };
+  }
   useEffect(load, []);
 
-  const submit = async () => {
+  async function submit() {
     if (!f.username || !f.password || !f.nama) { toast('Lengkapi data', 'error'); return; }
-    const res = await api('addUser', { role: session.user.role, ...f });
+    const res = await api('addUser', Object.assign({ role: session.user.role }, f));
     if (res.ok) { toast('User ditambahkan'); setOpen(false); setF({ username:'', password:'', nama:'', target_role:'akuntan', dapur:'' }); load(); }
     else toast(res.error, 'error');
-  };
+  }
 
   if (loading) return <Card>{I.spinner}</Card>;
-  const dapurMap = Object.fromEntries(dapur.map(d => [d.id, d.nama]));
+  const dapurMap = {}; dapur.forEach(function(d){ dapurMap[d.id] = d.nama; });
 
   return (
     <>
       <Card pad={false}>
-        <div className="flex items-center justify-between p-4" style={{ borderBottom: `1px solid ${COLORS.line}` }}>
+        <div className="flex items-center justify-between p-4" style={{ borderBottom: '1px solid ' + COLORS.line }}>
           <div>
             <div className="font-bold" style={{ color: COLORS.ink }}>Manajemen Pengguna</div>
             <div className="text-xs" style={{ color: COLORS.muted }}>{rows.length} akun terdaftar</div>
           </div>
-          <Btn onClick={()=>setOpen(true)}>{I.plus} Tambah User</Btn>
+          <Btn onClick={function(){setOpen(true);}}>{I.plus} Tambah User</Btn>
         </div>
         <div className="overflow-x-auto">
           <table className="w-full text-sm" style={{ minWidth: 600 }}>
@@ -614,8 +716,8 @@ function Pengguna({ session, toast }) {
               </tr>
             </thead>
             <tbody>
-              {rows.map(u => (
-                <tr key={u.id} style={{ borderTop: `1px solid ${COLORS.line}` }}>
+              {rows.map(function(u){
+                return <tr key={u.id} style={{ borderTop: '1px solid ' + COLORS.line }}>
                   <td className="px-4 py-2.5 font-medium" style={{ color: COLORS.ink }}>{u.nama}</td>
                   <td className="px-4 py-2.5" style={{ color: COLORS.muted }}>{u.username}</td>
                   <td className="px-4 py-2.5"><span className="text-xs rounded px-2 py-0.5" style={{ background: COLORS.paper, color: COLORS.green }}>{u.role}</span></td>
@@ -623,8 +725,8 @@ function Pengguna({ session, toast }) {
                   <td className="px-4 py-2.5">
                     <span className="text-xs rounded px-2 py-0.5" style={{ background: u.aktif==='YA'?'#E8F1EC':'#FAE5DF', color: u.aktif==='YA'?COLORS.green:COLORS.danger }}>{u.aktif}</span>
                   </td>
-                </tr>
-              ))}
+                </tr>;
+              })}
             </tbody>
           </table>
         </div>
@@ -634,25 +736,25 @@ function Pengguna({ session, toast }) {
         <div className="fixed inset-0 z-40 flex items-center justify-center p-4" style={{ background: 'rgba(0,0,0,0.4)' }}>
           <Card className="w-full max-w-md">
             <Eyebrow>Tambah pengguna</Eyebrow>
-            <Field label="Nama lengkap"><input value={f.nama} onChange={e=>setF({...f, nama:e.target.value})} style={inputStyle}/></Field>
-            <Field label="Username"><input value={f.username} onChange={e=>setF({...f, username:e.target.value})} style={inputStyle} autoCapitalize="off"/></Field>
-            <Field label="Password awal"><input value={f.password} onChange={e=>setF({...f, password:e.target.value})} style={inputStyle}/></Field>
+            <Field label="Nama lengkap"><input value={f.nama} onChange={function(e){setF(Object.assign({}, f, {nama:e.target.value}));}} style={inputStyle}/></Field>
+            <Field label="Username"><input value={f.username} onChange={function(e){setF(Object.assign({}, f, {username:e.target.value}));}} style={inputStyle} autoCapitalize="off"/></Field>
+            <Field label="Password awal"><input value={f.password} onChange={function(e){setF(Object.assign({}, f, {password:e.target.value}));}} style={inputStyle}/></Field>
             <Field label="Peran">
-              <select value={f.target_role} onChange={e=>setF({...f, target_role:e.target.value})} style={inputStyle}>
+              <select value={f.target_role} onChange={function(e){setF(Object.assign({}, f, {target_role:e.target.value}));}} style={inputStyle}>
                 <option value="akuntan">Akuntan</option><option value="pic">PIC Dapur</option>
                 <option value="yayasan">Yayasan</option><option value="admin">Admin</option>
               </select>
             </Field>
             {(f.target_role==='akuntan'||f.target_role==='pic') && (
               <Field label="Dapur">
-                <select value={f.dapur} onChange={e=>setF({...f, dapur:e.target.value})} style={inputStyle}>
+                <select value={f.dapur} onChange={function(e){setF(Object.assign({}, f, {dapur:e.target.value}));}} style={inputStyle}>
                   <option value="">Pilih dapur…</option>
-                  {dapur.map(d => <option key={d.id} value={d.id}>{d.nama}</option>)}
+                  {dapur.map(function(d){ return <option key={d.id} value={d.id}>{d.nama}</option>; })}
                 </select>
               </Field>
             )}
             <div className="flex gap-2">
-              <Btn kind="ghost" onClick={()=>setOpen(false)}>Batal</Btn>
+              <Btn kind="ghost" onClick={function(){setOpen(false);}}>Batal</Btn>
               <Btn onClick={submit}>{I.check} Simpan</Btn>
             </div>
           </Card>
@@ -673,19 +775,19 @@ function App() {
   const [toastData, setToastData] = useState(null);
   const [refreshKey, setRefreshKey] = useState(0);
 
-  const toast = (msg, type='ok') => setToastData({ msg, type });
+  function toast(msg, type) { setToastData({ msg: msg, type: type || 'ok' }); }
 
-  useEffect(() => {
+  useEffect(function() {
     if (session) {
       setScope(session.user.dapur || 'ALL');
-      api('getDapur').then(r => r.ok && setDapurList(r.data));
+      api('getDapur').then(function(r){ if (r.ok) setDapurList(r.data); });
     }
   }, [session]);
 
   if (!session) return (
     <>
-      <Login onLogin={s => { saveSession(s); setSession(s); }} toast={toast} />
-      {toastData && <Toast {...toastData} onClose={()=>setToastData(null)}/>}
+      <Login onLogin={function(s){ saveSession(s); setSession(s); }} toast={toast} />
+      {toastData && <Toast msg={toastData.msg} type={toastData.type} onClose={function(){setToastData(null);}}/>}
     </>
   );
 
@@ -699,11 +801,11 @@ function App() {
 
   const canPickScope = role === 'yayasan' || role === 'admin';
   const effScope = canPickScope ? scope : session.user.dapur;
-  const logout = () => { clearSession(); setSession(null); };
+  function logout() { clearSession(); setSession(null); }
 
   return (
     <div className="min-h-screen flex flex-col" style={{ background: COLORS.paper, color: COLORS.ink }}>
-      <header className="flex items-center justify-between px-4 sm:px-6 py-3" style={{ background: COLORS.surface, borderBottom: `1px solid ${COLORS.line}` }}>
+      <header className="flex items-center justify-between px-4 sm:px-6 py-3" style={{ background: COLORS.surface, borderBottom: '1px solid ' + COLORS.line }}>
         <div className="flex items-center gap-2.5 min-w-0">
           <div className="rounded-lg flex items-center justify-center shrink-0" style={{ width: 34, height: 34, background: COLORS.green, color: '#fff' }}>{I.wallet}</div>
           <div className="min-w-0">
@@ -713,52 +815,73 @@ function App() {
         </div>
         <div className="flex items-center gap-2">
           {canPickScope && (view==='dash'||view==='riwayat') && (
-            <select value={scope} onChange={e=>setScope(e.target.value)}
-              style={{ ...inputStyle, width: 'auto', padding: '7px 10px', fontSize: 13 }}>
+            <select value={scope} onChange={function(e){setScope(e.target.value);}}
+              style={Object.assign({}, inputStyle, { width: 'auto', padding: '7px 10px', fontSize: 13 })}>
               <option value="ALL">Semua dapur</option>
-              {dapurList.map(d => <option key={d.id} value={d.id}>{d.nama}</option>)}
+              {dapurList.map(function(d){ return <option key={d.id} value={d.id}>{d.nama}</option>; })}
             </select>
           )}
           <button onClick={logout} className="inline-flex items-center gap-1.5 text-sm rounded-lg px-3 py-2"
-            style={{ color: COLORS.muted, border: `1px solid ${COLORS.line}` }}>{I.logout} <span className="hidden sm:inline">Keluar</span></button>
+            style={{ color: COLORS.muted, border: '1px solid ' + COLORS.line }}>{I.logout} <span className="hidden sm:inline">Keluar</span></button>
         </div>
       </header>
 
       <div className="flex flex-1">
-        <nav className="hidden md:flex flex-col gap-1 p-3 w-56 shrink-0" style={{ borderRight: `1px solid ${COLORS.line}` }}>
-          {navItems.map(([k,label,icon])=>(
-            <button key={k} onClick={()=>setView(k)}
+        <nav className="hidden md:flex flex-col gap-1 p-3 w-56 shrink-0" style={{ borderRight: '1px solid ' + COLORS.line }}>
+          {navItems.map(function(item){
+            const k = item[0], label = item[1], icon = item[2];
+            return <button key={k} onClick={function(){setView(k);}}
               className="flex items-center gap-2.5 rounded-lg px-3 py-2.5 text-sm font-medium text-left transition"
               style={{ background: view===k?COLORS.green:'transparent', color: view===k?'#fff':COLORS.ink }}>
               {icon} {label}
-            </button>
-          ))}
+            </button>;
+          })}
         </nav>
 
         <main className="flex-1 p-4 sm:p-6 pb-24 md:pb-6">
           {view === 'dash'    && <Dashboard key={'d'+refreshKey} session={session} scope={effScope} toast={toast}/>}
-          {view === 'input'   && <InputTransaksi session={session} toast={toast} onSaved={()=>{ setRefreshKey(k=>k+1); setView('riwayat'); }}/>}
+          {view === 'input'   && <InputTransaksi session={session} toast={toast} onSaved={function(){ setRefreshKey(function(k){return k+1;}); setView('riwayat'); }}/>}
           {view === 'setup'   && <SetupPeriode session={session} toast={toast}/>}
           {view === 'riwayat' && <Riwayat key={'r'+refreshKey} session={session} scope={effScope} toast={toast}/>}
           {view === 'users'   && <Pengguna session={session} toast={toast}/>}
         </main>
       </div>
 
-      <nav className="md:hidden fixed bottom-0 left-0 right-0 flex justify-around py-2" style={{ background: COLORS.surface, borderTop: `1px solid ${COLORS.line}` }}>
-        {navItems.map(([k,label,icon])=>(
-          <button key={k} onClick={()=>setView(k)} className="flex flex-col items-center gap-0.5 px-2 py-1"
+      <nav className="md:hidden fixed bottom-0 left-0 right-0 flex justify-around py-2" style={{ background: COLORS.surface, borderTop: '1px solid ' + COLORS.line }}>
+        {navItems.map(function(item){
+          const k = item[0], label = item[1], icon = item[2];
+          return <button key={k} onClick={function(){setView(k);}} className="flex flex-col items-center gap-0.5 px-2 py-1"
             style={{ color: view===k?COLORS.green:COLORS.muted }}>
             {icon}<span className="text-[10px] font-medium">{label.split(' ')[0]}</span>
-          </button>
-        ))}
+          </button>;
+        })}
       </nav>
 
-      {toastData && <Toast {...toastData} onClose={()=>setToastData(null)}/>}
+      {toastData && <Toast msg={toastData.msg} type={toastData.type} onClose={function(){setToastData(null);}}/>}
     </div>
   );
 }
 
-ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
+// Mount & hide loading screen
+const rootEl = document.getElementById('root');
+ReactDOM.createRoot(rootEl).render(<App/>);
+
+// Hide loading screen once React has had time to paint
+setTimeout(function() {
+  const ls = document.getElementById('loading-screen');
+  if (ls) ls.style.display = 'none';
+}, 100);
+
+} catch (err) {
+  // Catch any error in the entire script and show it
+  var b = document.getElementById('error-banner');
+  if (b) {
+    b.style.display = 'block';
+    b.innerHTML = '<b>⚠️ Error pada aplikasi</b><br><br>' + (err.message || err) + '<br><br>Coba <b>Ctrl+Shift+R</b>.';
+  }
+  var ls = document.getElementById('loading-screen');
+  if (ls) ls.style.display = 'none';
+}
 </script>
 </body>
 </html>
