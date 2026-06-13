@@ -9,7 +9,6 @@
   body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #F4F2EC; margin: 0; }
   * { -webkit-tap-highlight-color: transparent; }
   .num { font-variant-numeric: tabular-nums; }
-
   #loading-screen {
     position: fixed; inset: 0; display: flex; align-items: center; justify-content: center;
     background: #F4F2EC; z-index: 9999; flex-direction: column; gap: 16px;
@@ -24,51 +23,38 @@
     font-size: 13px; z-index: 10000; display: none; white-space: pre-wrap; line-height: 1.5;
     font-family: ui-monospace, monospace;
   }
-  #error-banner b { font-family: -apple-system, sans-serif; font-size: 14px; }
 </style>
 </head>
 <body>
 
 <div id="error-banner"></div>
-
 <div id="loading-screen">
   <div class="sp"></div>
   <div style="color: #6E7B70; font-size: 14px;">Memuat Keuangan MBG…</div>
 </div>
-
 <div id="root"></div>
 
 <script>
-  // Global error handler — supaya error apa pun langsung kelihatan, tidak silent
   function showError(msg, src) {
     var b = document.getElementById('error-banner');
     if (!b) return;
     b.style.display = 'block';
-    b.innerHTML = '<b>⚠️ Terjadi error saat memuat aplikasi</b><br><br>' +
-                  (src ? '<i>' + src + '</i><br>' : '') +
-                  String(msg) + '<br><br>' +
-                  'Coba: <b>Ctrl+Shift+R</b> untuk hard refresh. ' +
-                  'Kalau masih gagal, screenshot pesan ini dan kirim ke admin.';
+    b.innerHTML = '<b>⚠️ Error</b><br>' + (src ? '<i>' + src + '</i><br>' : '') + String(msg) +
+      '<br><br>Coba <b>Ctrl+Shift+R</b>.';
     var ls = document.getElementById('loading-screen');
     if (ls) ls.style.display = 'none';
   }
   window.addEventListener('error', function(e) {
     showError((e.message || 'Unknown error') + '\n' + (e.filename || ''), 'window.onerror');
   });
-  window.addEventListener('unhandledrejection', function(e) {
-    showError(String(e.reason || 'Promise rejected'), 'unhandledrejection');
-  });
-
-  // Safety net: kalau setelah 15 detik root masih kosong, tampilkan error
   setTimeout(function() {
     var root = document.getElementById('root');
     if (root && root.children.length === 0) {
-      showError('React tidak ter-render dalam 15 detik. Kemungkinan CDN library lambat atau diblokir.', 'timeout');
+      showError('React tidak ter-render dalam 15 detik. Kemungkinan CDN library lambat.', 'timeout');
     }
   }, 15000);
 </script>
 
-<!-- React + dependencies -->
 <script crossorigin src="https://unpkg.com/react@18.2.0/umd/react.production.min.js"></script>
 <script crossorigin src="https://unpkg.com/react-dom@18.2.0/umd/react-dom.production.min.js"></script>
 <script crossorigin src="https://unpkg.com/prop-types@15.8.1/prop-types.min.js"></script>
@@ -79,8 +65,6 @@
 try {
 
 const { useState, useEffect, useMemo, useCallback } = React;
-
-// Recharts defensive load — kalau gagal, app tetap jalan (chart kosong)
 const _R = window.Recharts || {};
 const PieChart = _R.PieChart, Pie = _R.Pie, Cell = _R.Cell;
 const ResponsiveContainer = _R.ResponsiveContainer;
@@ -92,20 +76,35 @@ const RECHARTS_OK = !!(PieChart && BarChart);
 // ====== KONFIGURASI ======
 const API_URL = 'https://script.google.com/macros/s/AKfycbxYfD1f8wr73FxdXCOw8EagYmQhK3TKPB0VgRKGopXt7wKzwIgQK5bM-AmfkOskMkkEfA/exec';
 
-// ====== KONSTANTA ======
 const COLORS = {
   paper: '#F4F2EC', surface: '#FFFFFF', ink: '#172A1F',
   green: '#15663E', deep: '#0E4429', lime: '#9BCB3C',
   amber: '#D99A1C', muted: '#6E7B70', line: '#E3E0D6', danger: '#B7472E',
 };
 const CAT_COLORS = ['#15663E','#9BCB3C','#D99A1C','#3E8E7E','#B7472E','#5C7AAE','#A07F3E'];
+
 const fmt = n => 'Rp ' + new Intl.NumberFormat('id-ID').format(Math.round(n||0));
 const fmtShort = n => {
-  if (!n) return 'Rp 0';
-  if (n >= 1e9) return 'Rp ' + (n/1e9).toFixed(1) + ' M';
-  if (n >= 1e6) return 'Rp ' + (n/1e6).toFixed(1) + ' jt';
-  if (n >= 1e3) return 'Rp ' + (n/1e3).toFixed(0) + ' rb';
+  if (!n && n !== 0) return 'Rp 0';
+  if (Math.abs(n) >= 1e9) return 'Rp ' + (n/1e9).toFixed(1) + ' M';
+  if (Math.abs(n) >= 1e6) return 'Rp ' + (n/1e6).toFixed(1) + ' jt';
+  if (Math.abs(n) >= 1e3) return 'Rp ' + (n/1e3).toFixed(0) + ' rb';
   return 'Rp ' + n;
+};
+const fmtDate = s => {
+  if (!s) return '';
+  const d = new Date(s);
+  if (isNaN(d)) return s;
+  return d.toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric' });
+};
+const fmtDateRange = (a, b) => {
+  if (!a || !b) return '';
+  const dA = new Date(a), dB = new Date(b);
+  const sameMonth = dA.getMonth() === dB.getMonth() && dA.getFullYear() === dB.getFullYear();
+  if (sameMonth) {
+    return dA.getDate() + '–' + dB.toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric' });
+  }
+  return fmtDate(a) + ' s/d ' + fmtDate(b);
 };
 
 // ====== API CLIENT ======
@@ -140,12 +139,12 @@ async function apiUpload(action, params) {
 }
 
 // ====== SESSION ======
-const SESS_KEY = 'mbg_session_v1';
+const SESS_KEY = 'mbg_session_v2';
 function loadSession() { try { return JSON.parse(sessionStorage.getItem(SESS_KEY) || 'null'); } catch (e) { return null; } }
 function saveSession(s) { sessionStorage.setItem(SESS_KEY, JSON.stringify(s)); }
 function clearSession() { sessionStorage.removeItem(SESS_KEY); }
 
-// ====== ICON ======
+// ====== ICONS ======
 function Svg(props) {
   return <svg width={props.size||18} height={props.size||18} viewBox="0 0 24 24" fill="none"
     stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
@@ -155,7 +154,8 @@ const I = {
   wallet:   <Svg><path d="M19 7H5a2 2 0 00-2 2v8a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2z"/><path d="M16 12a1 1 0 100 2 1 1 0 000-2z"/><path d="M3 7l4-4h10v4"/></Svg>,
   dash:     <Svg><rect x="3" y="3" width="7" height="9"/><rect x="14" y="3" width="7" height="5"/><rect x="14" y="12" width="7" height="9"/><rect x="3" y="16" width="7" height="5"/></Svg>,
   plus:     <Svg><circle cx="12" cy="12" r="10"/><path d="M12 8v8M8 12h8"/></Svg>,
-  settings: <Svg><circle cx="12" cy="12" r="3"/><path d="M12 1v6m0 10v6M4.22 4.22l4.24 4.24m7.08 7.08l4.24 4.24M1 12h6m10 0h6M4.22 19.78l4.24-4.24m7.08-7.08l4.24-4.24"/></Svg>,
+  plusSm:   <Svg><path d="M12 5v14M5 12h14"/></Svg>,
+  settings: <Svg><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 11-2.83 2.83l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 008 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06a1.65 1.65 0 00.33-1.82 1.65 1.65 0 00-1.51-1H2a2 2 0 010-4h.09A1.65 1.65 0 004.6 8 1.65 1.65 0 004.27 6.18l-.06-.06a2 2 0 012.83-2.83l.06.06a1.65 1.65 0 001.82.33H9a1.65 1.65 0 001-1.51V2a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06a1.65 1.65 0 00-.33 1.82V9a1.65 1.65 0 001.51 1H22a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/></Svg>,
   list:     <Svg><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></Svg>,
   users:    <Svg><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 00-3-3.87M16 3.13a4 4 0 010 7.75"/></Svg>,
   logout:   <Svg><path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></Svg>,
@@ -163,27 +163,29 @@ const I = {
   arrowR:   <Svg><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></Svg>,
   arrowL:   <Svg><line x1="19" y1="12" x2="5" y2="12"/><polyline points="12 19 5 12 12 5"/></Svg>,
   check:    <Svg><polyline points="20 6 9 17 4 12"/></Svg>,
+  x:        <Svg><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></Svg>,
+  edit:     <Svg><path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/></Svg>,
+  lock:     <Svg><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0110 0v4"/></Svg>,
   receipt:  <Svg><path d="M14 2H6a2 2 0 00-2 2v16l4-2 4 2 4-2 4 2V8z"/><line x1="9" y1="9" x2="15" y2="9"/><line x1="9" y1="13" x2="15" y2="13"/></Svg>,
   trend:    <Svg><polyline points="23 18 13.5 8.5 8.5 13.5 1 6"/><polyline points="17 18 23 18 23 12"/></Svg>,
   team:     <Svg><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/></Svg>,
+  cash:     <Svg><rect x="2" y="6" width="20" height="12" rx="2"/><circle cx="12" cy="12" r="2"/><path d="M6 12h.01M18 12h.01"/></Svg>,
   file:     <Svg><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/></Svg>,
   image:    <Svg><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></Svg>,
+  warn:     <Svg><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></Svg>,
   spinner:  <Svg className="animate-spin"><line x1="12" y1="2" x2="12" y2="6"/><line x1="12" y1="18" x2="12" y2="22"/><line x1="4.93" y1="4.93" x2="7.76" y2="7.76"/><line x1="16.24" y1="16.24" x2="19.07" y2="19.07"/><line x1="2" y1="12" x2="6" y2="12"/><line x1="18" y1="12" x2="22" y2="12"/><line x1="4.93" y1="19.07" x2="7.76" y2="16.24"/><line x1="16.24" y1="7.76" x2="19.07" y2="4.93"/></Svg>,
 };
 
-// ====== ATOMS ======
-function Eyebrow(props) {
-  return <div className="text-[11px] font-semibold uppercase mb-1"
-    style={{ color: COLORS.muted, letterSpacing: '0.14em' }}>{props.children}</div>;
-}
+// ====== UI ATOMS ======
+function Eyebrow(props) { return <div className="text-[11px] font-semibold uppercase mb-1" style={{ color: COLORS.muted, letterSpacing: '0.14em' }}>{props.children}</div>; }
 function Btn(props) {
   const kind = props.kind || 'solid';
-  const styles = kind === 'solid'
-    ? { background: props.disabled ? COLORS.muted : COLORS.green, color: '#fff' }
+  const sty = kind === 'solid' ? { background: props.disabled ? COLORS.muted : COLORS.green, color: '#fff' }
     : kind === 'danger' ? { background: COLORS.danger, color: '#fff' }
+    : kind === 'amber' ? { background: COLORS.amber, color: '#fff' }
     : { background: 'transparent', color: COLORS.green, border: '1px solid ' + COLORS.line };
   return <button type={props.type||'button'} onClick={props.onClick} disabled={props.disabled}
-    style={Object.assign({}, styles, { opacity: props.disabled ? 0.6 : 1, width: props.full ? '100%' : 'auto' })}
+    style={Object.assign({}, sty, { opacity: props.disabled ? 0.6 : 1, width: props.full ? '100%' : 'auto' })}
     className="inline-flex items-center justify-center gap-2 rounded-lg px-4 py-2.5 text-sm font-semibold transition">
     {props.children}
   </button>;
@@ -205,12 +207,23 @@ function Field(props) {
 const inputStyle = { width: '100%', border: '1px solid ' + COLORS.line, borderRadius: 8, padding: '10px 12px', fontSize: 14, background: '#fff', color: COLORS.ink, outline: 'none' };
 
 function Toast(props) {
-  useEffect(function() {
-    const t = setTimeout(props.onClose, 3500);
-    return function() { clearTimeout(t); };
-  }, []);
-  return <div className="fixed top-4 left-1/2 -translate-x-1/2 z-50 rounded-lg px-4 py-2.5 text-sm font-medium shadow-lg"
-    style={{ background: props.type === 'error' ? COLORS.danger : COLORS.deep, color: '#fff' }}>{props.msg}</div>;
+  useEffect(function() { const t = setTimeout(props.onClose, 3500); return function() { clearTimeout(t); }; }, []);
+  return <div className="fixed top-4 left-1/2 -translate-x-1/2 z-[60] rounded-lg px-4 py-2.5 text-sm font-medium shadow-lg"
+    style={{ background: props.type === 'error' ? COLORS.danger : COLORS.deep, color: '#fff', maxWidth: '90vw' }}>{props.msg}</div>;
+}
+
+function Modal(props) {
+  return <div className="fixed inset-0 z-40 flex items-center justify-center p-4" style={{ background: 'rgba(0,0,0,0.5)' }} onClick={props.onClose}>
+    <Card className="w-full max-w-md max-h-[90vh] overflow-y-auto">
+      <div onClick={function(e){e.stopPropagation();}}>
+        <div className="flex items-center justify-between mb-3">
+          <div className="font-bold" style={{ color: COLORS.ink }}>{props.title}</div>
+          <button onClick={props.onClose} style={{ color: COLORS.muted }}>{I.x}</button>
+        </div>
+        {props.children}
+      </div>
+    </Card>
+  </div>;
 }
 
 // ============================================================
@@ -244,20 +257,14 @@ function Login(props) {
         </div>
         <Card>
           <Eyebrow>Masuk ke akun</Eyebrow>
-          <Field label="Username">
-            <input value={username} onChange={function(e){setUsername(e.target.value);}} style={inputStyle} placeholder="cth. akuntan1" autoCapitalize="off" />
-          </Field>
-          <Field label="Password">
-            <input type="password" value={password} onChange={function(e){setPassword(e.target.value);}}
-              onKeyDown={function(e){ if(e.key==='Enter') submit(); }} style={inputStyle} placeholder="••••••••" />
-          </Field>
+          <Field label="Username"><input value={username} onChange={function(e){setUsername(e.target.value);}} style={inputStyle} placeholder="cth. akuntan1" autoCapitalize="off"/></Field>
+          <Field label="Password"><input type="password" value={password} onChange={function(e){setPassword(e.target.value);}}
+            onKeyDown={function(e){ if(e.key==='Enter') submit(); }} style={inputStyle} placeholder="••••••••"/></Field>
           <Btn full onClick={submit} disabled={loading}>
             {loading ? I.spinner : I.arrowR} {loading ? 'Memeriksa…' : 'Masuk'}
           </Btn>
         </Card>
-        <p className="text-center text-xs mt-4" style={{ color: COLORS.muted }}>
-          Lupa password? Hubungi Super Admin.
-        </p>
+        <p className="text-center text-xs mt-4" style={{ color: COLORS.muted }}>Lupa password? Hubungi Super Admin.</p>
       </div>
     </div>
   );
@@ -281,20 +288,57 @@ function KPICard(props) {
   );
 }
 
+function BalanceCard(props) {
+  // KPI dengan progress bar untuk saldo VA / Petty
+  const sisa = props.sisa || 0, total = props.total || 0;
+  const used = total - sisa;
+  const pct = total > 0 ? Math.min(100, Math.max(0, (used / total) * 100)) : 0;
+  return (
+    <Card>
+      <div className="flex items-start justify-between mb-2">
+        <div>
+          <div className="text-xs font-medium" style={{ color: COLORS.muted }}>{props.label}</div>
+          <div className="text-xl font-bold num mt-1" style={{ color: COLORS.ink }}>{fmtShort(sisa)}</div>
+          <div className="text-xs" style={{ color: COLORS.muted }}>sisa dari {fmtShort(total)}</div>
+        </div>
+        <div className="rounded-lg flex items-center justify-center shrink-0 ml-2" style={{ width: 38, height: 38, background: COLORS.paper, color: props.color || COLORS.green }}>{props.icon}</div>
+      </div>
+      <div className="h-1.5 rounded-full overflow-hidden" style={{ background: COLORS.paper }}>
+        <div style={{ width: pct + '%', height: '100%', background: props.color || COLORS.green }}/>
+      </div>
+      <div className="text-[11px] mt-1.5" style={{ color: COLORS.muted }}>
+        Terpakai {fmtShort(used)} ({pct.toFixed(1)}%)
+      </div>
+    </Card>
+  );
+}
+
 function Dashboard(props) {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [periodeList, setPeriodeList] = useState([]);
+  const [selPeriode, setSelPeriode] = useState('');
   const session = props.session, scope = props.scope, toast = props.toast;
+  const canPickPeriode = (session.user.role === 'akuntan' || session.user.role === 'pic') && scope && scope !== 'ALL';
+
+  useEffect(function() {
+    if (canPickPeriode) {
+      api('getPeriodeList', { role: session.user.role, dapur: scope, scope: scope }).then(function(r){
+        if (r.ok) setPeriodeList(r.data);
+      });
+    }
+  }, [scope]);
 
   const load = useCallback(async function() {
     setLoading(true);
     const res = await api('getDashboard', {
-      role: session.user.role, dapur: session.user.dapur || '', scope: scope || 'ALL'
+      role: session.user.role, dapur: session.user.dapur || '',
+      scope: scope || 'ALL', periode_id: selPeriode || '',
     });
     setLoading(false);
     if (res.ok) setData(res.data);
     else toast(res.error || 'Gagal memuat dashboard', 'error');
-  }, [session, scope]);
+  }, [session, scope, selPeriode]);
 
   useEffect(function() { load(); }, [load]);
 
@@ -302,16 +346,76 @@ function Dashboard(props) {
   if (!data) return <Card>Tidak ada data.</Card>;
 
   const k = data.kpi;
+  const periode = data.periode;
+  const noActive = !data.hasActivePeriode;
+
   return (
     <div>
+      {/* Header periode */}
+      <Card className="mb-3">
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+          <div>
+            <Eyebrow>Periode dashboard</Eyebrow>
+            {noActive ? (
+              <div className="text-sm" style={{ color: COLORS.danger }}>
+                Belum ada periode aktif. {session.user.role === 'akuntan' && 'Buka menu Setup Periode untuk membuat.'}
+              </div>
+            ) : periode && periode.multi ? (
+              <div className="text-sm font-semibold" style={{ color: COLORS.ink }}>
+                Gabungan {periode.count} periode aktif (dari {scope === 'ALL' ? 'semua dapur' : 'beberapa dapur'})
+              </div>
+            ) : periode ? (
+              <div>
+                <div className="text-base font-bold" style={{ color: COLORS.ink }}>Periode {periode.periode_no}</div>
+                <div className="text-sm" style={{ color: COLORS.muted }}>
+                  {fmtDateRange(periode.tanggal_mulai, periode.tanggal_akhir)}
+                  <span className="ml-2 text-xs rounded px-1.5 py-0.5"
+                    style={{ background: periode.status==='AKTIF'?'#E8F1EC':'#F3EFE5', color: periode.status==='AKTIF'?COLORS.green:COLORS.muted }}>
+                    {periode.status}
+                  </span>
+                </div>
+              </div>
+            ) : null}
+          </div>
+          {canPickPeriode && periodeList.length > 1 && (
+            <select value={selPeriode} onChange={function(e){setSelPeriode(e.target.value);}}
+              style={Object.assign({}, inputStyle, { width: 'auto', padding: '7px 10px', fontSize: 13 })}>
+              <option value="">Periode aktif</option>
+              {periodeList.map(function(p){
+                return <option key={p.id} value={p.id}>Periode {p.periode_no} · {fmtDateRange(p.tanggal_mulai, p.tanggal_akhir)} · {p.status}</option>;
+              })}
+            </select>
+          )}
+        </div>
+      </Card>
+
+      {/* KPI: 4 kartu utama */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-3">
         <KPICard icon={I.team} label="Penerima Manfaat" value={new Intl.NumberFormat('id-ID').format(k.penerima)} sub="porsi/hari" />
-        <KPICard icon={I.wallet} label="Total Dana" value={fmtShort(k.totalDana)} sub={'VA ' + fmtShort(k.saldoVA)} />
-        <KPICard icon={I.trend} label="Pengeluaran (riil)" value={fmtShort(k.totalRiil)} sub={k.serap + '% terserap'} accent={COLORS.amber} />
-        <KPICard icon={I.receipt} label="Sisa Saldo" value={fmtShort(k.sisa)} sub={'dari ' + fmtShort(k.totalDana)} accent={COLORS.green} />
+        <BalanceCard icon={I.wallet} label="Saldo VA" sisa={k.sisaVA} total={k.saldoVA} color={COLORS.green} />
+        <BalanceCard icon={I.cash} label="Saldo Petty Cash"
+          sisa={k.sisaPetty} total={k.saldoPettyTotal} color={COLORS.amber}
+        />
+        <KPICard icon={I.trend} label="Total Pengeluaran" value={fmtShort(k.totalRiil)} sub={k.serap + '% terserap'} accent={COLORS.amber} />
       </div>
 
-      {RECHARTS_OK && (
+      {/* Info top-up petty cash kalau ada */}
+      {k.totalTopup > 0 && (
+        <Card className="mb-3">
+          <div className="flex items-center justify-between">
+            <div>
+              <Eyebrow>Top-up Petty Cash</Eyebrow>
+              <div className="text-sm" style={{ color: COLORS.ink }}>
+                Saldo awal {fmt(k.saldoPettyAwal)} + Top-up {fmt(k.totalTopup)} = {fmt(k.saldoPettyTotal)}
+              </div>
+            </div>
+            <div className="text-xs" style={{ color: COLORS.muted }}>{data.topups.length} entry</div>
+          </div>
+        </Card>
+      )}
+
+      {/* Charts */}
+      {RECHARTS_OK && !noActive && (
         <>
           <div className="grid lg:grid-cols-3 gap-3 mb-3">
             <Card>
@@ -377,11 +481,273 @@ function Dashboard(props) {
           </Card>
         </>
       )}
+    </div>
+  );
+}
 
-      {!RECHARTS_OK && (
-        <Card>
-          <p className="text-sm" style={{ color: COLORS.muted }}>Grafik tidak ter-load (library Recharts gagal dimuat). KPI di atas tetap akurat. Coba hard refresh (Ctrl+Shift+R).</p>
+// ============================================================
+//  SETUP PERIODE
+// ============================================================
+function PeriodeBadge(props) {
+  const aktif = props.status === 'AKTIF';
+  return <span className="text-xs rounded px-2 py-0.5 font-medium"
+    style={{ background: aktif ? '#E8F1EC' : '#F3EFE5', color: aktif ? COLORS.green : COLORS.muted }}>
+    {props.status}
+  </span>;
+}
+
+function PeriodeForm({ initial, onClose, onSaved, session, toast }) {
+  const [f, setF] = useState(initial || {
+    periode_no: '', tanggal_mulai: '', tanggal_akhir: '',
+    penerima: '', saldoVA: '', saldoPettyAwal: ''
+  });
+  const [saving, setSaving] = useState(false);
+  const isEdit = !!initial && !!initial.id;
+  function set(k, v) { setF(function(p){ const n = Object.assign({}, p); n[k] = v; return n; }); }
+
+  async function submit() {
+    if (!f.tanggal_mulai || !f.tanggal_akhir) { toast('Isi tanggal mulai & akhir', 'error'); return; }
+    if (f.tanggal_mulai >= f.tanggal_akhir) { toast('Tanggal mulai harus sebelum tanggal akhir', 'error'); return; }
+    setSaving(true);
+    const action = isEdit ? 'updatePeriode' : 'addPeriode';
+    const payload = Object.assign({
+      role: session.user.role, user_id: session.user.id, dapur: session.user.dapur,
+      tanggal_mulai: f.tanggal_mulai, tanggal_akhir: f.tanggal_akhir,
+      penerima: f.penerima, saldoVA: f.saldoVA, saldoPettyAwal: f.saldoPettyAwal,
+    }, isEdit ? { id: initial.id } : {});
+    const res = await api(action, payload);
+    setSaving(false);
+    if (res.ok) { toast(isEdit ? 'Periode diupdate' : 'Periode dibuat'); onSaved(); onClose(); }
+    else toast(res.error || 'Gagal menyimpan', 'error');
+  }
+
+  return (
+    <Modal title={isEdit ? ('Edit Periode ' + initial.periode_no) : 'Buat Periode Baru'} onClose={onClose}>
+      <Field label="Tanggal mulai">
+        <input type="date" value={f.tanggal_mulai} onChange={function(e){set('tanggal_mulai', e.target.value);}} style={inputStyle}/>
+      </Field>
+      <Field label="Tanggal akhir">
+        <input type="date" value={f.tanggal_akhir} onChange={function(e){set('tanggal_akhir', e.target.value);}} style={inputStyle}/>
+      </Field>
+      <Field label="Jumlah penerima manfaat" hint="porsi/hari">
+        <input type="number" value={f.penerima} onChange={function(e){set('penerima', e.target.value);}} style={inputStyle} placeholder="0"/>
+      </Field>
+      <Field label="Saldo VA awal">
+        <input type="number" value={f.saldoVA} onChange={function(e){set('saldoVA', e.target.value);}} style={inputStyle} placeholder="0"/>
+      </Field>
+      <Field label="Saldo Petty Cash awal" hint="Boleh 0 — tambahan saldo nanti dicatat sebagai top-up">
+        <input type="number" value={f.saldoPettyAwal} onChange={function(e){set('saldoPettyAwal', e.target.value);}} style={inputStyle} placeholder="0"/>
+      </Field>
+      <div className="flex gap-2">
+        <Btn kind="ghost" onClick={onClose}>Batal</Btn>
+        <Btn onClick={submit} disabled={saving}>{saving ? I.spinner : I.check} Simpan</Btn>
+      </div>
+    </Modal>
+  );
+}
+
+function TopupForm({ periode, onClose, onSaved, session, toast }) {
+  const [f, setF] = useState({
+    tanggal: new Date().toISOString().substring(0,10),
+    jumlah: '', keterangan: ''
+  });
+  const [saving, setSaving] = useState(false);
+  function set(k, v) { setF(function(p){ const n = Object.assign({}, p); n[k] = v; return n; }); }
+
+  async function submit() {
+    if (!f.tanggal || !f.jumlah) { toast('Isi tanggal & jumlah', 'error'); return; }
+    setSaving(true);
+    const res = await api('addPettyTopup', {
+      role: session.user.role, user_id: session.user.id, dapur: session.user.dapur,
+      tanggal: f.tanggal, jumlah: f.jumlah, keterangan: f.keterangan,
+    });
+    setSaving(false);
+    if (res.ok) { toast('Top-up tersimpan'); onSaved(); onClose(); }
+    else toast(res.error || 'Gagal menyimpan', 'error');
+  }
+
+  return (
+    <Modal title="Top-up Petty Cash" onClose={onClose}>
+      <div className="mb-3 p-3 rounded-lg text-xs" style={{ background: COLORS.paper, color: COLORS.muted }}>
+        Periode {periode.periode_no} · {fmtDateRange(periode.tanggal_mulai, periode.tanggal_akhir)}<br/>
+        Saldo Petty Cash saat ini: <b style={{ color: COLORS.ink }}>{fmt(periode.saldoPettyTotal)}</b>
+      </div>
+      <Field label="Tanggal terima">
+        <input type="date" value={f.tanggal} min={periode.tanggal_mulai} max={periode.tanggal_akhir}
+          onChange={function(e){set('tanggal', e.target.value);}} style={inputStyle}/>
+      </Field>
+      <Field label="Jumlah">
+        <input type="number" value={f.jumlah} onChange={function(e){set('jumlah', e.target.value);}} style={inputStyle} placeholder="0"/>
+      </Field>
+      <Field label="Keterangan" hint="cth. Penambahan dari bendahara">
+        <input value={f.keterangan} onChange={function(e){set('keterangan', e.target.value);}} style={inputStyle}/>
+      </Field>
+      <div className="flex gap-2">
+        <Btn kind="ghost" onClick={onClose}>Batal</Btn>
+        <Btn onClick={submit} disabled={saving}>{saving ? I.spinner : I.check} Simpan</Btn>
+      </div>
+    </Modal>
+  );
+}
+
+function SetupPeriode(props) {
+  const session = props.session, toast = props.toast;
+  const [list, setList] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [topupList, setTopupList] = useState([]);
+  const [openForm, setOpenForm] = useState(false);
+  const [editPeriode, setEditPeriode] = useState(null);
+  const [openTopup, setOpenTopup] = useState(false);
+  const [confirmClose, setConfirmClose] = useState(null);
+
+  const load = useCallback(async function() {
+    setLoading(true);
+    const [pl, tu] = await Promise.all([
+      api('getPeriodeList', { role: session.user.role, dapur: session.user.dapur, scope: session.user.dapur }),
+      api('getPettyTopups', { dapur: session.user.dapur }),
+    ]);
+    setLoading(false);
+    if (pl.ok) setList(pl.data);
+    if (tu.ok) setTopupList(tu.data);
+  }, []);
+  useEffect(function() { load(); }, [load]);
+
+  if (loading) return <Card>{I.spinner}</Card>;
+
+  const aktif = list.find(p => p.status === 'AKTIF');
+  const closed = list.filter(p => p.status !== 'AKTIF').sort((a,b)=>b.periode_no-a.periode_no);
+  const aktifTopups = aktif ? topupList.filter(t => t.periode_id === aktif.id) : [];
+  const aktifTotalTopup = aktifTopups.reduce((s,t)=>s+t.jumlah, 0);
+  const saldoPettyTotal = aktif ? (aktif.saldoPettyAwal + aktifTotalTopup) : 0;
+
+  async function doClose() {
+    const res = await api('closePeriode', { role: session.user.role, user_id: session.user.id, id: confirmClose.id });
+    if (res.ok) { toast('Periode ditutup'); setConfirmClose(null); load(); }
+    else toast(res.error, 'error');
+  }
+
+  return (
+    <div>
+      <Card className="mb-3">
+        <Eyebrow>Periode Aktif</Eyebrow>
+        {!aktif ? (
+          <div className="text-center py-6">
+            <div className="mb-3" style={{ color: COLORS.muted }}>{I.warn}</div>
+            <div className="text-sm font-medium" style={{ color: COLORS.ink }}>Belum ada periode aktif</div>
+            <div className="text-xs mb-4" style={{ color: COLORS.muted }}>Transaksi tidak bisa diinput sampai periode dibuat.</div>
+            <Btn onClick={function(){setEditPeriode(null); setOpenForm(true);}}>{I.plusSm} Buat Periode Baru</Btn>
+          </div>
+        ) : (
+          <div>
+            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 mb-3">
+              <div>
+                <div className="text-lg font-bold" style={{ color: COLORS.ink }}>Periode {aktif.periode_no}</div>
+                <div className="text-sm" style={{ color: COLORS.muted }}>{fmtDateRange(aktif.tanggal_mulai, aktif.tanggal_akhir)}</div>
+              </div>
+              <PeriodeBadge status="AKTIF"/>
+            </div>
+            <div className="grid sm:grid-cols-2 gap-3 mb-3">
+              <div className="rounded-lg p-3" style={{ background: COLORS.paper }}>
+                <div className="text-xs" style={{ color: COLORS.muted }}>Penerima</div>
+                <div className="font-bold num" style={{ color: COLORS.ink }}>{new Intl.NumberFormat('id-ID').format(aktif.penerima)} porsi</div>
+              </div>
+              <div className="rounded-lg p-3" style={{ background: COLORS.paper }}>
+                <div className="text-xs" style={{ color: COLORS.muted }}>Saldo VA Awal</div>
+                <div className="font-bold num" style={{ color: COLORS.ink }}>{fmt(aktif.saldoVA)}</div>
+              </div>
+              <div className="rounded-lg p-3 sm:col-span-2" style={{ background: COLORS.paper }}>
+                <div className="text-xs" style={{ color: COLORS.muted }}>Saldo Petty Cash</div>
+                <div className="font-bold num" style={{ color: COLORS.ink }}>{fmt(saldoPettyTotal)}</div>
+                <div className="text-xs mt-1" style={{ color: COLORS.muted }}>
+                  Awal {fmt(aktif.saldoPettyAwal)} + Top-up {fmt(aktifTotalTopup)} ({aktifTopups.length} entry)
+                </div>
+              </div>
+            </div>
+            {session.user.role === 'akuntan' && (
+              <div className="flex flex-wrap gap-2">
+                <Btn kind="amber" onClick={function(){setOpenTopup(true);}}>{I.plusSm} Top-up Petty Cash</Btn>
+                <Btn kind="ghost" onClick={function(){
+                  setEditPeriode({ id: aktif.id, periode_no: aktif.periode_no,
+                    tanggal_mulai: aktif.tanggal_mulai, tanggal_akhir: aktif.tanggal_akhir,
+                    penerima: aktif.penerima, saldoVA: aktif.saldoVA, saldoPettyAwal: aktif.saldoPettyAwal });
+                  setOpenForm(true);
+                }}>{I.edit} Edit Periode</Btn>
+                <Btn kind="danger" onClick={function(){setConfirmClose(aktif);}}>{I.lock} Tutup Periode</Btn>
+              </div>
+            )}
+          </div>
+        )}
+      </Card>
+
+      {/* Top-up list */}
+      {aktif && aktifTopups.length > 0 && (
+        <Card className="mb-3" pad={false}>
+          <div className="p-4" style={{ borderBottom: '1px solid ' + COLORS.line }}>
+            <div className="font-bold" style={{ color: COLORS.ink }}>Riwayat Top-up Petty Cash</div>
+            <div className="text-xs" style={{ color: COLORS.muted }}>Periode {aktif.periode_no}</div>
+          </div>
+          <table className="w-full text-sm">
+            <thead>
+              <tr style={{ color: COLORS.muted, background: COLORS.paper }} className="text-left text-xs uppercase">
+                <th className="px-4 py-2 font-semibold">Tanggal</th>
+                <th className="px-4 py-2 font-semibold">Keterangan</th>
+                <th className="px-4 py-2 font-semibold text-right">Jumlah</th>
+              </tr>
+            </thead>
+            <tbody>
+              {aktifTopups.map(function(t){
+                return <tr key={t.id} style={{ borderTop: '1px solid ' + COLORS.line }}>
+                  <td className="px-4 py-2" style={{ color: COLORS.muted }}>{t.tanggal}</td>
+                  <td className="px-4 py-2" style={{ color: COLORS.ink }}>{t.keterangan || '—'}</td>
+                  <td className="px-4 py-2 text-right font-medium num" style={{ color: COLORS.amber }}>+ {fmt(t.jumlah)}</td>
+                </tr>;
+              })}
+            </tbody>
+          </table>
         </Card>
+      )}
+
+      {/* Periode lama */}
+      {closed.length > 0 && (
+        <Card className="mb-3">
+          <Eyebrow>Riwayat Periode ({closed.length} ditutup)</Eyebrow>
+          <div className="space-y-2 mt-2">
+            {closed.map(function(p){
+              return <div key={p.id} className="flex items-center justify-between rounded-lg p-3" style={{ background: COLORS.paper }}>
+                <div>
+                  <div className="text-sm font-medium" style={{ color: COLORS.ink }}>Periode {p.periode_no}</div>
+                  <div className="text-xs" style={{ color: COLORS.muted }}>{fmtDateRange(p.tanggal_mulai, p.tanggal_akhir)} · VA {fmtShort(p.saldoVA)} · Petty awal {fmtShort(p.saldoPettyAwal)}</div>
+                </div>
+                <PeriodeBadge status={p.status}/>
+              </div>;
+            })}
+          </div>
+        </Card>
+      )}
+
+      {/* Tambah periode baru (kalau tidak ada aktif, sudah ditampilkan di atas) */}
+
+      {openForm && (
+        <PeriodeForm initial={editPeriode} onClose={function(){setOpenForm(false); setEditPeriode(null);}}
+          onSaved={load} session={session} toast={toast}/>
+      )}
+      {openTopup && aktif && (
+        <TopupForm periode={Object.assign({}, aktif, { saldoPettyTotal: saldoPettyTotal })}
+          onClose={function(){setOpenTopup(false);}} onSaved={load} session={session} toast={toast}/>
+      )}
+      {confirmClose && (
+        <Modal title="Tutup Periode" onClose={function(){setConfirmClose(null);}}>
+          <p className="text-sm mb-4" style={{ color: COLORS.ink }}>
+            Akan menutup <b>Periode {confirmClose.periode_no}</b> ({fmtDateRange(confirmClose.tanggal_mulai, confirmClose.tanggal_akhir)}).
+          </p>
+          <p className="text-sm mb-4" style={{ color: COLORS.muted }}>
+            Setelah ditutup, tidak bisa lagi input transaksi atau top-up untuk periode ini, dan tidak bisa diubah. Baru bisa buat periode berikutnya.
+          </p>
+          <div className="flex gap-2">
+            <Btn kind="ghost" onClick={function(){setConfirmClose(null);}}>Batal</Btn>
+            <Btn kind="danger" onClick={doClose}>{I.lock} Ya, Tutup</Btn>
+          </div>
+        </Modal>
       )}
     </div>
   );
@@ -391,7 +757,9 @@ function Dashboard(props) {
 //  INPUT TRANSAKSI
 // ============================================================
 function InputTransaksi(props) {
-  const session = props.session, toast = props.toast, onSaved = props.onSaved;
+  const session = props.session, toast = props.toast, onSaved = props.onSaved, goToSetup = props.goToSetup;
+  const [periode, setPeriode] = useState(null);
+  const [loadingPeriode, setLoadingPeriode] = useState(true);
   const [kategoriMap, setKategoriMap] = useState({});
   const [step, setStep] = useState(1);
   const [jenis, setJenis] = useState(null);
@@ -403,11 +771,27 @@ function InputTransaksi(props) {
   const [uploading, setUploading] = useState(false);
 
   useEffect(function() {
-    api('getKategori').then(function(r){ if (r.ok) setKategoriMap(r.data); });
+    Promise.all([
+      api('getActivePeriode', { dapur: session.user.dapur }),
+      api('getKategori'),
+    ]).then(function(arr){
+      setLoadingPeriode(false);
+      if (arr[0].ok) {
+        setPeriode(arr[0].data);
+        // default tanggal: hari ini kalau dalam range, kalau tidak pakai tanggal_mulai
+        if (arr[0].data) {
+          const today = new Date().toISOString().substring(0,10);
+          const inRange = today >= arr[0].data.tanggal_mulai && today <= arr[0].data.tanggal_akhir;
+          setForm(function(f){ return Object.assign({}, f, { tanggal: inRange ? today : arr[0].data.tanggal_mulai }); });
+        }
+      }
+      if (arr[1].ok) setKategoriMap(arr[1].data);
+    });
   }, []);
 
   function set(k, v) { setForm(function(f){ const n = Object.assign({}, f); n[k] = v; return n; }); }
-  const valid = form.uraian && form.kategori && form.riil;
+  const valid = form.uraian && form.kategori && form.riil &&
+    periode && form.tanggal >= periode.tanggal_mulai && form.tanggal <= periode.tanggal_akhir;
 
   function fileToBase64(file) {
     return new Promise(function(res, rej) {
@@ -436,132 +820,126 @@ function InputTransaksi(props) {
     if (res.ok) {
       toast('Transaksi tersimpan');
       setStep(1); setJenis(null); setBukti(null);
-      setForm({ tanggal: new Date().toISOString().substring(0,10), sumber: 'VA', uraian: '', kategori: '', riil: '', unriil: '' });
+      setForm({ tanggal: form.tanggal, sumber: 'VA', uraian: '', kategori: '', riil: '', unriil: '' });
       onSaved && onSaved();
     } else toast(res.error || 'Gagal menyimpan', 'error');
   }
 
-  if (step === 1) {
+  if (loadingPeriode) return <Card>{I.spinner}</Card>;
+
+  if (!periode) {
     return (
       <Card>
-        <Eyebrow>Langkah 1 dari 2</Eyebrow>
-        <h2 className="text-lg font-bold mb-1" style={{ color: COLORS.ink }}>Pilih jenis transaksi</h2>
-        <p className="text-sm mb-4" style={{ color: COLORS.muted }}>Menentukan daftar kategori di langkah berikutnya.</p>
-        <div className="grid grid-cols-2 gap-2.5">
-          {Object.keys(kategoriMap).map(function(j){
-            return <button key={j} onClick={function(){ setJenis(j); setStep(2); }}
-              className="rounded-lg p-4 text-left transition hover:bg-gray-50"
-              style={{ border: '1px solid ' + COLORS.line, background: '#fff' }}>
-              <div className="font-semibold text-sm" style={{ color: COLORS.ink }}>{j}</div>
-              <div className="text-xs mt-0.5" style={{ color: COLORS.muted }}>{kategoriMap[j].length} kategori</div>
-            </button>;
-          })}
+        <div className="text-center py-6">
+          <div className="mb-3 flex justify-center" style={{ color: COLORS.danger }}>{I.warn}</div>
+          <div className="text-base font-bold mb-1" style={{ color: COLORS.ink }}>Belum ada periode aktif</div>
+          <div className="text-sm mb-4" style={{ color: COLORS.muted }}>
+            Setup periode dulu sebelum input transaksi. Periode aktif menentukan rentang tanggal transaksi yang sah.
+          </div>
+          <Btn onClick={goToSetup}>{I.settings} Ke Setup Periode</Btn>
         </div>
       </Card>
     );
   }
 
-  return (
-    <Card>
-      <button onClick={function(){setStep(1);}} className="inline-flex items-center gap-1.5 text-sm mb-3" style={{ color: COLORS.green }}>
-        {I.arrowL} {jenis}
-      </button>
-      <Eyebrow>Langkah 2 dari 2 · Detail transaksi</Eyebrow>
-      <div className="grid sm:grid-cols-2 gap-x-4 mt-2">
-        <Field label="Tanggal transaksi"><input type="date" value={form.tanggal} onChange={function(e){set('tanggal', e.target.value);}} style={inputStyle}/></Field>
-        <Field label="Sumber dana">
-          <div className="flex gap-2">
-            {['VA','Petty Cash'].map(function(s){
-              return <button key={s} onClick={function(){set('sumber', s);}} className="flex-1 rounded-lg py-2.5 text-sm font-medium"
-                style={{ border: '1px solid ' + (form.sumber===s?COLORS.green:COLORS.line),
-                         background: form.sumber===s?COLORS.paper:'#fff',
-                         color: form.sumber===s?COLORS.green:COLORS.muted }}>{s}</button>;
+  if (step === 1) {
+    return (
+      <div>
+        <Card className="mb-3">
+          <Eyebrow>Periode aktif</Eyebrow>
+          <div className="text-base font-bold" style={{ color: COLORS.ink }}>Periode {periode.periode_no}</div>
+          <div className="text-sm" style={{ color: COLORS.muted }}>{fmtDateRange(periode.tanggal_mulai, periode.tanggal_akhir)}</div>
+        </Card>
+        <Card>
+          <Eyebrow>Langkah 1 dari 2</Eyebrow>
+          <h2 className="text-lg font-bold mb-1" style={{ color: COLORS.ink }}>Pilih jenis transaksi</h2>
+          <p className="text-sm mb-4" style={{ color: COLORS.muted }}>Menentukan daftar kategori di langkah berikutnya.</p>
+          <div className="grid grid-cols-2 gap-2.5">
+            {Object.keys(kategoriMap).map(function(j){
+              return <button key={j} onClick={function(){ setJenis(j); setStep(2); }}
+                className="rounded-lg p-4 text-left transition hover:bg-gray-50"
+                style={{ border: '1px solid ' + COLORS.line, background: '#fff' }}>
+                <div className="font-semibold text-sm" style={{ color: COLORS.ink }}>{j}</div>
+                <div className="text-xs mt-0.5" style={{ color: COLORS.muted }}>{kategoriMap[j].length} kategori</div>
+              </button>;
             })}
           </div>
-        </Field>
-        <Field label="Kategori">
-          <select value={form.kategori} onChange={function(e){set('kategori', e.target.value);}} style={inputStyle}>
-            <option value="">Pilih kategori…</option>
-            {(kategoriMap[jenis]||[]).map(function(k){ return <option key={k} value={k}>{k}</option>; })}
-          </select>
-        </Field>
-        <Field label="Uraian transaksi"><input value={form.uraian} onChange={function(e){set('uraian', e.target.value);}} placeholder="cth. Ayam potong 60kg" style={inputStyle}/></Field>
-        <Field label="Jumlah riil" hint="Realisasi aktual yang dibayar"><input type="number" value={form.riil} onChange={function(e){set('riil', e.target.value);}} placeholder="0" style={inputStyle}/></Field>
-        <Field label="Jumlah unriil" hint="Nilai pengajuan/anggaran (boleh kosong)"><input type="number" value={form.unriil} onChange={function(e){set('unriil', e.target.value);}} placeholder="0" style={inputStyle}/></Field>
+        </Card>
       </div>
-      <Field label="Bukti transaksi" hint="Foto nota, gambar, atau PDF — tersimpan ke Google Drive">
-        <label className="flex flex-col items-center justify-center gap-1 rounded-lg py-6 cursor-pointer"
-          style={{ border: '1.5px dashed ' + COLORS.line, color: COLORS.muted }}>
-          <div className="flex items-center gap-2">{I.image} {I.file}</div>
-          <span className="text-sm">{bukti ? bukti.name : 'Ketuk untuk pilih / ambil foto'}</span>
-          <input type="file" className="hidden" accept="image/*,application/pdf" capture="environment"
-            onChange={function(e){setBukti(e.target.files[0]);}}/>
-        </label>
-      </Field>
-      <Btn full disabled={!valid || uploading} onClick={submit}>
-        {uploading ? I.spinner : I.check} {uploading ? 'Menyimpan…' : 'Simpan transaksi'}
-      </Btn>
-    </Card>
-  );
-}
-
-// ============================================================
-//  SETUP PERIODE
-// ============================================================
-function SetupPeriode(props) {
-  const session = props.session, toast = props.toast;
-  const [f, setF] = useState({ periode: '', penerima: '', saldoVA: '', saldoPetty: '' });
-  const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
-  function set(k, v) { setF(function(p){ const n = Object.assign({}, p); n[k] = v; return n; }); }
-
-  useEffect(function() {
-    api('getSetup', { dapur: session.user.dapur }).then(function(r){
-      setLoading(false);
-      if (r.ok && r.data) setF({ periode: r.data.periode, penerima: r.data.penerima, saldoVA: r.data.saldoVA, saldoPetty: r.data.saldoPetty });
-    });
-  }, []);
-
-  async function submit() {
-    if (!f.periode) { toast('Isi periode', 'error'); return; }
-    setSaving(true);
-    const res = await api('saveSetup', {
-      role: session.user.role, user_id: session.user.id, dapur: session.user.dapur,
-      periode: f.periode, penerima: f.penerima, saldoVA: f.saldoVA, saldoPetty: f.saldoPetty,
-    });
-    setSaving(false);
-    if (res.ok) toast('Setup tersimpan');
-    else toast(res.error || 'Gagal menyimpan', 'error');
+    );
   }
 
-  if (loading) return <Card>{I.spinner}</Card>;
+  const dateOutOfRange = form.tanggal && (form.tanggal < periode.tanggal_mulai || form.tanggal > periode.tanggal_akhir);
 
   return (
-    <Card>
-      <Eyebrow>Awal periode</Eyebrow>
-      <h2 className="text-lg font-bold mb-4" style={{ color: COLORS.ink }}>Setup data awal</h2>
-      <div className="grid sm:grid-cols-2 gap-x-4">
-        <Field label="Periode" hint="cth. Juni 2026"><input value={f.periode} onChange={function(e){set('periode', e.target.value);}} style={inputStyle}/></Field>
-        <Field label="Jumlah penerima manfaat" hint="porsi per hari"><input type="number" value={f.penerima} onChange={function(e){set('penerima', e.target.value);}} style={inputStyle}/></Field>
-        <Field label="Saldo VA awal"><input type="number" value={f.saldoVA} onChange={function(e){set('saldoVA', e.target.value);}} style={inputStyle}/></Field>
-        <Field label="Saldo Petty Cash awal"><input type="number" value={f.saldoPetty} onChange={function(e){set('saldoPetty', e.target.value);}} style={inputStyle}/></Field>
-      </div>
-      <Btn onClick={submit} disabled={saving}>{saving ? I.spinner : I.check} Simpan setup</Btn>
-    </Card>
+    <div>
+      <Card className="mb-3">
+        <div className="flex items-center justify-between">
+          <div>
+            <Eyebrow>Periode aktif</Eyebrow>
+            <div className="text-sm font-bold" style={{ color: COLORS.ink }}>Periode {periode.periode_no} · {fmtDateRange(periode.tanggal_mulai, periode.tanggal_akhir)}</div>
+          </div>
+        </div>
+      </Card>
+      <Card>
+        <button onClick={function(){setStep(1);}} className="inline-flex items-center gap-1.5 text-sm mb-3" style={{ color: COLORS.green }}>
+          {I.arrowL} {jenis}
+        </button>
+        <Eyebrow>Langkah 2 dari 2 · Detail transaksi</Eyebrow>
+        <div className="grid sm:grid-cols-2 gap-x-4 mt-2">
+          <Field label="Tanggal transaksi" hint={dateOutOfRange ? '⚠️ Tanggal di luar periode aktif' : null}>
+            <input type="date" value={form.tanggal} min={periode.tanggal_mulai} max={periode.tanggal_akhir}
+              onChange={function(e){set('tanggal', e.target.value);}}
+              style={Object.assign({}, inputStyle, dateOutOfRange ? { borderColor: COLORS.danger } : {})}/>
+          </Field>
+          <Field label="Sumber dana">
+            <div className="flex gap-2">
+              {['VA','Petty Cash'].map(function(s){
+                return <button key={s} onClick={function(){set('sumber', s);}} className="flex-1 rounded-lg py-2.5 text-sm font-medium"
+                  style={{ border: '1px solid ' + (form.sumber===s?COLORS.green:COLORS.line),
+                           background: form.sumber===s?COLORS.paper:'#fff',
+                           color: form.sumber===s?COLORS.green:COLORS.muted }}>{s}</button>;
+              })}
+            </div>
+          </Field>
+          <Field label="Kategori">
+            <select value={form.kategori} onChange={function(e){set('kategori', e.target.value);}} style={inputStyle}>
+              <option value="">Pilih kategori…</option>
+              {(kategoriMap[jenis]||[]).map(function(k){ return <option key={k} value={k}>{k}</option>; })}
+            </select>
+          </Field>
+          <Field label="Uraian transaksi"><input value={form.uraian} onChange={function(e){set('uraian', e.target.value);}} placeholder="cth. Ayam potong 60kg" style={inputStyle}/></Field>
+          <Field label="Jumlah riil" hint="Realisasi aktual yang dibayar"><input type="number" value={form.riil} onChange={function(e){set('riil', e.target.value);}} placeholder="0" style={inputStyle}/></Field>
+          <Field label="Jumlah unriil" hint="Nilai pengajuan/anggaran (boleh kosong)"><input type="number" value={form.unriil} onChange={function(e){set('unriil', e.target.value);}} placeholder="0" style={inputStyle}/></Field>
+        </div>
+        <Field label="Bukti transaksi" hint="Foto nota, gambar, atau PDF — tersimpan ke Google Drive">
+          <label className="flex flex-col items-center justify-center gap-1 rounded-lg py-6 cursor-pointer"
+            style={{ border: '1.5px dashed ' + COLORS.line, color: COLORS.muted }}>
+            <div className="flex items-center gap-2">{I.image} {I.file}</div>
+            <span className="text-sm">{bukti ? bukti.name : 'Ketuk untuk pilih / ambil foto'}</span>
+            <input type="file" className="hidden" accept="image/*,application/pdf" capture="environment"
+              onChange={function(e){setBukti(e.target.files[0]);}}/>
+          </label>
+        </Field>
+        <Btn full disabled={!valid || uploading} onClick={submit}>
+          {uploading ? I.spinner : I.check} {uploading ? 'Menyimpan…' : 'Simpan transaksi'}
+        </Btn>
+      </Card>
+    </div>
   );
 }
 
 // ============================================================
-//  RIWAYAT + EXPORT
+//  RIWAYAT + EXPORT (sama seperti v2, tetap bersih)
 // ============================================================
 function exportCSV(rows, dapurMap) {
-  const head = ['Tanggal','Dapur','Jenis','Kategori','Uraian','Sumber','Riil','Unriil','Bukti'];
+  const head = ['Tanggal','Dapur','Periode ID','Jenis','Kategori','Uraian','Sumber','Riil','Unriil','Bukti'];
   function esc(v) {
     const s = String(v == null ? '' : v);
     return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
   }
   const body = rows.map(function(r){
-    return [r.tanggal, dapurMap[r.dapur]||r.dapur, r.jenis, r.kategori, r.uraian, r.sumber, r.riil, r.unriil, r.bukti_url].map(esc).join(',');
+    return [r.tanggal, dapurMap[r.dapur]||r.dapur, r.periode_id||'', r.jenis, r.kategori, r.uraian, r.sumber, r.riil, r.unriil, r.bukti_url].map(esc).join(',');
   });
   const csv = '\ufeff' + [head.join(','), ...body].join('\n');
   const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
@@ -589,9 +967,7 @@ function Riwayat(props) {
     });
   }, [scope]);
 
-  const dapurMap = useMemo(function(){
-    const m = {}; dapur.forEach(function(d){ m[d.id] = d.nama; }); return m;
-  }, [dapur]);
+  const dapurMap = useMemo(function(){ const m = {}; dapur.forEach(function(d){ m[d.id] = d.nama; }); return m; }, [dapur]);
   const filtered = useMemo(function() {
     if (!q.trim()) return rows;
     const t = q.toLowerCase();
@@ -612,9 +988,9 @@ function Riwayat(props) {
           <div className="text-xs" style={{ color: COLORS.muted }}>{filtered.length} transaksi</div>
         </div>
         <div className="flex items-center gap-2">
-          <input value={q} onChange={function(e){setQ(e.target.value);}} placeholder="Cari uraian / kategori…"
-            style={Object.assign({}, inputStyle, { width: 220, padding: '8px 10px', fontSize: 13 })} />
-          <Btn kind="ghost" onClick={function(){exportCSV(filtered, dapurMap);}}>{I.download} Unduh Sheet</Btn>
+          <input value={q} onChange={function(e){setQ(e.target.value);}} placeholder="Cari…"
+            style={Object.assign({}, inputStyle, { width: 200, padding: '8px 10px', fontSize: 13 })} />
+          <Btn kind="ghost" onClick={function(){exportCSV(filtered, dapurMap);}}>{I.download} Unduh</Btn>
         </div>
       </div>
       <div className="overflow-x-auto">
@@ -661,7 +1037,7 @@ function Riwayat(props) {
 }
 
 // ============================================================
-//  USERS (admin)
+//  USERS (admin) — sama
 // ============================================================
 function Pengguna(props) {
   const session = props.session, toast = props.toast;
@@ -673,10 +1049,7 @@ function Pengguna(props) {
 
   function load() {
     setLoading(true);
-    Promise.all([
-      api('getUsers', { role: session.user.role }),
-      api('getDapur'),
-    ]).then(function(arr){
+    Promise.all([api('getUsers', { role: session.user.role }), api('getDapur')]).then(function(arr){
       setLoading(false);
       if (arr[0].ok) setRows(arr[0].data);
       if (arr[1].ok) setDapur(arr[1].data);
@@ -733,32 +1106,29 @@ function Pengguna(props) {
       </Card>
 
       {open && (
-        <div className="fixed inset-0 z-40 flex items-center justify-center p-4" style={{ background: 'rgba(0,0,0,0.4)' }}>
-          <Card className="w-full max-w-md">
-            <Eyebrow>Tambah pengguna</Eyebrow>
-            <Field label="Nama lengkap"><input value={f.nama} onChange={function(e){setF(Object.assign({}, f, {nama:e.target.value}));}} style={inputStyle}/></Field>
-            <Field label="Username"><input value={f.username} onChange={function(e){setF(Object.assign({}, f, {username:e.target.value}));}} style={inputStyle} autoCapitalize="off"/></Field>
-            <Field label="Password awal"><input value={f.password} onChange={function(e){setF(Object.assign({}, f, {password:e.target.value}));}} style={inputStyle}/></Field>
-            <Field label="Peran">
-              <select value={f.target_role} onChange={function(e){setF(Object.assign({}, f, {target_role:e.target.value}));}} style={inputStyle}>
-                <option value="akuntan">Akuntan</option><option value="pic">PIC Dapur</option>
-                <option value="yayasan">Yayasan</option><option value="admin">Admin</option>
+        <Modal title="Tambah pengguna" onClose={function(){setOpen(false);}}>
+          <Field label="Nama lengkap"><input value={f.nama} onChange={function(e){setF(Object.assign({}, f, {nama:e.target.value}));}} style={inputStyle}/></Field>
+          <Field label="Username"><input value={f.username} onChange={function(e){setF(Object.assign({}, f, {username:e.target.value}));}} style={inputStyle} autoCapitalize="off"/></Field>
+          <Field label="Password awal"><input value={f.password} onChange={function(e){setF(Object.assign({}, f, {password:e.target.value}));}} style={inputStyle}/></Field>
+          <Field label="Peran">
+            <select value={f.target_role} onChange={function(e){setF(Object.assign({}, f, {target_role:e.target.value}));}} style={inputStyle}>
+              <option value="akuntan">Akuntan</option><option value="pic">PIC Dapur</option>
+              <option value="yayasan">Yayasan</option><option value="admin">Admin</option>
+            </select>
+          </Field>
+          {(f.target_role==='akuntan'||f.target_role==='pic') && (
+            <Field label="Dapur">
+              <select value={f.dapur} onChange={function(e){setF(Object.assign({}, f, {dapur:e.target.value}));}} style={inputStyle}>
+                <option value="">Pilih dapur…</option>
+                {dapur.map(function(d){ return <option key={d.id} value={d.id}>{d.nama}</option>; })}
               </select>
             </Field>
-            {(f.target_role==='akuntan'||f.target_role==='pic') && (
-              <Field label="Dapur">
-                <select value={f.dapur} onChange={function(e){setF(Object.assign({}, f, {dapur:e.target.value}));}} style={inputStyle}>
-                  <option value="">Pilih dapur…</option>
-                  {dapur.map(function(d){ return <option key={d.id} value={d.id}>{d.nama}</option>; })}
-                </select>
-              </Field>
-            )}
-            <div className="flex gap-2">
-              <Btn kind="ghost" onClick={function(){setOpen(false);}}>Batal</Btn>
-              <Btn onClick={submit}>{I.check} Simpan</Btn>
-            </div>
-          </Card>
-        </div>
+          )}
+          <div className="flex gap-2">
+            <Btn kind="ghost" onClick={function(){setOpen(false);}}>Batal</Btn>
+            <Btn onClick={submit}>{I.check} Simpan</Btn>
+          </div>
+        </Modal>
       )}
     </>
   );
@@ -840,7 +1210,9 @@ function App() {
 
         <main className="flex-1 p-4 sm:p-6 pb-24 md:pb-6">
           {view === 'dash'    && <Dashboard key={'d'+refreshKey} session={session} scope={effScope} toast={toast}/>}
-          {view === 'input'   && <InputTransaksi session={session} toast={toast} onSaved={function(){ setRefreshKey(function(k){return k+1;}); setView('riwayat'); }}/>}
+          {view === 'input'   && <InputTransaksi session={session} toast={toast}
+            onSaved={function(){ setRefreshKey(function(k){return k+1;}); setView('riwayat'); }}
+            goToSetup={function(){setView('setup');}}/>}
           {view === 'setup'   && <SetupPeriode session={session} toast={toast}/>}
           {view === 'riwayat' && <Riwayat key={'r'+refreshKey} session={session} scope={effScope} toast={toast}/>}
           {view === 'users'   && <Pengguna session={session} toast={toast}/>}
@@ -862,18 +1234,14 @@ function App() {
   );
 }
 
-// Mount & hide loading screen
 const rootEl = document.getElementById('root');
 ReactDOM.createRoot(rootEl).render(<App/>);
-
-// Hide loading screen once React has had time to paint
 setTimeout(function() {
   const ls = document.getElementById('loading-screen');
   if (ls) ls.style.display = 'none';
 }, 100);
 
 } catch (err) {
-  // Catch any error in the entire script and show it
   var b = document.getElementById('error-banner');
   if (b) {
     b.style.display = 'block';
