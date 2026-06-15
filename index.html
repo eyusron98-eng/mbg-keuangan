@@ -1064,7 +1064,8 @@ function Laporan({ session, scope, toast }) {
   useEffect(function() {
     if (!selPeriode) return;
     setLoading(true);
-    const dapurId = scope && scope !== 'ALL' ? scope : (session.user.dapur || '');
+    const selObj = periodeList.find(function(p){return p.id === selPeriode;});
+    const dapurId = selObj ? selObj.dapur : (scope && scope !== 'ALL' ? scope : (session.user.dapur || ''));
     Promise.all([
       api('getTransaksi', { role: session.user.role, dapur: session.user.dapur || '', scope: scope || 'ALL', periode_id: selPeriode }),
       api('getVATopups', { dapur: dapurId, periode_id: selPeriode }),
@@ -1073,11 +1074,11 @@ function Laporan({ session, scope, toast }) {
       if (arr[0].ok) setTransaksi(arr[0].data);
       if (arr[1].ok) setVaTopups(arr[1].data);
     });
-  }, [selPeriode, scope]);
+  }, [selPeriode, scope, periodeList]);
 
   const periode = periodeList.find(function(p){return p.id === selPeriode;});
   const dapurMap = useMemo(function(){ const m = {}; dapur.forEach(function(d){ m[d.id] = d.nama; }); return m; }, [dapur]);
-  const dapurNama = scope && scope !== 'ALL' ? dapurMap[scope] : (session.user.dapur ? dapurMap[session.user.dapur] : 'Semua Dapur');
+  const dapurNama = periode ? (dapurMap[periode.dapur] || periode.dapur) : (scope && scope !== 'ALL' ? dapurMap[scope] : (session.user.dapur ? dapurMap[session.user.dapur] : 'Semua Dapur'));
 
   const ledger = useMemo(function(){
     if (!periode) return [];
@@ -1118,7 +1119,7 @@ function Laporan({ session, scope, toast }) {
             <select value={selPeriode} onChange={function(e){setSelPeriode(e.target.value);}} style={inputStyle}>
               {periodeList.length === 0 && <option value="">Belum ada periode</option>}
               {periodeList.map(function(p){
-                return <option key={p.id} value={p.id}>Periode {p.periode_no} · {fmtDateRange(p.tanggal_mulai, p.tanggal_akhir)} · {p.status}</option>;
+                return <option key={p.id} value={p.id}>{(session.user.role === 'admin' || session.user.role === 'yayasan') && dapurMap[p.dapur] ? (dapurMap[p.dapur] + ' · ') : ''}Periode {p.periode_no} · {fmtDateRange(p.tanggal_mulai, p.tanggal_akhir)} · {p.status}</option>;
               })}
             </select>
           </div>
@@ -1326,7 +1327,8 @@ function Riwayat({ session, scope, toast, refreshKey }) {
   const loadData = useCallback(async function() {
     if (!selPeriode) return;
     setLoading(true);
-    const dapurId = scope && scope !== 'ALL' ? scope : (session.user.dapur || '');
+    const selObj = periodeList.find(function(p){return p.id === selPeriode;});
+    const dapurId = selObj ? selObj.dapur : (scope && scope !== 'ALL' ? scope : (session.user.dapur || ''));
     const [tx, va] = await Promise.all([
       api('getTransaksi', { role: session.user.role, dapur: session.user.dapur || '', scope: scope || 'ALL', periode_id: selPeriode }),
       api('getVATopups', { dapur: dapurId, periode_id: selPeriode }),
@@ -1334,7 +1336,7 @@ function Riwayat({ session, scope, toast, refreshKey }) {
     setLoading(false);
     if (tx.ok) setTransaksi(tx.data);
     if (va.ok) setVaTopups(va.data);
-  }, [selPeriode, scope, refreshKey]);
+  }, [selPeriode, scope, refreshKey, periodeList]);
 
   useEffect(function() { loadPeriode(); }, [loadPeriode]);
   useEffect(function() { loadData(); }, [loadData]);
@@ -1381,7 +1383,7 @@ function Riwayat({ session, scope, toast, refreshKey }) {
               <select value={selPeriode} onChange={function(e){setSelPeriode(e.target.value);}} style={Object.assign({}, inputStyle, { fontSize: 13 })}>
                 {periodeList.length === 0 && <option value="">Belum ada periode</option>}
                 {periodeList.map(function(p){
-                  return <option key={p.id} value={p.id}>Periode {p.periode_no} · {fmtDateRange(p.tanggal_mulai, p.tanggal_akhir)} · {p.status}</option>;
+                  return <option key={p.id} value={p.id}>{(session.user.role === 'admin' || session.user.role === 'yayasan') && dapurMap[p.dapur] ? (dapurMap[p.dapur] + ' · ') : ''}Periode {p.periode_no} · {fmtDateRange(p.tanggal_mulai, p.tanggal_akhir)} · {p.status}</option>;
                 })}
               </select>
             </div>
@@ -1546,7 +1548,8 @@ function BukuBesar({ session, scope, toast }) {
   useEffect(function() {
     if (!selPeriode) return;
     setLoading(true);
-    const dapurId = scope && scope !== 'ALL' ? scope : (session.user.dapur || '');
+    const selObj = periodeList.find(function(p){return p.id === selPeriode;});
+    const dapurId = selObj ? selObj.dapur : (scope && scope !== 'ALL' ? scope : (session.user.dapur || ''));
     Promise.all([
       api('getTransaksi', { role: session.user.role, dapur: session.user.dapur || '', scope: scope || 'ALL', periode_id: selPeriode }),
       api('getVATopups', { dapur: dapurId, periode_id: selPeriode }),
@@ -1555,7 +1558,7 @@ function BukuBesar({ session, scope, toast }) {
       if (arr[0].ok) setTransaksi(arr[0].data);
       if (arr[1].ok) setVaTopups(arr[1].data);
     });
-  }, [selPeriode, scope]);
+  }, [selPeriode, scope, periodeList]);
 
   const periode = periodeList.find(function(p){return p.id === selPeriode;});
   const dapurMap = useMemo(function(){ const m = {}; dapur.forEach(function(d){ m[d.id] = d.nama; }); return m; }, [dapur]);
@@ -1583,7 +1586,7 @@ function BukuBesar({ session, scope, toast }) {
             <select value={selPeriode} onChange={function(e){setSelPeriode(e.target.value);}} style={inputStyle}>
               {periodeList.length === 0 && <option value="">Belum ada periode</option>}
               {periodeList.map(function(p){
-                return <option key={p.id} value={p.id}>Periode {p.periode_no} · {fmtDateRange(p.tanggal_mulai, p.tanggal_akhir)} · {p.status}</option>;
+                return <option key={p.id} value={p.id}>{(session.user.role === 'admin' || session.user.role === 'yayasan') && dapurMap[p.dapur] ? (dapurMap[p.dapur] + ' · ') : ''}Periode {p.periode_no} · {fmtDateRange(p.tanggal_mulai, p.tanggal_akhir)} · {p.status}</option>;
               })}
             </select>
           </div>
@@ -2020,6 +2023,7 @@ function App() {
     ],
     yayasan: [
       ['dash','Dashboard',I.dash],
+      ['laporan','Laporan',I.report],
       ['riwayat','Riwayat',I.list],
       ['bukubesar','Buku Besar',I.trend],
       ['profil','Profil',I.user],
