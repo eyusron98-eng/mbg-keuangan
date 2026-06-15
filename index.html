@@ -77,6 +77,14 @@ const BULAN_SHORT = ['Jan','Feb','Mar','Apr','Mei','Jun','Jul','Agu','Sep','Okt'
 
 const fmt = n => 'Rp ' + new Intl.NumberFormat('id-ID').format(Math.round(n||0));
 const fmtNoRp = n => new Intl.NumberFormat('id-ID').format(Math.round(n||0));
+// Real-time Rupiah input helpers — store raw digits in state, display formatted
+const fmtRupiahInput = v => {
+  if (v === undefined || v === null || v === '') return '';
+  const digits = String(v).replace(/\D/g, '');
+  if (!digits) return '';
+  return new Intl.NumberFormat('id-ID').format(parseInt(digits, 10));
+};
+const parseRupiahInput = v => String(v || '').replace(/\D/g, '');
 const fmtShort = n => {
   if (!n && n !== 0) return 'Rp 0';
   if (Math.abs(n) >= 1e9) return 'Rp ' + (n/1e9).toFixed(1) + ' M';
@@ -149,6 +157,36 @@ function buildLedger(saldoAwalVA, saldoAwalPetty, vaTopups, transaksi, mode) {
       rows.push({ kind: 'tx', bulan: getBulan(ev.tanggal), tanggal: ev.tanggal, no_bukti: ev.tx.no_bukti || '-',
         uraian: ev.tx.uraian, debit: 0, kredit: ev.amount, saldo: running,
         tx: ev.tx });
+    }
+  });
+  return rows;
+}
+
+// Dual-mode ledger: 1 baris, 2 kolom Kredit (Aktual & Anggaran), 2 kolom Saldo
+function buildDualLedger(saldoAwalVA, saldoAwalPetty, vaTopups, transaksi) {
+  const events = [];
+  vaTopups.forEach(t => events.push({ tanggal: t.tanggal, type: 'topup_va', amount: t.jumlah, ket: t.keterangan, _ts: new Date(t.tanggal).getTime() }));
+  transaksi.forEach(t => events.push({ tanggal: t.tanggal, type: 'transaksi', tx: t, aktual: t.riil, anggaran: t.unriil, _ts: new Date(t.tanggal).getTime() }));
+  events.sort((a, b) => a._ts - b._ts);
+
+  const saldoAwal = (saldoAwalVA || 0) + (saldoAwalPetty || 0);
+  let runAktual = saldoAwal, runAnggaran = saldoAwal;
+  const rows = [];
+  rows.push({ kind: 'awal', bulan: '-', tanggal: '-', no_bukti: '-', uraian: 'Saldo Awal Periode',
+    debit: saldoAwal, kreditAktual: 0, kreditAnggaran: 0, saldoAktual: runAktual, saldoAnggaran: runAnggaran });
+  events.forEach(ev => {
+    if (ev.type === 'topup_va') {
+      runAktual += ev.amount; runAnggaran += ev.amount;
+      rows.push({ kind: 'topup', bulan: getBulan(ev.tanggal), tanggal: ev.tanggal, no_bukti: '-',
+        uraian: 'Top-up Saldo VA' + (ev.ket ? ' — ' + ev.ket : ''),
+        debit: ev.amount, kreditAktual: 0, kreditAnggaran: 0,
+        saldoAktual: runAktual, saldoAnggaran: runAnggaran });
+    } else {
+      runAktual -= ev.aktual; runAnggaran -= ev.anggaran;
+      rows.push({ kind: 'tx', bulan: getBulan(ev.tanggal), tanggal: ev.tanggal, no_bukti: ev.tx.no_bukti || '-',
+        uraian: ev.tx.uraian, debit: 0,
+        kreditAktual: ev.aktual, kreditAnggaran: ev.anggaran,
+        saldoAktual: runAktual, saldoAnggaran: runAnggaran, tx: ev.tx });
     }
   });
   return rows;
@@ -742,26 +780,41 @@ function TransaksiForm({ mode, initial, jenis, kategoriMap, periode, session, to
 
   function set(k, v) { setForm(function(f){ const n = Object.assign({}, f); n[k] = v; return n; }); }
   const isBahanBaku = jenis === 'Bahan Baku';
-  const valid = form.uraian && form.kategori && form.riil &&
-    periode && form.tanggal >= periode.tanggal_mulai && form.tanggal <= periode.tanggal_akhir;
   const dateOutOfRange = form.tanggal && periode && (form.tanggal < periode.tanggal_mulai || form.tanggal > periode.tanggal_akhir);
+  // Semua field WAJIB. Bukti wajib di mode 'add' (di 'edit' boleh kosong = pakai yang lama).
+  const valid = form.tanggal && !dateOutOfRange && form.no_bukti && form.sumber &&
+    form.kategori && form.uraian && form.riil &&
+    (isBahanBaku || form.unriil) &&
+    (mode === 'edit' || bukti) &&
+    periode;
 
   function go() {
     if (!valid) return;
-    const unrillVal = isBahanBaku ? form.riil : (form.unriil || form.riil);
+    const unrillVal = isBahanBaku ? form.riil : form.unriil;
     onSubmit({ ...form, jenis: jenis, unriil: unrillVal, bukti: bukti });
   }
 
+  // Wrapper input untuk nominal dengan "Rp" prefix & real-time format Indonesia
+  function rupiahInput(val, onChange) {
+    return <div style={{ position: 'relative' }}>
+      <span style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)', color: COLORS.muted, fontSize: 14, pointerEvents: 'none' }}>Rp</span>
+      <input type="text" inputMode="numeric" value={fmtRupiahInput(val)}
+        onChange={function(e){ onChange(parseRupiahInput(e.target.value)); }}
+        placeholder="0"
+        style={Object.assign({}, inputStyle, { paddingLeft: 32, textAlign: 'right', fontVariantNumeric: 'tabular-nums' })}/>
+    </div>;
+  }
+
   return <div className="grid sm:grid-cols-2 gap-x-4 mt-2">
-    <Field label="Tanggal transaksi" hint={dateOutOfRange ? '⚠️ Di luar periode aktif' : null} hintColor={dateOutOfRange ? COLORS.danger : null}>
+    <Field label="Tanggal transaksi *" hint={dateOutOfRange ? '⚠️ Di luar periode aktif' : null} hintColor={dateOutOfRange ? COLORS.danger : null}>
       <input type="date" value={form.tanggal} min={periode && periode.tanggal_mulai} max={periode && periode.tanggal_akhir}
         onChange={function(e){set('tanggal', e.target.value);}}
         style={Object.assign({}, inputStyle, dateOutOfRange ? { borderColor: COLORS.danger } : {})}/>
     </Field>
-    <Field label="No bukti" hint="cth. NB-001 atau no kuitansi">
-      <input value={form.no_bukti} onChange={function(e){set('no_bukti', e.target.value);}} style={inputStyle} placeholder="optional"/>
+    <Field label="No Bukti *" hint="cth. NB-001, BKK-12, dst. — juga dipakai sebagai nama file bukti">
+      <input value={form.no_bukti} onChange={function(e){set('no_bukti', e.target.value);}} style={inputStyle} placeholder="NB-001"/>
     </Field>
-    <Field label="Sumber dana">
+    <Field label="Sumber dana *">
       <div className="flex gap-2">
         {['VA','Petty Cash'].map(function(s){
           return <button key={s} onClick={function(){set('sumber', s);}} className="flex-1 rounded-lg py-2.5 text-sm font-medium"
@@ -771,31 +824,43 @@ function TransaksiForm({ mode, initial, jenis, kategoriMap, periode, session, to
         })}
       </div>
     </Field>
-    <Field label="Kategori">
+    <Field label="Kategori *">
       <select value={form.kategori} onChange={function(e){set('kategori', e.target.value);}} style={inputStyle}>
         <option value="">Pilih kategori…</option>
         {(kategoriMap[jenis]||[]).map(function(k){ return <option key={k} value={k}>{k}</option>; })}
       </select>
     </Field>
-    <Field label="Uraian transaksi"><input value={form.uraian} onChange={function(e){set('uraian', e.target.value);}} placeholder="cth. Ayam potong 60kg" style={inputStyle}/></Field>
+    <Field label="Uraian transaksi *"><input value={form.uraian} onChange={function(e){set('uraian', e.target.value);}} placeholder="cth. Ayam potong 60kg" style={inputStyle}/></Field>
     {isBahanBaku ? (
-      <Field label="Nominal" hint="Realisasi aktual"><input type="number" value={form.riil} onChange={function(e){set('riil', e.target.value);}} placeholder="0" style={inputStyle}/></Field>
+      <Field label="Nominal *" hint="Realisasi aktual">{rupiahInput(form.riil, function(v){set('riil', v);})}</Field>
     ) : (
       <>
-        <Field label="Realisasi Aktual" hint="Yang benar-benar dibayar"><input type="number" value={form.riil} onChange={function(e){set('riil', e.target.value);}} placeholder="0" style={inputStyle}/></Field>
-        <Field label="Realisasi Anggaran" hint="Nilai pengajuan / markup (kosongkan kalau sama dengan aktual)"><input type="number" value={form.unriil} onChange={function(e){set('unriil', e.target.value);}} placeholder="0" style={inputStyle}/></Field>
+        <Field label="Realisasi Aktual *" hint="Yang benar-benar dibayar">{rupiahInput(form.riil, function(v){set('riil', v);})}</Field>
+        <Field label="Realisasi Anggaran *" hint="Nilai pengajuan / markup">{rupiahInput(form.unriil, function(v){set('unriil', v);})}</Field>
       </>
     )}
     <div className="sm:col-span-2">
-      <Field label="Bukti transaksi" hint={mode === 'edit' ? 'Kosongkan kalau tidak ganti bukti' : 'Foto nota / PDF — tersimpan ke Google Drive'}>
+      <Field label={'Bukti transaksi ' + (mode === 'edit' ? '(opsional kalau tidak ganti)' : '*')}
+        hint={mode === 'edit' ? 'Kosongkan kalau tidak ganti bukti' : 'Foto nota / PDF — nama file otomatis: {Tanggal}_{No Bukti}'}>
         <label className="flex flex-col items-center justify-center gap-1 rounded-lg py-6 cursor-pointer"
-          style={{ border: '1.5px dashed ' + COLORS.line, color: COLORS.muted }}>
+          style={{ border: '1.5px dashed ' + (bukti || (mode === 'edit' && initial && initial.bukti_url) ? COLORS.green : COLORS.line), color: COLORS.muted }}>
           <div className="flex items-center gap-2">{I.image} {I.file}</div>
           <span className="text-sm">{bukti ? bukti.name : (mode === 'edit' && initial && initial.bukti_url ? 'Sudah ada bukti — klik untuk ganti' : 'Ketuk untuk pilih / ambil foto')}</span>
           <input type="file" className="hidden" accept="image/*,application/pdf" capture="environment"
             onChange={function(e){setBukti(e.target.files[0]);}}/>
         </label>
       </Field>
+      {!valid && (
+        <div className="text-xs mb-3" style={{ color: COLORS.danger }}>
+          {!form.tanggal ? '• Tanggal wajib diisi' : dateOutOfRange ? '• Tanggal di luar periode aktif' :
+           !form.no_bukti ? '• No Bukti wajib diisi' :
+           !form.kategori ? '• Kategori wajib dipilih' :
+           !form.uraian ? '• Uraian wajib diisi' :
+           !form.riil ? '• Nominal wajib diisi' :
+           (!isBahanBaku && !form.unriil) ? '• Realisasi Anggaran wajib diisi' :
+           (mode !== 'edit' && !bukti) ? '• Bukti transaksi wajib diunggah' : ''}
+        </div>
+      )}
       <Btn full disabled={!valid || submitting} onClick={go}>{submitting ? I.spinner : I.check} {submitting ? 'Menyimpan…' : (mode === 'edit' ? 'Simpan Perubahan' : 'Simpan transaksi')}</Btn>
     </div>
   </div>;
@@ -808,6 +873,13 @@ function fileToBase64(file) {
     r.onerror = rej;
     r.readAsDataURL(file);
   });
+}
+
+// Generate nama file bukti = "{Tanggal}_{NoBukti}.{ext}"
+function buktiFileName(file, tanggal, noBukti) {
+  const ext = (String(file.name).split('.').pop() || 'jpg').toLowerCase();
+  const safeBukti = String(noBukti || 'tanpa-bukti').replace(/[^a-zA-Z0-9_-]+/g, '-').replace(/^-|-$/g, '');
+  return tanggal + '_' + safeBukti + '.' + ext;
 }
 
 function InputTransaksi({ session, toast, onSaved, goToSetup }) {
@@ -831,7 +903,7 @@ function InputTransaksi({ session, toast, onSaved, goToSetup }) {
     let bukti_url = '';
     if (form.bukti) {
       const b64 = await fileToBase64(form.bukti);
-      const up = await apiUpload('uploadBukti', { fileData: b64, fileName: form.bukti.name, mimeType: form.bukti.type });
+      const up = await apiUpload('uploadBukti', { fileData: b64, fileName: buktiFileName(form.bukti, form.tanggal, form.no_bukti), mimeType: form.bukti.type });
       if (up.ok) bukti_url = up.data.url;
       else { toast('Gagal upload bukti: ' + up.error, 'error'); setSubmitting(false); return; }
     }
@@ -924,7 +996,7 @@ function EditTransaksiModal({ trx, kategoriMap, periode, session, toast, onClose
     let bukti_url = '';
     if (form.bukti) {
       const b64 = await fileToBase64(form.bukti);
-      const up = await apiUpload('uploadBukti', { fileData: b64, fileName: form.bukti.name, mimeType: form.bukti.type });
+      const up = await apiUpload('uploadBukti', { fileData: b64, fileName: buktiFileName(form.bukti, form.tanggal, form.no_bukti), mimeType: form.bukti.type });
       if (up.ok) bukti_url = up.data.url;
       else { toast('Gagal upload bukti: ' + up.error, 'error'); setSubmitting(false); return; }
     }
@@ -1286,7 +1358,7 @@ function Riwayat({ session, scope, toast, refreshKey }) {
 
   const ledger = useMemo(function() {
     if (!periode) return [];
-    return buildLedger(periode.saldoVA, periode.saldoPettyAwal, vaTopups, filteredTx, 'aktual');
+    return buildLedger(periode.saldoVA, periode.saldoPettyAwal, vaTopups, filteredTx, 'anggaran');
   }, [periode, vaTopups, filteredTx]);
 
   async function doDelete() {
@@ -1345,12 +1417,13 @@ function Riwayat({ session, scope, toast, refreshKey }) {
                   <th className="px-3 py-2.5 font-semibold text-right">Debit</th>
                   <th className="px-3 py-2.5 font-semibold text-right">Kredit</th>
                   <th className="px-3 py-2.5 font-semibold text-right">Saldo</th>
+                  <th className="px-3 py-2.5 font-semibold text-center" style={{ width: 60 }}>Bukti</th>
                   {canEdit && <th className="px-3 py-2.5 font-semibold" style={{ width: 100 }}></th>}
                 </tr>
               </thead>
               <tbody>
                 {ledger.length === 0 ? (
-                  <tr><td colSpan={canEdit ? 8 : 7} className="px-4 py-8 text-center" style={{ color: COLORS.muted }}>Belum ada data di periode ini.</td></tr>
+                  <tr><td colSpan={canEdit ? 9 : 8} className="px-4 py-8 text-center" style={{ color: COLORS.muted }}>Belum ada data di periode ini.</td></tr>
                 ) : ledger.map(function(row, idx){
                   const isAwal = row.kind === 'awal';
                   const isTopup = row.kind === 'topup';
@@ -1372,6 +1445,15 @@ function Riwayat({ session, scope, toast, refreshKey }) {
                     <td className="px-3 py-2 text-right font-medium num" style={{ color: row.debit ? COLORS.green : COLORS.muted }}>{row.debit ? fmt(row.debit) : '-'}</td>
                     <td className="px-3 py-2 text-right font-medium num" style={{ color: row.kredit ? COLORS.danger : COLORS.muted }}>{row.kredit ? fmt(row.kredit) : '-'}</td>
                     <td className="px-3 py-2 text-right font-semibold num" style={{ color: COLORS.ink }}>{fmt(row.saldo)}</td>
+                    <td className="px-3 py-2 text-center">
+                      {isTx && row.tx && row.tx.bukti_url ? (
+                        <a href={row.tx.bukti_url} target="_blank" rel="noopener" title="Lihat bukti"
+                          className="inline-flex items-center justify-center rounded p-1.5"
+                          style={{ color: COLORS.green, border: '1px solid ' + COLORS.line }}>{I.image}</a>
+                      ) : (
+                        <span className="text-[10px]" style={{ color: COLORS.muted }}>—</span>
+                      )}
+                    </td>
                     {canEdit && <td className="px-3 py-2 text-right">
                       {isTx && periodeAktif && (
                         <div className="flex gap-1 justify-end">
@@ -1402,6 +1484,208 @@ function Riwayat({ session, scope, toast, refreshKey }) {
           message={'Hapus transaksi "' + confirmDel.uraian + '" (' + fmt(confirmDel.riil) + ')? Tidak bisa dibatalkan.'}
           onConfirm={doDelete} onClose={function(){setConfirmDel(null);}} confirmLabel="Hapus" danger/>
       )}
+    </div>
+  );
+}
+
+// ============================================================
+//  BUKU BESAR — dual-mode ledger (Aktual + Anggaran side-by-side)
+//  Buat audit & perbandingan: kredit & saldo punya 2 kolom
+// ============================================================
+function bukuBesarExportExcel(rows, dapurMap, namaFile) {
+  const data = rows.map(function(r){
+    return {
+      'Bulan': r.bulan, 'Tanggal': r.tanggal === '-' ? '-' : r.tanggal,
+      'No Bukti': r.no_bukti, 'Uraian': r.uraian,
+      'Debit': r.debit || 0,
+      'Kredit Aktual': r.kreditAktual || 0, 'Kredit Anggaran': r.kreditAnggaran || 0,
+      'Saldo Aktual': r.saldoAktual || 0, 'Saldo Anggaran': r.saldoAnggaran || 0,
+      'Selisih Saldo': (r.saldoAnggaran || 0) - (r.saldoAktual || 0),
+      'Jenis': r.tx ? r.tx.jenis : (r.kind === 'topup' ? 'Top-up VA' : 'Saldo Awal'),
+      'Kategori': r.tx ? r.tx.kategori : '',
+      'Sumber': r.tx ? r.tx.sumber : '',
+      'Dapur': r.tx ? (dapurMap[r.tx.dapur] || r.tx.dapur) : '',
+      'Bukti URL': r.tx ? (r.tx.bukti_url || '') : '',
+    };
+  });
+  const ws = XLSX.utils.json_to_sheet(data);
+  ws['!cols'] = [
+    { wch: 10 }, { wch: 12 }, { wch: 14 }, { wch: 36 }, { wch: 14 },
+    { wch: 14 }, { wch: 14 }, { wch: 14 }, { wch: 14 }, { wch: 14 },
+    { wch: 14 }, { wch: 26 }, { wch: 12 }, { wch: 24 }, { wch: 50 },
+  ];
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'Buku Besar');
+  XLSX.writeFile(wb, namaFile);
+}
+
+function BukuBesar({ session, scope, toast }) {
+  const [periodeList, setPeriodeList] = useState([]);
+  const [selPeriode, setSelPeriode] = useState('');
+  const [transaksi, setTransaksi] = useState([]);
+  const [vaTopups, setVaTopups] = useState([]);
+  const [dapur, setDapur] = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(function() {
+    Promise.all([
+      api('getPeriodeList', { role: session.user.role, dapur: scope, scope: scope }),
+      api('getDapur'),
+    ]).then(function(arr){
+      if (arr[0].ok) {
+        setPeriodeList(arr[0].data);
+        const aktif = arr[0].data.find(function(p){return p.status === 'AKTIF';});
+        if (aktif) setSelPeriode(aktif.id);
+        else if (arr[0].data[0]) setSelPeriode(arr[0].data[0].id);
+        else setLoading(false);
+      } else setLoading(false);
+      if (arr[1].ok) setDapur(arr[1].data);
+    });
+  }, [scope]);
+
+  useEffect(function() {
+    if (!selPeriode) return;
+    setLoading(true);
+    const dapurId = scope && scope !== 'ALL' ? scope : (session.user.dapur || '');
+    Promise.all([
+      api('getTransaksi', { role: session.user.role, dapur: session.user.dapur || '', scope: scope || 'ALL', periode_id: selPeriode }),
+      api('getVATopups', { dapur: dapurId, periode_id: selPeriode }),
+    ]).then(function(arr){
+      setLoading(false);
+      if (arr[0].ok) setTransaksi(arr[0].data);
+      if (arr[1].ok) setVaTopups(arr[1].data);
+    });
+  }, [selPeriode, scope]);
+
+  const periode = periodeList.find(function(p){return p.id === selPeriode;});
+  const dapurMap = useMemo(function(){ const m = {}; dapur.forEach(function(d){ m[d.id] = d.nama; }); return m; }, [dapur]);
+
+  const ledger = useMemo(function(){
+    if (!periode) return [];
+    return buildDualLedger(periode.saldoVA, periode.saldoPettyAwal, vaTopups, transaksi);
+  }, [periode, vaTopups, transaksi]);
+
+  const totalKreditAktual = ledger.reduce(function(s,r){ return s + (r.kreditAktual||0); }, 0);
+  const totalKreditAnggaran = ledger.reduce(function(s,r){ return s + (r.kreditAnggaran||0); }, 0);
+  const saldoAkhirAktual = ledger.length > 0 ? ledger[ledger.length-1].saldoAktual : 0;
+  const saldoAkhirAnggaran = ledger.length > 0 ? ledger[ledger.length-1].saldoAnggaran : 0;
+  const selisihKredit = totalKreditAnggaran - totalKreditAktual;
+  const selisihSaldo = saldoAkhirAnggaran - saldoAkhirAktual;
+
+  if (loading) return <Card>{I.spinner}</Card>;
+
+  return (
+    <div>
+      <Card className="mb-3">
+        <Eyebrow>Periode</Eyebrow>
+        <div className="flex flex-col sm:flex-row sm:items-end gap-3 mt-1">
+          <div className="flex-1 min-w-0">
+            <select value={selPeriode} onChange={function(e){setSelPeriode(e.target.value);}} style={inputStyle}>
+              {periodeList.length === 0 && <option value="">Belum ada periode</option>}
+              {periodeList.map(function(p){
+                return <option key={p.id} value={p.id}>Periode {p.periode_no} · {fmtDateRange(p.tanggal_mulai, p.tanggal_akhir)} · {p.status}</option>;
+              })}
+            </select>
+          </div>
+          <Btn kind="ghost" onClick={function(){
+            bukuBesarExportExcel(ledger, dapurMap, 'buku-besar-' + (selPeriode || 'all') + '.xlsx');
+          }} disabled={ledger.length === 0}>{I.download} Excel</Btn>
+        </div>
+        <p className="text-xs mt-2" style={{ color: COLORS.muted }}>
+          Menampilkan <b>Realisasi Aktual</b> dan <b>Realisasi Anggaran</b> berdampingan untuk audit.
+        </p>
+      </Card>
+
+      {/* RINGKASAN PERBANDINGAN */}
+      {ledger.length > 1 && (
+        <Card className="mb-3">
+          <Eyebrow>Ringkasan</Eyebrow>
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-2 mt-2">
+            <div className="rounded p-3" style={{ background: COLORS.paper }}>
+              <div className="text-xs" style={{ color: COLORS.muted }}>Total Kredit Aktual</div>
+              <div className="font-bold num text-base" style={{ color: COLORS.green }}>{fmt(totalKreditAktual)}</div>
+            </div>
+            <div className="rounded p-3" style={{ background: COLORS.paper }}>
+              <div className="text-xs" style={{ color: COLORS.muted }}>Total Kredit Anggaran</div>
+              <div className="font-bold num text-base" style={{ color: COLORS.amber }}>{fmt(totalKreditAnggaran)}</div>
+            </div>
+            <div className="rounded p-3" style={{ background: COLORS.paper }}>
+              <div className="text-xs" style={{ color: COLORS.muted }}>Saldo Akhir Aktual</div>
+              <div className="font-bold num text-base" style={{ color: COLORS.green }}>{fmt(saldoAkhirAktual)}</div>
+            </div>
+            <div className="rounded p-3" style={{ background: COLORS.paper }}>
+              <div className="text-xs" style={{ color: COLORS.muted }}>Saldo Akhir Anggaran</div>
+              <div className="font-bold num text-base" style={{ color: COLORS.amber }}>{fmt(saldoAkhirAnggaran)}</div>
+            </div>
+          </div>
+          <div className="mt-3 p-3 rounded" style={{ background: '#FFF9E8', border: '1px solid #F3E2A8' }}>
+            <div className="text-xs" style={{ color: COLORS.muted }}>Selisih Markup (Anggaran − Aktual)</div>
+            <div className="flex gap-6 mt-1 text-sm">
+              <div>Kredit: <b className="num" style={{ color: COLORS.ink }}>{fmt(selisihKredit)}</b></div>
+              <div>Saldo: <b className="num" style={{ color: COLORS.ink }}>{fmt(selisihSaldo)}</b></div>
+            </div>
+          </div>
+        </Card>
+      )}
+
+      <Card pad={false}>
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm" style={{ minWidth: 1200 }}>
+            <thead>
+              <tr style={{ color: COLORS.muted, background: COLORS.paper }} className="text-left text-xs uppercase">
+                <th className="px-3 py-2.5 font-semibold">Bulan</th>
+                <th className="px-3 py-2.5 font-semibold">Tanggal</th>
+                <th className="px-3 py-2.5 font-semibold">No Bukti</th>
+                <th className="px-3 py-2.5 font-semibold">Uraian</th>
+                <th className="px-3 py-2.5 font-semibold text-right">Debit</th>
+                <th className="px-3 py-2.5 font-semibold text-right" style={{ background: '#E8F1EC' }}>Kredit Aktual</th>
+                <th className="px-3 py-2.5 font-semibold text-right" style={{ background: '#FAF1DC' }}>Kredit Anggaran</th>
+                <th className="px-3 py-2.5 font-semibold text-right" style={{ background: '#E8F1EC' }}>Saldo Aktual</th>
+                <th className="px-3 py-2.5 font-semibold text-right" style={{ background: '#FAF1DC' }}>Saldo Anggaran</th>
+                <th className="px-3 py-2.5 font-semibold text-center" style={{ width: 60 }}>Bukti</th>
+              </tr>
+            </thead>
+            <tbody>
+              {ledger.length === 0 ? (
+                <tr><td colSpan="10" className="px-4 py-8 text-center" style={{ color: COLORS.muted }}>Belum ada data.</td></tr>
+              ) : ledger.map(function(row, idx){
+                const isAwal = row.kind === 'awal', isTopup = row.kind === 'topup', isTx = row.kind === 'tx';
+                const selisihRow = (row.saldoAnggaran||0) - (row.saldoAktual||0);
+                return <tr key={idx} style={{ borderTop: '1px solid ' + COLORS.line, background: isAwal ? '#F0F7F2' : (isTopup ? '#F0F4FA' : 'transparent') }}>
+                  <td className="px-3 py-2" style={{ color: COLORS.muted }}>{row.bulan}</td>
+                  <td className="px-3 py-2" style={{ color: COLORS.muted }}>{row.kind === 'awal' ? '-' : getTglDayMonth(row.tanggal)}</td>
+                  <td className="px-3 py-2 text-xs" style={{ color: COLORS.muted }}>{row.no_bukti}</td>
+                  <td className="px-3 py-2" style={{ color: COLORS.ink, fontStyle: isAwal||isTopup ? 'italic' : 'normal' }}>
+                    <div>{row.uraian}</div>
+                    {isTx && row.tx && <div className="text-[11px] mt-0.5" style={{ color: COLORS.muted }}>
+                      <span className="rounded px-1.5 py-0.5 mr-1" style={{ background: COLORS.paper }}>{row.tx.jenis}</span>
+                      <span>{row.tx.kategori}</span>
+                      <span className="ml-1.5">·</span><span className="ml-1.5">{row.tx.sumber}</span>
+                    </div>}
+                  </td>
+                  <td className="px-3 py-2 text-right font-medium num" style={{ color: row.debit ? COLORS.green : COLORS.muted }}>{row.debit ? fmt(row.debit) : '-'}</td>
+                  <td className="px-3 py-2 text-right font-medium num" style={{ color: row.kreditAktual ? COLORS.danger : COLORS.muted, background: '#F3F8F5' }}>{row.kreditAktual ? fmt(row.kreditAktual) : '-'}</td>
+                  <td className="px-3 py-2 text-right font-medium num" style={{ color: row.kreditAnggaran ? COLORS.amber : COLORS.muted, background: '#FDF7EA' }}>{row.kreditAnggaran ? fmt(row.kreditAnggaran) : '-'}</td>
+                  <td className="px-3 py-2 text-right font-semibold num" style={{ color: COLORS.ink, background: '#F3F8F5' }}>{fmt(row.saldoAktual)}</td>
+                  <td className="px-3 py-2 text-right font-semibold num" style={{ color: COLORS.ink, background: '#FDF7EA' }}>
+                    {fmt(row.saldoAnggaran)}
+                    {selisihRow > 0 && <div className="text-[9px]" style={{ color: COLORS.muted }}>+{fmt(selisihRow)}</div>}
+                  </td>
+                  <td className="px-3 py-2 text-center">
+                    {isTx && row.tx && row.tx.bukti_url ? (
+                      <a href={row.tx.bukti_url} target="_blank" rel="noopener" title="Lihat bukti"
+                        className="inline-flex items-center justify-center rounded p-1.5"
+                        style={{ color: COLORS.green, border: '1px solid ' + COLORS.line }}>{I.image}</a>
+                    ) : (
+                      <span className="text-[10px]" style={{ color: COLORS.muted }}>—</span>
+                    )}
+                  </td>
+                </tr>;
+              })}
+            </tbody>
+          </table>
+        </div>
+      </Card>
     </div>
   );
 }
@@ -1716,7 +2000,7 @@ function App() {
   </>);
 
   const role = session.user.role;
-  // Nav: setup, dash, input, laporan, riwayat, profil + (admin: pengguna, dapur)
+  // Nav: setup, dash, input, laporan, riwayat, bukubesar, profil + (admin: pengguna, dapur)
   const navItems = ({
     akuntan: [
       ['setup','Setup',I.settings],
@@ -1724,23 +2008,27 @@ function App() {
       ['input','Input',I.plus],
       ['laporan','Laporan',I.report],
       ['riwayat','Riwayat',I.list],
+      ['bukubesar','Buku Besar',I.trend],
       ['profil','Profil',I.user],
     ],
     pic: [
       ['dash','Dashboard',I.dash],
       ['laporan','Laporan',I.report],
       ['riwayat','Riwayat',I.list],
+      ['bukubesar','Buku Besar',I.trend],
       ['profil','Profil',I.user],
     ],
     yayasan: [
       ['dash','Dashboard',I.dash],
       ['riwayat','Riwayat',I.list],
+      ['bukubesar','Buku Besar',I.trend],
       ['profil','Profil',I.user],
     ],
     admin: [
       ['dash','Dashboard',I.dash],
       ['laporan','Laporan',I.report],
       ['riwayat','Riwayat',I.list],
+      ['bukubesar','Buku Besar',I.trend],
       ['users','Pengguna',I.users],
       ['dapur','Dapur',I.building],
       ['profil','Profil',I.user],
@@ -1799,6 +2087,7 @@ function App() {
             goToSetup={function(){setView('setup');}}/>}
           {view === 'laporan' && <Laporan session={session} scope={effScope} toast={toast}/>}
           {view === 'riwayat' && <Riwayat session={session} scope={effScope} toast={toast} refreshKey={refreshKey}/>}
+          {view === 'bukubesar' && <BukuBesar session={session} scope={effScope} toast={toast}/>}
           {view === 'profil'  && <Profil session={session} toast={toast} onUpdated={onProfileUpdated}/>}
           {view === 'users'   && <Pengguna session={session} toast={toast}/>}
           {view === 'dapur'   && <DapurPage session={session} toast={toast}/>}
