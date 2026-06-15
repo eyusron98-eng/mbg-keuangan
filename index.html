@@ -841,14 +841,33 @@ function TransaksiForm({ mode, initial, jenis, kategoriMap, periode, session, to
     )}
     <div className="sm:col-span-2">
       <Field label={'Bukti transaksi ' + (mode === 'edit' ? '(opsional kalau tidak ganti)' : '*')}
-        hint={mode === 'edit' ? 'Kosongkan kalau tidak ganti bukti' : 'Foto nota / PDF — nama file otomatis: {Tanggal}_{No Bukti}'}>
-        <label className="flex flex-col items-center justify-center gap-1 rounded-lg py-6 cursor-pointer"
-          style={{ border: '1.5px dashed ' + (bukti || (mode === 'edit' && initial && initial.bukti_url) ? COLORS.green : COLORS.line), color: COLORS.muted }}>
-          <div className="flex items-center gap-2">{I.image} {I.file}</div>
-          <span className="text-sm">{bukti ? bukti.name : (mode === 'edit' && initial && initial.bukti_url ? 'Sudah ada bukti — klik untuk ganti' : 'Ketuk untuk pilih / ambil foto')}</span>
-          <input type="file" className="hidden" accept="image/*,application/pdf" capture="environment"
-            onChange={function(e){setBukti(e.target.files[0]);}}/>
-        </label>
+        hint={mode === 'edit' ? 'Kosongkan kalau tidak ganti bukti' : 'Nama file otomatis: {Tanggal}_{No Bukti}'}>
+        {/* Status bukti terpilih */}
+        <div className="rounded-lg p-3 mb-2 flex items-center gap-2"
+          style={{ border: '1.5px dashed ' + (bukti || (mode === 'edit' && initial && initial.bukti_url) ? COLORS.green : COLORS.line),
+                   background: bukti ? '#E8F1EC' : '#fff' }}>
+          <span style={{ color: bukti ? COLORS.green : COLORS.muted }}>{bukti ? I.check : I.image}</span>
+          <span className="text-sm flex-1 truncate" style={{ color: bukti ? COLORS.ink : COLORS.muted }}>
+            {bukti ? bukti.name : (mode === 'edit' && initial && initial.bukti_url ? 'Bukti lama tersimpan — pilih baru untuk mengganti' : 'Belum ada bukti dipilih')}
+          </span>
+          {bukti && <button onClick={function(){setBukti(null);}} title="Hapus pilihan"
+            style={{ color: COLORS.danger }}>{I.x}</button>}
+        </div>
+        {/* Dua tombol: Galeri/File & Kamera */}
+        <div className="grid grid-cols-2 gap-2">
+          <label className="flex items-center justify-center gap-2 rounded-lg py-3 cursor-pointer text-sm font-medium"
+            style={{ border: '1px solid ' + COLORS.line, color: COLORS.green, background: '#fff' }}>
+            {I.image} Galeri / File
+            <input type="file" className="hidden" accept="image/*,application/pdf"
+              onChange={function(e){ if(e.target.files[0]) setBukti(e.target.files[0]); }}/>
+          </label>
+          <label className="flex items-center justify-center gap-2 rounded-lg py-3 cursor-pointer text-sm font-medium"
+            style={{ border: '1px solid ' + COLORS.line, color: COLORS.green, background: '#fff' }}>
+            {I.image} Kamera
+            <input type="file" className="hidden" accept="image/*" capture="environment"
+              onChange={function(e){ if(e.target.files[0]) setBukti(e.target.files[0]); }}/>
+          </label>
+        </div>
       </Field>
       {!valid && (
         <div className="text-xs mb-3" style={{ color: COLORS.danger }}>
