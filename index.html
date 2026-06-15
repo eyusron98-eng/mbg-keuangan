@@ -1694,6 +1694,128 @@ function BukuBesar({ session, scope, toast }) {
 }
 
 // ============================================================
+//  PERIODE ADMIN — admin kelola & hapus periode per dapur
+// ============================================================
+function PeriodeAdmin({ session, toast }) {
+  const [dapur, setDapur] = useState([]);
+  const [selDapur, setSelDapur] = useState('ALL');
+  const [periodeList, setPeriodeList] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [confirmDel, setConfirmDel] = useState(null);
+  const [deleting, setDeleting] = useState(false);
+
+  function loadDapur() {
+    api('getDapur').then(function(r){ if (r.ok) setDapur(r.data); });
+  }
+  const loadPeriode = useCallback(function() {
+    setLoading(true);
+    api('getPeriodeList', { role: session.user.role, scope: selDapur }).then(function(r){
+      setLoading(false);
+      if (r.ok) setPeriodeList(r.data); else toast(r.error, 'error');
+    });
+  }, [selDapur]);
+
+  useEffect(function(){ loadDapur(); }, []);
+  useEffect(function(){ loadPeriode(); }, [loadPeriode]);
+
+  const dapurMap = {}; dapur.forEach(function(d){ dapurMap[d.id] = d.nama; });
+
+  async function doDelete() {
+    setDeleting(true);
+    const res = await api('deletePeriode', { role: session.user.role, user_id: session.user.id, id: confirmDel.id });
+    setDeleting(false);
+    if (res.ok) {
+      const d = res.data || {};
+      toast('Periode ' + (d.periode_no || '') + ' dihapus (' + (d.txDeleted||0) + ' transaksi, ' + ((d.vaDeleted||0)+(d.pettyDeleted||0)) + ' top-up)');
+      setConfirmDel(null);
+      loadPeriode();
+    } else toast(res.error || 'Gagal hapus', 'error');
+  }
+
+  return (<>
+    <Card pad={false}>
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-4" style={{ borderBottom: '1px solid ' + COLORS.line }}>
+        <div>
+          <div className="font-bold" style={{ color: COLORS.ink }}>Kelola Periode</div>
+          <div className="text-xs" style={{ color: COLORS.muted }}>{periodeList.length} periode</div>
+        </div>
+        <div>
+          <select value={selDapur} onChange={function(e){setSelDapur(e.target.value);}}
+            style={Object.assign({}, inputStyle, { width: 'auto', padding: '8px 10px', fontSize: 13 })}>
+            <option value="ALL">Semua dapur</option>
+            {dapur.map(function(d){ return <option key={d.id} value={d.id}>{d.nama}</option>; })}
+          </select>
+        </div>
+      </div>
+
+      <div className="p-4 pb-2">
+        <div className="rounded-lg p-3 mb-2 flex items-start gap-2" style={{ background: '#FAE5DF' }}>
+          <span style={{ color: COLORS.danger }}>{I.warn}</span>
+          <div className="text-xs" style={{ color: COLORS.ink }}>
+            <b>Hati-hati:</b> Menghapus periode akan ikut menghapus <b>semua transaksi, top-up VA, dan top-up Petty Cash</b> di periode itu. Tindakan ini permanen dan tidak bisa dibatalkan.
+          </div>
+        </div>
+      </div>
+
+      {loading ? <div className="p-6">{I.spinner}</div> : (
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm" style={{ minWidth: 700 }}>
+            <thead>
+              <tr style={{ color: COLORS.muted, background: COLORS.paper }} className="text-left text-xs uppercase">
+                <th className="px-4 py-2.5 font-semibold">Dapur</th>
+                <th className="px-4 py-2.5 font-semibold">Periode</th>
+                <th className="px-4 py-2.5 font-semibold">Rentang</th>
+                <th className="px-4 py-2.5 font-semibold text-right">Saldo VA Awal</th>
+                <th className="px-4 py-2.5 font-semibold">Status</th>
+                <th className="px-4 py-2.5 font-semibold"></th>
+              </tr>
+            </thead>
+            <tbody>
+              {periodeList.length === 0 ? (
+                <tr><td colSpan="6" className="px-4 py-8 text-center" style={{ color: COLORS.muted }}>Belum ada periode.</td></tr>
+              ) : periodeList.map(function(p){
+                return <tr key={p.id} style={{ borderTop: '1px solid ' + COLORS.line }}>
+                  <td className="px-4 py-2.5" style={{ color: COLORS.ink }}>{dapurMap[p.dapur] || p.dapur}</td>
+                  <td className="px-4 py-2.5 font-medium" style={{ color: COLORS.ink }}>Periode {p.periode_no}</td>
+                  <td className="px-4 py-2.5" style={{ color: COLORS.muted }}>{fmtDateRange(p.tanggal_mulai, p.tanggal_akhir)}</td>
+                  <td className="px-4 py-2.5 text-right num" style={{ color: COLORS.muted }}>{fmt(p.saldoVA)}</td>
+                  <td className="px-4 py-2.5"><PeriodeBadge status={p.status}/></td>
+                  <td className="px-4 py-2.5 text-right">
+                    <button onClick={function(){setConfirmDel(p);}} title="Hapus periode"
+                      style={{ color: COLORS.danger, border: '1px solid ' + COLORS.line, borderRadius: 6, padding: 5 }}>{I.trash}</button>
+                  </td>
+                </tr>;
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </Card>
+
+    {confirmDel && (
+      <Modal title="Hapus Periode" onClose={function(){ if(!deleting) setConfirmDel(null); }}>
+        <div className="rounded-lg p-3 mb-3" style={{ background: '#FAE5DF' }}>
+          <div className="text-sm font-semibold mb-1" style={{ color: COLORS.danger }}>⚠️ Tindakan permanen</div>
+          <div className="text-sm" style={{ color: COLORS.ink }}>
+            Akan menghapus <b>Periode {confirmDel.periode_no}</b> ({dapurMap[confirmDel.dapur] || confirmDel.dapur}) beserta:
+            <ul className="list-disc ml-5 mt-1.5 space-y-0.5">
+              <li>Semua transaksi di periode ini</li>
+              <li>Semua top-up VA</li>
+              <li>Semua top-up Petty Cash</li>
+            </ul>
+          </div>
+        </div>
+        <p className="text-xs mb-4" style={{ color: COLORS.muted }}>Data yang sudah dihapus tidak bisa dikembalikan. Pastikan sudah ada cadangan/export jika diperlukan.</p>
+        <div className="flex gap-2 justify-end">
+          <Btn kind="ghost" onClick={function(){setConfirmDel(null);}} disabled={deleting}>Batal</Btn>
+          <Btn kind="danger" onClick={doDelete} disabled={deleting}>{deleting ? I.spinner : I.trash} Hapus Permanen</Btn>
+        </div>
+      </Modal>
+    )}
+  </>);
+}
+
+// ============================================================
 //  PROFIL — self edit nama/username/password
 // ============================================================
 function Profil({ session, toast, onUpdated }) {
@@ -2033,6 +2155,7 @@ function App() {
       ['laporan','Laporan',I.report],
       ['riwayat','Riwayat',I.list],
       ['bukubesar','Buku Besar',I.trend],
+      ['periode','Periode',I.settings],
       ['users','Pengguna',I.users],
       ['dapur','Dapur',I.building],
       ['profil','Profil',I.user],
@@ -2092,6 +2215,7 @@ function App() {
           {view === 'laporan' && <Laporan session={session} scope={effScope} toast={toast}/>}
           {view === 'riwayat' && <Riwayat session={session} scope={effScope} toast={toast} refreshKey={refreshKey}/>}
           {view === 'bukubesar' && <BukuBesar session={session} scope={effScope} toast={toast}/>}
+          {view === 'periode' && <PeriodeAdmin session={session} toast={toast}/>}
           {view === 'profil'  && <Profil session={session} toast={toast} onUpdated={onProfileUpdated}/>}
           {view === 'users'   && <Pengguna session={session} toast={toast}/>}
           {view === 'dapur'   && <DapurPage session={session} toast={toast}/>}
