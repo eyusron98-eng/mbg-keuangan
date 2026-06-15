@@ -2,7 +2,7 @@
 <html lang="id">
 <head>
 <meta charset="UTF-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
 <title>Keuangan MBG — Koperasi ISS</title>
 <script src="https://cdn.tailwindcss.com"></script>
 <style>
@@ -222,6 +222,7 @@ const I = {
   cash:     <Svg><rect x="2" y="6" width="20" height="12" rx="2"/><circle cx="12" cy="12" r="2"/><path d="M6 12h.01M18 12h.01"/></Svg>,
   file:     <Svg><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/></Svg>,
   image:    <Svg><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></Svg>,
+  camera:   <Svg><path d="M23 19a2 2 0 01-2 2H3a2 2 0 01-2-2V8a2 2 0 012-2h4l2-3h6l2 3h4a2 2 0 012 2z"/><circle cx="12" cy="13" r="4"/></Svg>,
   warn:     <Svg><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></Svg>,
   spinner:  <Svg className="animate-spin"><line x1="12" y1="2" x2="12" y2="6"/><line x1="12" y1="18" x2="12" y2="22"/><line x1="4.93" y1="4.93" x2="7.76" y2="7.76"/><line x1="16.24" y1="16.24" x2="19.07" y2="19.07"/><line x1="2" y1="12" x2="6" y2="12"/><line x1="18" y1="12" x2="22" y2="12"/><line x1="4.93" y1="19.07" x2="7.76" y2="16.24"/><line x1="16.24" y1="7.76" x2="19.07" y2="4.93"/></Svg>,
 };
@@ -241,8 +242,8 @@ function Btn(p) {
 }
 function Card(p) {
   const pad = p.pad !== false;
-  return <div className={'rounded-xl ' + (p.className||'')}
-    style={{ background: COLORS.surface, border: '1px solid ' + COLORS.line, padding: pad ? 20 : 0 }}>{p.children}</div>;
+  return <div className={'rounded-xl ' + (pad ? 'p-4 sm:p-5 ' : '') + (p.className||'')}
+    style={{ background: COLORS.surface, border: '1px solid ' + COLORS.line }}>{p.children}</div>;
 }
 function Field(p) {
   return <label className="block mb-4">
@@ -591,13 +592,13 @@ function SetupPeriode({ session, toast }) {
 // ============================================================
 function KPICard(p) {
   return <Card>
-    <div className="flex items-start justify-between">
+    <div className="flex items-start justify-between gap-1.5">
       <div className="min-w-0 flex-1">
-        <div className="text-xs font-medium truncate" style={{ color: COLORS.muted }}>{p.label}</div>
-        <div className="text-xl sm:text-2xl font-bold mt-1 num truncate" style={{ color: COLORS.ink }}>{p.value}</div>
-        {p.sub && <div className="text-xs mt-1 truncate" style={{ color: p.accent || COLORS.muted }}>{p.sub}</div>}
+        <div className="text-[11px] sm:text-xs font-medium leading-tight" style={{ color: COLORS.muted }}>{p.label}</div>
+        <div className="text-base sm:text-xl lg:text-2xl font-bold mt-1 num leading-tight" style={{ color: COLORS.ink, wordBreak: 'break-word' }}>{p.value}</div>
+        {p.sub && <div className="text-[10px] sm:text-xs mt-0.5 leading-tight" style={{ color: p.accent || COLORS.muted, wordBreak: 'break-word' }}>{p.sub}</div>}
       </div>
-      <div className="rounded-lg flex items-center justify-center shrink-0 ml-2" style={{ width: 38, height: 38, background: COLORS.paper, color: COLORS.green }}>{p.icon}</div>
+      <div className="rounded-lg hidden sm:flex items-center justify-center shrink-0" style={{ width: 34, height: 34, background: COLORS.paper, color: COLORS.green }}>{p.icon}</div>
     </div>
   </Card>;
 }
@@ -678,19 +679,19 @@ function Dashboard({ session, scope, toast }) {
       {!noActive && (
         <Card className="mb-3">
           <Eyebrow>Realisasi Aktual vs Anggaran</Eyebrow>
-          <div className="grid grid-cols-3 gap-3 mt-2">
-            <div className="rounded-lg p-3" style={{ background: COLORS.paper }}>
-              <div className="text-xs" style={{ color: COLORS.muted }}>Realisasi Aktual</div>
-              <div className="font-bold num text-lg" style={{ color: COLORS.green }}>{fmt(k.totalRiil)}</div>
+          <div className="grid grid-cols-3 gap-2 mt-2">
+            <div className="rounded-lg p-2.5 sm:p-3" style={{ background: COLORS.paper }}>
+              <div className="text-[11px] sm:text-xs leading-tight" style={{ color: COLORS.muted }}>Realisasi Aktual</div>
+              <div className="font-bold num text-sm sm:text-lg leading-tight mt-0.5" title={fmt(k.totalRiil)} style={{ color: COLORS.green, wordBreak: 'break-word' }}>{fmtShort(k.totalRiil)}</div>
             </div>
-            <div className="rounded-lg p-3" style={{ background: COLORS.paper }}>
-              <div className="text-xs" style={{ color: COLORS.muted }}>Realisasi Anggaran</div>
-              <div className="font-bold num text-lg" style={{ color: COLORS.amber }}>{fmt(k.totalUnriil)}</div>
+            <div className="rounded-lg p-2.5 sm:p-3" style={{ background: COLORS.paper }}>
+              <div className="text-[11px] sm:text-xs leading-tight" style={{ color: COLORS.muted }}>Realisasi Anggaran</div>
+              <div className="font-bold num text-sm sm:text-lg leading-tight mt-0.5" title={fmt(k.totalUnriil)} style={{ color: COLORS.amber, wordBreak: 'break-word' }}>{fmtShort(k.totalUnriil)}</div>
             </div>
-            <div className="rounded-lg p-3" style={{ background: COLORS.paper }}>
-              <div className="text-xs" style={{ color: COLORS.muted }}>Selisih Anggaran</div>
-              <div className="font-bold num text-lg" style={{ color: k.selisihAnggaran >= 0 ? COLORS.ink : COLORS.danger }}>{fmt(k.selisihAnggaran)}</div>
-              <div className="text-[10px] mt-0.5" style={{ color: COLORS.muted }}>Anggaran − Aktual</div>
+            <div className="rounded-lg p-2.5 sm:p-3" style={{ background: COLORS.paper }}>
+              <div className="text-[11px] sm:text-xs leading-tight" style={{ color: COLORS.muted }}>Selisih Anggaran</div>
+              <div className="font-bold num text-sm sm:text-lg leading-tight mt-0.5" title={fmt(k.selisihAnggaran)} style={{ color: k.selisihAnggaran >= 0 ? COLORS.ink : COLORS.danger, wordBreak: 'break-word' }}>{fmtShort(k.selisihAnggaran)}</div>
+              <div className="text-[10px] mt-0.5 leading-tight" style={{ color: COLORS.muted }}>Anggaran − Aktual</div>
             </div>
           </div>
         </Card>
@@ -855,15 +856,17 @@ function TransaksiForm({ mode, initial, jenis, kategoriMap, periode, session, to
         </div>
         {/* Dua tombol: Galeri/File & Kamera */}
         <div className="grid grid-cols-2 gap-2">
-          <label className="flex items-center justify-center gap-2 rounded-lg py-3 cursor-pointer text-sm font-medium"
-            style={{ border: '1px solid ' + COLORS.line, color: COLORS.green, background: '#fff' }}>
-            {I.image} Galeri / File
+          <label className="flex flex-col items-center justify-center gap-1 rounded-lg py-3.5 cursor-pointer text-sm font-semibold active:opacity-70"
+            style={{ border: '1.5px solid ' + COLORS.line, color: COLORS.green, background: '#fff' }}>
+            <span className="flex items-center gap-1.5">{I.image} Galeri / File</span>
+            <span className="text-[10px] font-normal" style={{ color: COLORS.muted }}>Foto tersimpan / PDF</span>
             <input type="file" className="hidden" accept="image/*,application/pdf"
               onChange={function(e){ if(e.target.files[0]) setBukti(e.target.files[0]); }}/>
           </label>
-          <label className="flex items-center justify-center gap-2 rounded-lg py-3 cursor-pointer text-sm font-medium"
-            style={{ border: '1px solid ' + COLORS.line, color: COLORS.green, background: '#fff' }}>
-            {I.image} Kamera
+          <label className="flex flex-col items-center justify-center gap-1 rounded-lg py-3.5 cursor-pointer text-sm font-semibold active:opacity-70"
+            style={{ border: '1.5px solid ' + COLORS.line, color: COLORS.green, background: '#fff' }}>
+            <span className="flex items-center gap-1.5">{I.camera} Kamera</span>
+            <span className="text-[10px] font-normal" style={{ color: COLORS.muted }}>Ambil foto langsung</span>
             <input type="file" className="hidden" accept="image/*" capture="environment"
               onChange={function(e){ if(e.target.files[0]) setBukti(e.target.files[0]); }}/>
           </label>
@@ -2192,24 +2195,25 @@ function App() {
 
   return (
     <div className="min-h-screen flex flex-col" style={{ background: COLORS.paper, color: COLORS.ink }}>
-      <header className="flex items-center justify-between px-4 sm:px-6 py-3 no-print" style={{ background: COLORS.surface, borderBottom: '1px solid ' + COLORS.line }}>
-        <div className="flex items-center gap-2.5 min-w-0">
-          <div className="rounded-lg flex items-center justify-center shrink-0" style={{ width: 34, height: 34, background: COLORS.green, color: '#fff' }}>{I.wallet}</div>
+      <header className="sticky top-0 z-30 flex items-center justify-between gap-2 px-3 sm:px-6 py-3 no-print"
+        style={{ background: COLORS.surface, borderBottom: '1px solid ' + COLORS.line, paddingTop: 'calc(env(safe-area-inset-top, 0px) + 12px)' }}>
+        <div className="flex items-center gap-2 min-w-0">
+          <div className="rounded-lg flex items-center justify-center shrink-0" style={{ width: 32, height: 32, background: COLORS.green, color: '#fff' }}>{I.wallet}</div>
           <div className="min-w-0">
-            <div className="font-bold text-sm leading-none truncate" style={{ color: COLORS.ink }}>Keuangan MBG</div>
-            <div className="text-xs truncate" style={{ color: COLORS.muted }}>{session.user.nama}</div>
+            <div className="font-bold text-sm leading-tight truncate" style={{ color: COLORS.ink }}>Keuangan MBG</div>
+            <div className="text-[11px] leading-tight truncate" style={{ color: COLORS.muted }}>{session.user.nama} · {session.user.role}</div>
           </div>
         </div>
-        <div className="flex items-center gap-2">
-          {canPickScope && (view==='dash'||view==='riwayat'||view==='laporan') && (
+        <div className="flex items-center gap-2 shrink-0">
+          {canPickScope && (view==='dash'||view==='riwayat'||view==='laporan'||view==='bukubesar') && (
             <select value={scope} onChange={function(e){setScope(e.target.value);}}
-              style={Object.assign({}, inputStyle, { width: 'auto', padding: '7px 10px', fontSize: 13 })}>
+              style={Object.assign({}, inputStyle, { width: 'auto', maxWidth: 120, padding: '6px 8px', fontSize: 12 })}>
               <option value="ALL">Semua dapur</option>
               {dapurList.map(function(d){ return <option key={d.id} value={d.id}>{d.nama}</option>; })}
             </select>
           )}
-          <button onClick={logout} className="inline-flex items-center gap-1.5 text-sm rounded-lg px-3 py-2"
-            style={{ color: COLORS.muted, border: '1px solid ' + COLORS.line }}>{I.logout} <span className="hidden sm:inline">Keluar</span></button>
+          <button onClick={logout} title="Keluar" className="inline-flex items-center gap-1.5 text-sm rounded-lg px-2.5 py-2 shrink-0"
+            style={{ color: COLORS.muted, border: '1px solid ' + COLORS.line }}>{I.logout} <span className="hidden lg:inline">Keluar</span></button>
         </div>
       </header>
 
@@ -2225,7 +2229,7 @@ function App() {
           })}
         </nav>
 
-        <main className="flex-1 p-4 sm:p-6 pb-24 md:pb-6 overflow-x-hidden">
+        <main className="flex-1 p-4 sm:p-6 overflow-x-hidden md:!pb-6" style={{ paddingBottom: 'calc(env(safe-area-inset-bottom, 0px) + 88px)' }}>
           {view === 'setup'   && <SetupPeriode session={session} toast={toast}/>}
           {view === 'dash'    && <Dashboard key={'d'+refreshKey} session={session} scope={effScope} toast={toast}/>}
           {view === 'input'   && <InputTransaksi session={session} toast={toast}
@@ -2241,14 +2245,21 @@ function App() {
         </main>
       </div>
 
-      <nav className="md:hidden fixed bottom-0 left-0 right-0 flex justify-around py-2 no-print overflow-x-auto" style={{ background: COLORS.surface, borderTop: '1px solid ' + COLORS.line }}>
-        {navItems.map(function(item){
-          const k = item[0], label = item[1], icon = item[2];
-          return <button key={k} onClick={function(){setView(k);}} className="flex flex-col items-center gap-0.5 px-2 py-1 shrink-0"
-            style={{ color: view===k?COLORS.green:COLORS.muted }}>
-            {icon}<span className="text-[10px] font-medium">{label.split(' ')[0]}</span>
-          </button>;
-        })}
+      <nav className="md:hidden fixed bottom-0 left-0 right-0 flex no-print"
+        style={{ background: COLORS.surface, borderTop: '1px solid ' + COLORS.line, paddingBottom: 'env(safe-area-inset-bottom, 0px)', overflowX: 'auto', overflowY: 'hidden', WebkitOverflowScrolling: 'touch' }}>
+        <div className="flex" style={{ width: navItems.length > 5 ? 'max-content' : '100%', minWidth: '100%' }}>
+          {navItems.map(function(item){
+            const k = item[0], label = item[1], icon = item[2];
+            const active = view === k;
+            return <button key={k} onClick={function(){setView(k);}}
+              className="flex flex-col items-center justify-center gap-0.5 py-2 shrink-0"
+              style={{ color: active?COLORS.green:COLORS.muted, flex: navItems.length > 5 ? '0 0 auto' : '1 1 0',
+                       width: navItems.length > 5 ? 68 : 'auto', minWidth: navItems.length > 5 ? 68 : 0,
+                       borderTop: active ? '2px solid ' + COLORS.green : '2px solid transparent' }}>
+              {icon}<span className="text-[10px] font-medium whitespace-nowrap leading-none mt-0.5">{label}</span>
+            </button>;
+          })}
+        </div>
       </nav>
 
       {toastData && <Toast msg={toastData.msg} type={toastData.type} onClose={function(){setToastData(null);}}/>}
