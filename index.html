@@ -360,18 +360,20 @@ function PeriodeBadge(p) {
 }
 
 function PeriodeForm({ initial, onClose, onSaved, session, toast }) {
-  const [f, setF] = useState(initial || { tanggal_mulai: '', tanggal_akhir: '', penerima: '', saldoVA: '', saldoPettyAwal: '' });
+  const [f, setF] = useState(Object.assign({ alasan: '' }, initial || { tanggal_mulai: '', tanggal_akhir: '', penerima: '', saldoVA: '', saldoPettyAwal: '' }));
   const [saving, setSaving] = useState(false);
   const isEdit = !!initial && !!initial.id;
+  const saldoBerubah = isEdit && Number(f.saldoVA || 0) !== Number(initial.saldoVA || 0);
   function set(k, v) { setF(function(p){ const n = Object.assign({}, p); n[k] = v; return n; }); }
   async function submit() {
     if (!f.tanggal_mulai || !f.tanggal_akhir) { toast('Isi tanggal mulai & akhir', 'error'); return; }
     if (f.tanggal_mulai >= f.tanggal_akhir) { toast('Tanggal mulai harus sebelum tanggal akhir', 'error'); return; }
+    if (saldoBerubah && !String(f.alasan || '').trim()) { toast('Isi alasan perubahan saldo awal VA', 'error'); return; }
     setSaving(true);
     const action = isEdit ? 'updatePeriode' : 'addPeriode';
     const payload = Object.assign({ role: session.user.role, user_id: session.user.id, dapur: session.user.dapur,
       tanggal_mulai: f.tanggal_mulai, tanggal_akhir: f.tanggal_akhir,
-      penerima: f.penerima, saldoVA: f.saldoVA, saldoPettyAwal: f.saldoPettyAwal },
+      penerima: f.penerima, saldoVA: f.saldoVA, saldoPettyAwal: f.saldoPettyAwal, alasan: f.alasan },
       isEdit ? { id: initial.id } : {});
     const res = await api(action, payload);
     setSaving(false);
@@ -383,7 +385,9 @@ function PeriodeForm({ initial, onClose, onSaved, session, toast }) {
       <Field label="Tanggal mulai"><input type="date" value={f.tanggal_mulai} onChange={function(e){set('tanggal_mulai', e.target.value);}} style={inputStyle}/></Field>
       <Field label="Tanggal akhir"><input type="date" value={f.tanggal_akhir} onChange={function(e){set('tanggal_akhir', e.target.value);}} style={inputStyle}/></Field>
       <Field label="Jumlah penerima manfaat" hint="porsi/hari"><input type="number" value={f.penerima} onChange={function(e){set('penerima', e.target.value);}} style={inputStyle} placeholder="0"/></Field>
-      <Field label="Saldo VA awal"><input type="number" value={f.saldoVA} onChange={function(e){set('saldoVA', e.target.value);}} style={inputStyle} placeholder="0"/></Field>
+      <Field label="Saldo VA awal" hint={isEdit ? 'Saldo VA saat periode dimulai. Perubahan tercatat di log beserta alasannya.' : null}><input type="number" value={f.saldoVA} onChange={function(e){set('saldoVA', e.target.value);}} style={inputStyle} placeholder="0"/></Field>
+      {saldoBerubah && <Field label="Alasan perubahan saldo awal VA *" hint={'Sebelumnya ' + fmt(initial.saldoVA) + ' → menjadi ' + fmt(Number(f.saldoVA || 0))}>
+        <input value={f.alasan} onChange={function(e){set('alasan', e.target.value);}} style={inputStyle} placeholder="cth. salah input, sesuai rekening koran 1 Okt"/></Field>}
       <Field label="Saldo Petty Cash awal" hint="Boleh 0. Petty Cash akan diisi via Top-up (diambil dari saldo VA)."><input type="number" value={f.saldoPettyAwal} onChange={function(e){set('saldoPettyAwal', e.target.value);}} style={inputStyle} placeholder="0"/></Field>
       <div className="flex gap-2"><Btn kind="ghost" onClick={onClose}>Batal</Btn><Btn onClick={submit} disabled={saving}>{saving ? I.spinner : I.check} Simpan</Btn></div>
     </Modal>
@@ -425,7 +429,7 @@ function TopupForm({ tipe, periode, onClose, onSaved, session, toast }) {
   );
 }
 
-function SaldoCard({ tipe, periode, topups, onTopup, color }) {
+function SaldoCard({ tipe, periode, topups, onTopup, color, onEditAwal }) {
   const isVA = tipe === 'VA';
   const awal = isVA ? periode.saldoVA : periode.saldoPettyAwal;
   const topupTotal = isVA ? periode.totalVATopup : periode.totalPettyTopup;
@@ -448,7 +452,8 @@ function SaldoCard({ tipe, periode, topups, onTopup, color }) {
 
       <div className="grid grid-cols-2 gap-2 mb-3 text-xs">
         <div className="rounded p-2" style={{ background: COLORS.paper }}>
-          <div style={{ color: COLORS.muted }}>Saldo Awal</div>
+          <div className="flex items-center justify-between"><span style={{ color: COLORS.muted }}>Saldo Awal</span>
+            {onEditAwal && <button onClick={onEditAwal} className="text-[11px] font-semibold" style={{ color: COLORS.blue }}>Ubah</button>}</div>
           <div className="font-semibold num" style={{ color: COLORS.ink }}>{fmt(awal)}</div>
         </div>
         <div className="rounded p-2" style={{ background: COLORS.paper }}>
@@ -575,7 +580,12 @@ function SetupPeriode({ session, toast }) {
       {periode && (
         <div className="grid lg:grid-cols-2 gap-3 mb-3">
           <SaldoCard tipe="VA" periode={periode} topups={aktifVATopups}
-            onTopup={function(){setOpenTopup('VA');}} color={COLORS.blue}/>
+            onTopup={function(){setOpenTopup('VA');}} color={COLORS.blue}
+            onEditAwal={session.user.role === 'akuntan' ? function(){
+              setEditPeriode({ id: periode.id, periode_no: periode.periode_no,
+                tanggal_mulai: periode.tanggal_mulai, tanggal_akhir: periode.tanggal_akhir,
+                penerima: periode.penerima, saldoVA: periode.saldoVA, saldoPettyAwal: periode.saldoPettyAwal });
+              setOpenForm(true); } : null}/>
           <SaldoCard tipe="Petty" periode={periode} topups={aktifPettyTopups}
             onTopup={function(){setOpenTopup('Petty');}} color={COLORS.amber}/>
         </div>
@@ -2167,6 +2177,7 @@ function DapurPage({ session, toast }) {
       </table></div>
     </Card>
 
+    <LogoKopCard toast={toast}/>
     {openAdd && <DapurForm mode="add" session={session} toast={toast} onClose={function(){setOpenAdd(false);}} onSaved={load}/>}
     {edit && <DapurForm mode="edit" initial={edit} session={session} toast={toast} onClose={function(){setEdit(null);}} onSaved={load}/>}
     {confirmDel && (
@@ -2196,7 +2207,7 @@ function DapurForm({ mode, initial, session, toast, onClose, onSaved }) {
   return <Modal title={mode === 'edit' ? 'Edit dapur' : 'Tambah dapur'} onClose={onClose}>
     <Field label="Nama dapur"><input value={f.nama} onChange={function(e){setF(Object.assign({}, f, {nama:e.target.value}));}} style={inputStyle} placeholder="cth. SPPG Kebon Jeruk 01"/></Field>
     <Field label="Kode SPPG" hint="Dipakai di nomor Berita Acara, cth. CPJ02 → BA-PA/CPJ02/2026/10/001"><input value={f.kode} onChange={function(e){setF(Object.assign({}, f, {kode:e.target.value.toUpperCase().replace(/[^A-Z0-9]/g,'')}));}} style={inputStyle} placeholder="CPJ02" maxLength={8}/></Field>
-    <Field label="Alamat" hint="Opsional"><input value={f.alamat} onChange={function(e){setF(Object.assign({}, f, {alamat:e.target.value}));}} style={inputStyle}/></Field>
+    <Field label="Alamat" hint="Opsional · tampil di kop Berita Acara"><input value={f.alamat} onChange={function(e){setF(Object.assign({}, f, {alamat:e.target.value}));}} style={inputStyle}/></Field>
     <div className="flex gap-2"><Btn kind="ghost" onClick={onClose}>Batal</Btn><Btn onClick={submit} disabled={saving}>{saving ? I.spinner : I.check} Simpan</Btn></div>
   </Modal>;
 }
@@ -2382,7 +2393,13 @@ function PengajuanForm({ kategoriMap, penerima, upsertPenerima, toast, onCreated
     const items = rows.map(function(r){ return { jenis: r.jenis, kategori: r.kategori, uraian: r.uraian.trim(), nominal: Number(r.nominal), penerima_id: r.penerima_id, susulan: !!r.susulan }; });
     const res = await apiPost('createPengajuan', { items: items, dapur: dapur, tanggal: tanggal });
     setSaving(false); setConfirm(false);
-    if (res.ok) { toast('Pengajuan ' + res.data.nomor + ' terkirim ke Yayasan'); onCreated(); }
+    if (res.ok) {
+      toast('Pengajuan ' + res.data.nomor + ' terkirim ke Yayasan');
+      const pmap = {}; (penerima || []).forEach(function(x){ pmap[x.id] = x; });
+      onCreated({ nomor: res.data.nomor, tanggal: tanggal, dapur: dapur, items: items.map(function(it){
+        const pn = pmap[it.penerima_id] || {};
+        return Object.assign({}, it, { penerima_nama: pn.nama || '', bank: pn.bank || '', no_rek: pn.no_rek || '' }); }) });
+    }
     else toast(res.error || 'Gagal mengirim', 'error');
   }
   return <Card className="mb-3">
@@ -2533,6 +2550,7 @@ function PengajuanPage({ session, scope, dapurList, toast }) {
   const [batalItem, setBatalItem] = useState(null);
   const [penerima, upsertPenerima] = usePenerimaList();
   const [baList, setBaList] = useState([]);
+  const [waText, setWaText] = useState(null);
   const dapurMap = useMemo(function(){ const m = {}; (dapurList || []).forEach(function(d){ m[d.id] = d.nama; }); return m; }, [dapurList]);
 
   const load = useCallback(async function() {
@@ -2567,7 +2585,9 @@ function PengajuanPage({ session, scope, dapurList, toast }) {
     {canCreate && !noPeriode && (showForm
       ? <PengajuanForm kategoriMap={kategoriMap} penerima={penerima} upsertPenerima={upsertPenerima} toast={toast} dapurOptions={dapurOptions}
           periodeRange={data.periodeRange || {}} ownDapur={session.user.dapur}
-          onCreated={function(){ setShowForm(false); load(); }} onCancel={function(){ setShowForm(false); }}/>
+          onCreated={function(d){ setShowForm(false); load();
+            if (d) setWaText(buildWAPesan({ nomor: d.nomor, tanggal: d.tanggal, dapurNama: dapurMap[d.dapur || session.user.dapur] || '', oleh: session.user.nama, items: d.items })); }}
+          onCancel={function(){ setShowForm(false); }}/>
       : <div className="mb-3"><Btn full onClick={function(){ setShowForm(true); }}>{I.plusSm} Buat pengajuan hari ini</Btn></div>)}
 
     {data.pengajuan.length === 0 ? (
@@ -2592,6 +2612,10 @@ function PengajuanPage({ session, scope, dapurList, toast }) {
           <div className="sm:text-right shrink-0">
             <StatusBadge status={h.status}/>
             <div className="text-xs mt-1 num" style={{ color: COLORS.muted }}>Diajukan {fmt(h.total_diajukan)} · <span style={{ color: COLORS.green }}>Disetujui {fmt(h.total_disetujui)}</span></div>
+            {canCreate && h.items.some(function(i){ return i.status === 'DIAJUKAN'; }) && <div className="mt-1.5">
+              <button onClick={function(){ setWaText(buildWAPesan({ nomor: h.nomor, tanggal: h.tanggal, dapurNama: dapurMap[h.dapur] || '', oleh: h.created_by_nama,
+                items: h.items.filter(function(i){ return i.status === 'DIAJUKAN'; }) })); }}
+                className="text-[11px] font-semibold rounded px-2 py-1" style={{ color: COLORS.green, border: '1px solid ' + COLORS.line }}>Salin pesan WA</button></div>}
           </div>
         </div>
         {h.items.map(function(it){
@@ -2613,7 +2637,134 @@ function PengajuanPage({ session, scope, dapurList, toast }) {
     {editItem && <ItemEditModal item={editItem} kategoriMap={kategoriMap} penerima={penerima} upsertPenerima={upsertPenerima}
       toast={toast} onClose={function(){ setEditItem(null); }} onSaved={load}/>}
     {batalItem && <BatalModal item={batalItem} toast={toast} onClose={function(){ setBatalItem(null); }} onSaved={load}/>}
+    {waText && <WAModal text={waText} toast={toast} onClose={function(){ setWaText(null); }}/>}
   </div>;
+}
+
+// ---------- Riwayat Berita Acara (semua periode, termasuk yang sudah ditutup) ----------
+function BeritaAcaraPage({ session, scope, dapurList, toast }) {
+  const [list, setList] = useState(null);
+  const [per, setPer] = useState('');
+  const multi = session.user.role === 'admin' || session.user.role === 'yayasan';
+  const dapurMap = useMemo(function(){ const m = {}; (dapurList || []).forEach(function(d){ m[d.id] = d.nama; }); return m; }, [dapurList]);
+  useEffect(function(){ api('getBADaftar', {}).then(function(r){ if (r.ok) setList(r.data); else { setList([]); toast(r.error || 'Gagal memuat', 'error'); } }); }, []);
+  if (!list) return <Card><div className="flex items-center gap-2 text-sm" style={{ color: COLORS.muted }}>{I.spinner} Memuat…</div></Card>;
+  const inScope = list.filter(function(g){ return !multi || !scope || scope === 'ALL' || g.dapur === scope; });
+  const periodes = [];
+  inScope.forEach(function(g){ if (!periodes.some(function(x){ return x.id === g.periode_id; })) periodes.push({ id: g.periode_id, no: g.periode_no, dapur: g.dapur, status: g.periode_status, mulai: g.periode_mulai, akhir: g.periode_akhir }); });
+  const rows = inScope.filter(function(g){ return !per || g.periode_id === per; });
+  return <div>
+    <Card className="mb-3">
+      <Eyebrow>Riwayat Berita Acara</Eyebrow>
+      <p className="text-xs mt-1 mb-3" style={{ color: COLORS.muted }}>Satu Berita Acara per dapur per hari H, semua periode termasuk yang sudah ditutup. PDF dibuat ulang dari data saat diunduh; kode verifikasi di kaki halaman berubah bila isinya berubah.</p>
+      <select value={per} onChange={function(e){ setPer(e.target.value); }} style={inputStyle}>
+        <option value="">Semua periode ({inScope.length} berita acara)</option>
+        {periodes.map(function(x){ return <option key={x.id} value={x.id}>{(multi && dapurMap[x.dapur] ? dapurMap[x.dapur] + ' · ' : '') + 'Periode ' + x.no + ' · ' + fmtDateRange(x.mulai, x.akhir) + ' · ' + x.status}</option>; })}
+      </select>
+    </Card>
+    {rows.length === 0 ? <Card><div className="text-sm text-center py-4" style={{ color: COLORS.muted }}>Belum ada Berita Acara.</div></Card>
+    : <Card pad={false}>{rows.map(function(g, k){
+      const ready = g.menunggu === 0 && g.disetujui > 0;
+      return <div key={g.dapur + g.tanggal} className="p-3 sm:p-4 flex items-center justify-between gap-3" style={{ borderTop: k ? '1px solid ' + COLORS.line : 'none' }}>
+        <div className="min-w-0">
+          <div className="font-mono text-xs font-semibold break-all" style={{ color: COLORS.ink }}>{g.nomor}</div>
+          <div className="text-xs mt-0.5" style={{ color: COLORS.muted }}>
+            Hari H {fmtDDMMYYYY(g.tanggal)}{multi && dapurMap[g.dapur] ? ' · ' + dapurMap[g.dapur] : ''} · {g.disetujui} baris · {fmt(g.total)}
+            {g.periode_status && g.periode_status !== 'AKTIF' ? ' · periode ditutup' : ''}
+          </div>
+          {!ready && <div className="text-[11px] mt-0.5" style={{ color: COLORS.amber }}>{g.menunggu > 0 ? g.menunggu + ' baris belum diputuskan' : 'Tidak ada baris disetujui'}</div>}
+        </div>
+        <div className="shrink-0"><BAButton g={g} toast={toast} compact/></div>
+      </div>;
+    })}</Card>}
+  </div>;
+}
+
+function LogoKopCard({ toast }) {
+  const [logo, setLogo] = useState(undefined);
+  const [busy, setBusy] = useState(false);
+  function load() { api('getLogoKop').then(function(r){ setLogo(r.ok ? r.data.logo : null); }); }
+  useEffect(load, []);
+  async function onFile(e) {
+    const f = e.target.files && e.target.files[0]; e.target.value = '';
+    if (!f) return;
+    setBusy(true);
+    try {
+      const url = URL.createObjectURL(f);
+      const im = await new Promise(function(res, rej){ const x = new Image(); x.onload = function(){ res(x); }; x.onerror = function(){ rej(new Error('File bukan gambar')); }; x.src = url; });
+      const k = Math.min(1, 400 / im.naturalWidth, 400 / im.naturalHeight);
+      const c = document.createElement('canvas'); c.width = Math.round(im.naturalWidth * k); c.height = Math.round(im.naturalHeight * k);
+      c.getContext('2d').drawImage(im, 0, 0, c.width, c.height); URL.revokeObjectURL(url);
+      const res = await apiUpload('saveLogoKop', { fileData: c.toDataURL('image/png') });
+      if (res.ok) { toast('Logo kop tersimpan'); load(); } else toast(res.error || 'Gagal menyimpan', 'error');
+    } catch (err) { toast(err.message, 'error'); }
+    setBusy(false);
+  }
+  async function hapus() { const r = await apiUpload('saveLogoKop', { hapus: true }); if (r.ok) { toast('Logo dihapus'); setLogo(null); } else toast(r.error || 'Gagal', 'error'); }
+  return <Card className="mt-3">
+    <Eyebrow>Logo kop Berita Acara</Eyebrow>
+    <p className="text-xs mt-1 mb-3" style={{ color: COLORS.muted }}>Logo BGN di sisi kiri kop Berita Acara semua SPPG. Gunakan file resmi (PNG berlatar transparan paling bagus). Nama dan alamat di kop diambil dari data dapur.</p>
+    <div className="flex flex-col sm:flex-row sm:items-center gap-3">
+      <div className="rounded-lg flex items-center justify-center" style={{ width: 96, height: 96, background: '#fff', border: '1px solid ' + COLORS.line }}>
+        {logo === undefined ? I.spinner : logo ? <img src={logo} alt="Logo kop" style={{ maxWidth: 84, maxHeight: 84 }}/> : <span className="text-[11px] text-center px-1" style={{ color: COLORS.danger }}>Belum ada logo</span>}
+      </div>
+      <div className="flex flex-wrap gap-2 items-center">
+        <label className="inline-flex items-center gap-1.5 rounded-lg font-semibold px-2.5 py-1.5 text-xs cursor-pointer" style={{ background: COLORS.green, color: '#fff' }}>
+          {busy ? I.spinner : I.plusSm} {logo ? 'Ganti logo' : 'Unggah logo'}
+          <input type="file" accept="image/png,image/jpeg" onChange={onFile} style={{ display: 'none' }}/>
+        </label>
+        {logo && <Btn size="sm" kind="ghost" onClick={hapus}><span style={{ color: COLORS.danger }}>Hapus</span></Btn>}
+      </div>
+    </div>
+  </Card>;
+}
+
+// ---------- Pesan WhatsApp untuk Yayasan ----------
+function buildWAPesan(d) {
+  const tg = tglPanjang(d.tanggal);
+  const sppg = d.dapurNama ? (/^SPPG\b/i.test(d.dapurNama) ? d.dapurNama : 'SPPG ' + d.dapurNama) : 'SPPG';
+  const items = d.items || [];
+  const total = items.reduce(function(s, i){ return s + Number(i.nominal || 0); }, 0);
+  const lines = [
+    'Assalamu\'alaikum, Yayasan.',
+    'Berikut pengajuan anggaran *' + sppg + '* untuk hari *' + tg.hari + ', ' + tg.tgl + '*:',
+    'No: ' + d.nomor,
+    '',
+  ];
+  items.forEach(function(it, k) {
+    lines.push((k + 1) + '. ' + it.uraian + ' (' + it.jenis + (it.susulan ? ', susulan' : '') + ')');
+    lines.push('   Nominal: ' + fmt(it.nominal));
+    lines.push('   Transfer ke: ' + it.penerima_nama + ' - ' + it.bank + ' ' + it.no_rek);
+  });
+  lines.push('');
+  lines.push('*Total: ' + fmt(total) + '* (' + items.length + ' baris)');
+  lines.push('');
+  lines.push('Mohon persetujuan dan transfernya melalui aplikasi Keuangan MBG. Terima kasih.');
+  if (d.oleh) lines.push('- ' + d.oleh);
+  return lines.join('\n');
+}
+async function copyText(text) {
+  try { await navigator.clipboard.writeText(text); return true; }
+  catch (e) {
+    try { const ta = document.createElement('textarea'); ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
+      document.body.appendChild(ta); ta.select(); const ok = document.execCommand('copy'); ta.remove(); return ok; } catch (e2) { return false; }
+  }
+}
+function WAModal({ text, toast, onClose }) {
+  const [copied, setCopied] = useState(false);
+  async function salin() { const ok = await copyText(text); if (ok) { setCopied(true); toast('Pesan disalin'); } else toast('Gagal menyalin, salin manual dari kotak', 'error'); }
+  return <Modal title="Kabari Yayasan lewat WhatsApp" onClose={onClose}>
+    <div className="text-xs mb-2" style={{ color: COLORS.muted }}>Salin pesan ini lalu kirim ke Yayasan, atau buka WhatsApp langsung.</div>
+    <textarea readOnly value={text} rows={12} onFocus={function(e){ e.target.select(); }}
+      style={Object.assign({}, inputStyle, { fontSize: 12.5, fontFamily: 'ui-monospace, monospace', lineHeight: 1.45, resize: 'vertical' })}/>
+    <div className="flex flex-wrap gap-2 mt-3">
+      <Btn onClick={salin}>{I.check} {copied ? 'Tersalin' : 'Salin pesan'}</Btn>
+      <a href={'https://wa.me/?text=' + encodeURIComponent(text)} target="_blank" rel="noopener"
+        className="inline-flex items-center justify-center gap-1.5 rounded-lg font-semibold px-4 py-2.5 text-sm"
+        style={{ color: COLORS.green, border: '1px solid ' + COLORS.line }}>Buka WhatsApp</a>
+      <Btn kind="ghost" onClick={onClose}>Tutup</Btn>
+    </div>
+  </Modal>;
 }
 
 // ---------- Berita Acara (PDF) ----------
@@ -2671,34 +2822,48 @@ async function buildBeritaAcaraPdf(ba) {
   const ink = [33, 37, 41], muted = [110, 110, 110], green = [21, 87, 36];
   const tg = tglPanjang(ba.tanggal);
   const sppg = /^SPPG\b/i.test(ba.dapur.nama) ? ba.dapur.nama : 'SPPG ' + ba.dapur.nama;
-  let y = 16;
-  doc.setFont('helvetica', 'bold'); doc.setFontSize(12); doc.setTextColor.apply(doc, ink);
-  doc.text(ba.yayasan.toUpperCase(), W / 2, y, { align: 'center' }); y += 5.5;
-  doc.setFont('helvetica', 'normal'); doc.setFontSize(10);
-  doc.text('Satuan Pelayanan Pemenuhan Gizi — ' + sppg + (ba.dapur.kode ? ' — ' + ba.dapur.kode : ''), W / 2, y, { align: 'center' }); y += 3.5;
+  // Kop SPPG: logo BGN di kiri, teks di tengah area kanan logo
+  const kopTop = 12, logoBox = 22;
+  let textX = W / 2;
+  if (ba.logo) {
+    const sz = await imgSize(ba.logo);
+    if (sz) { const k = Math.min(logoBox / sz.w, logoBox / sz.h); const lw = sz.w * k, lh = sz.h * k;
+      try { doc.addImage(ba.logo, 'PNG', M + (logoBox - lw) / 2, kopTop + (logoBox - lh) / 2, lw, lh); textX = (M + logoBox + 4 + W - M) / 2; } catch (e) {} }
+  }
+  doc.setTextColor.apply(doc, ink);
+  let ky = kopTop + (ba.dapur.alamat ? 6 : 8);
+  doc.setFont('helvetica', 'bold'); doc.setFontSize(11);
+  doc.text('SATUAN PELAYANAN PEMENUHAN GIZI', textX, ky, { align: 'center' }); ky += 6.5;
+  doc.setFontSize(15);
+  doc.text(sppg.toUpperCase() + (ba.dapur.kode ? ' (' + ba.dapur.kode + ')' : ''), textX, ky, { align: 'center' }); ky += 5.5;
+  if (ba.dapur.alamat) {
+    doc.setFont('helvetica', 'normal'); doc.setFontSize(9);
+    const al = doc.splitTextToSize(ba.dapur.alamat, W - M - (textX === W / 2 ? M : M + logoBox + 4));
+    doc.text(al.slice(0, 2), textX, ky, { align: 'center' }); ky += al.slice(0, 2).length * 4;
+  }
+  let y = Math.max(ky, kopTop + logoBox + 2) + 1;
   doc.setDrawColor(40); doc.setLineWidth(0.6); doc.line(M, y, W - M, y); doc.setLineWidth(0.2); doc.line(M, y + 0.9, W - M, y + 0.9); y += 9;
   doc.setFont('helvetica', 'bold'); doc.setFontSize(12.5);
   doc.text('BERITA ACARA PENGAJUAN ANGGARAN', W / 2, y, { align: 'center' }); y += 5.5;
   doc.setFont('helvetica', 'normal'); doc.setFontSize(10);
   doc.text('Nomor: ' + ba.nomor, W / 2, y, { align: 'center' }); y += 9;
 
-  const periodeTxt = ba.periode && ba.periode.no ? ' periode ke-' + ba.periode.no + ' (' + fmtDDMMYYYY(ba.periode.mulai) + ' s.d. ' + fmtDDMMYYYY(ba.periode.akhir) + ')' : '';
+  const periodeTxt = ba.periode && ba.periode.mulai ? ' periode tanggal ' + tglPanjang(ba.periode.mulai).tgl + ' sampai ' + tglPanjang(ba.periode.akhir).tgl : '';
   const para = 'Untuk kebutuhan penggunaan dana pada hari ' + tg.hari + ', tanggal ' + tg.tgl + ', Akuntan ' + sppg +
-    ' mengajukan anggaran yang dibayarkan melalui Virtual Account SPPG' + periodeTxt + '. Pengajuan tersebut telah diperiksa dan disetujui oleh ' +
-    ba.yayasan + ' dengan rincian sebagai berikut:';
+    ' mengajukan anggaran yang dibayarkan melalui Virtual Account SPPG' + periodeTxt + ' dengan rincian sebagai berikut:';
   doc.setFontSize(10);
   const lines = doc.splitTextToSize(para, CW);
   doc.text(lines, M, y, { lineHeightFactor: 1.45 }); y += lines.length * 5.1 + 2;
 
   const body = ba.rows.map(function(r) {
     const ur = r.uraian + (r.susulan ? ' (susulan)' : '');
-    return [String(r.no), r.jenis + '\n' + r.kategori, ur + '\nDiajukan: ' + r.diajukan_oleh, r.penerima, r.bank + '\n' + r.no_rek, fmtNoRp(r.nominal)];
+    return [String(r.no), r.jenis + '\n' + r.kategori, ur, r.penerima, r.bank + '\n' + r.no_rek, fmtNoRp(r.nominal)];
   });
   doc.autoTable({
     startY: y, margin: { left: M, right: M }, theme: 'grid',
     head: [['No', 'Jenis / Kategori', 'Uraian', 'Penerima', 'Bank / No. Rek', 'Nominal (Rp)']],
     body: body,
-    foot: [[{ content: 'TOTAL DISETUJUI', colSpan: 5, styles: { halign: 'right' } }, fmtNoRp(ba.total)]],
+    foot: [[{ content: 'TOTAL', colSpan: 5, styles: { halign: 'right' } }, fmtNoRp(ba.total)]],
     styles: { font: 'helvetica', fontSize: 8.5, cellPadding: 1.8, textColor: ink, lineColor: [170, 170, 170], lineWidth: 0.2, valign: 'top' },
     headStyles: { fillColor: [235, 240, 236], textColor: ink, fontStyle: 'bold', halign: 'center' },
     footStyles: { fillColor: [235, 240, 236], textColor: ink, fontStyle: 'bold', halign: 'right' },
@@ -2712,16 +2877,7 @@ async function buildBeritaAcaraPdf(ba) {
   doc.setFontSize(9.5); doc.setFont('helvetica', 'italic');
   const tb = doc.splitTextToSize('Terbilang: ' + terbilang(ba.total), CW);
   doc.text(tb, M, y); y += tb.length * 4.6 + 3;
-  doc.setFont('helvetica', 'normal'); doc.setFontSize(9); doc.setTextColor.apply(doc, muted);
-  const rg = ba.ringkasan;
-  const notes = [
-    'Ringkasan: diajukan ' + rg.baris_diajukan + ' baris (' + fmt(rg.nominal_diajukan) + ') dalam ' + ba.jumlah_pengajuan + ' kali pengajuan; disetujui ' + rg.baris_disetujui + ' baris (' + fmt(ba.total) + ')' +
-      (rg.baris_tidak ? '; ditolak/dibatalkan ' + rg.baris_tidak + ' baris (' + fmt(rg.nominal_tidak) + ') dan tidak dimuat dalam berita acara ini.' : '.'),
-    'Persetujuan diberikan secara elektronik melalui aplikasi Keuangan MBG oleh ' + (ba.penyetuju.join(', ') || ba.yayasan) +
-      (ba.keputusan_terakhir ? ', keputusan terakhir ' + fmtWaktu(ba.keputusan_terakhir) : '') + '.',
-  ];
-  notes.forEach(function(n) { const l = doc.splitTextToSize(n, CW); ensure(l.length * 4.4); doc.text(l, M, y); y += l.length * 4.4 + 1.2; });
-  doc.setTextColor.apply(doc, ink);
+  doc.setFont('helvetica', 'normal');
 
   y += 6; ensure(48);
   const sx = W - M - 70;
@@ -3325,6 +3481,7 @@ function App() {
       ['dash','Dashboard',I.dash],
       ['pengajuan','Pengajuan',I.file],
       ['realisasi','Realisasi',I.plus],
+      ['beritaacara','Berita Acara',I.download],
       ['laporan','Laporan',I.report],
       ['riwayat','Riwayat',I.list],
       ['bukubesar','Buku Besar',I.trend],
@@ -3337,6 +3494,7 @@ function App() {
     pic: [
       ['dash','Dashboard',I.dash],
       ['pengajuan','Pengajuan',I.file],
+      ['beritaacara','Berita Acara',I.download],
       ['laporan','Laporan',I.report],
       ['riwayat','Riwayat',I.list],
       ['bukubesar','Buku Besar',I.trend],
@@ -3345,6 +3503,7 @@ function App() {
     yayasan: [
       ['dash','Dashboard',I.dash],
       ['persetujuan','Persetujuan',I.check],
+      ['beritaacara','Berita Acara',I.download],
       ['laporan','Laporan',I.report],
       ['riwayat','Riwayat',I.list],
       ['bukubesar','Buku Besar',I.trend],
@@ -3353,6 +3512,7 @@ function App() {
     admin: [
       ['dash','Dashboard',I.dash],
       ['pengajuan','Pengajuan',I.file],
+      ['beritaacara','Berita Acara',I.download],
       ['laporan','Laporan',I.report],
       ['riwayat','Riwayat',I.list],
       ['bukubesar','Buku Besar',I.trend],
@@ -3415,6 +3575,7 @@ function App() {
           {view === 'setup'   && <SetupPeriode session={session} toast={toast}/>}
           {view === 'dash'    && <Dashboard key={'d'+refreshKey} session={session} scope={effScope} toast={toast}/>}
           {view === 'pengajuan' && <PengajuanPage session={session} scope={effScope} dapurList={dapurList} toast={toast}/>}
+          {view === 'beritaacara' && <BeritaAcaraPage session={session} scope={effScope} dapurList={dapurList} toast={toast}/>}
           {view === 'realisasi' && <RealisasiPage session={session} toast={toast}
             onSaved={function(){ setRefreshKey(function(k){return k+1;}); }}/>}
           {view === 'persetujuan' && <PersetujuanPage session={session} scope={effScope} dapurList={dapurList} toast={toast}/>}
