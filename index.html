@@ -143,8 +143,8 @@ async function apiUpload(action, params) {
   try {
     const res = await fetch(API_URL, { method: 'POST', redirect: 'follow',
       headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-      body: JSON.stringify(Object.assign({ action: action }, params)) });
-    return await res.json();
+      body: JSON.stringify(Object.assign({ action: action, token: AUTH_TOKEN }, params)) });
+    return checkSession(await res.json());
   } catch (e) { return { ok: false, error: 'Upload gagal: ' + e.message }; }
 }
 
@@ -1056,8 +1056,9 @@ function InputTransaksi({ session, toast, onSaved, goToSetup, dapurId, alasan })
 // ============================================================
 //  EDIT TRANSAKSI Modal
 // ============================================================
-function EditTransaksiModal({ trx, kategoriMap, periode, session, toast, onClose, onSaved }) {
+function EditTransaksiModal({ trx, kategoriMap, periode, session, toast, onClose, onSaved, requestMode }) {
   const [submitting, setSubmitting] = useState(false);
+  const [alasan, setAlasan] = useState('');
   // Bisa juga ubah jenis kalau perlu — tapi simplify: lock jenis, hanya edit field lain
   const [jenis, setJenis] = useState(trx.jenis);
 
@@ -1068,6 +1069,7 @@ function EditTransaksiModal({ trx, kategoriMap, periode, session, toast, onClose
   };
 
   async function doSubmit(form) {
+    if (requestMode && !alasan.trim()) { toast('Alasan perubahan wajib diisi', 'error'); return; }
     setSubmitting(true);
     let bukti_url = '';
     if (form.bukti) {
@@ -1082,14 +1084,19 @@ function EditTransaksiModal({ trx, kategoriMap, periode, session, toast, onClose
       uraian: form.uraian, sumber: form.sumber, riil: form.riil, unriil: form.unriil,
     };
     if (bukti_url) payload.bukti_url = bukti_url;
-    const res = await api('updateTransaksi', payload);
+    let res;
+    if (requestMode) {
+      payload.transaksi_id = trx.id; payload.aksi = 'EDIT'; payload.alasan = alasan.trim();
+      res = await api('requestTxChange', payload);
+    } else res = await api('updateTransaksi', payload);
     setSubmitting(false);
-    if (res.ok) { toast('Transaksi diupdate'); onSaved(); onClose(); }
+    if (res.ok) { toast(requestMode ? 'Pengajuan perubahan dikirim ke admin' : 'Transaksi diupdate'); onSaved(); onClose(); }
     else toast(res.error || 'Gagal update', 'error');
   }
 
   return (
-    <Modal title={'Edit Transaksi · ' + trx.no_bukti || 'tanpa no bukti'} size="lg" onClose={onClose}>
+    <Modal title={(requestMode ? 'Ajukan perubahan · ' : 'Edit Transaksi · ') + (trx.no_bukti || 'tanpa no bukti')} size="lg" onClose={onClose}>
+      {requestMode && <RequestNotice alasan={alasan} setAlasan={setAlasan}/>}
       <div className="mb-3">
         <div className="text-xs mb-1.5" style={{ color: COLORS.muted }}>Jenis Transaksi</div>
         <div className="flex gap-2 flex-wrap">
@@ -1379,6 +1386,8 @@ function Riwayat({ session, scope, toast, refreshKey }) {
   const [filterJenis, setFilterJenis] = useState('ALL');
 
   const canEdit = session.user.role === 'akuntan';
+  const [changes, setChanges] = useState([]);
+  const [hapusReq, setHapusReq] = useState(null);
 
   const loadPeriode = useCallback(async function() {
     const dapurId = scope && scope !== 'ALL' ? scope : (session.user.dapur || '');
@@ -1410,6 +1419,7 @@ function Riwayat({ session, scope, toast, refreshKey }) {
     setLoading(false);
     if (tx.ok) setTransaksi(tx.data);
     if (va.ok) setVaTopups(va.data);
+    if (canEdit) { const ch = await api('getTxChanges', { periode_id: selPeriode }); if (ch.ok) setChanges(ch.data); }
   }, [selPeriode, scope, refreshKey, periodeList]);
 
   useEffect(function() { loadPeriode(); }, [loadPeriode]);
@@ -1446,6 +1456,8 @@ function Riwayat({ session, scope, toast, refreshKey }) {
   if (loading && !periode) return <Card>{I.spinner}</Card>;
 
   const periodeAktif = periode && periode.status === 'AKTIF';
+  const pendingByTx = {};
+  changes.forEach(function(c){ if (c.status === 'MENUNGGU') pendingByTx[c.transaksi_id] = c; });
 
   return (
     <div>
@@ -1493,7 +1505,7 @@ function Riwayat({ session, scope, toast, refreshKey }) {
                   <th className="px-3 py-2.5 font-semibold text-right">Kredit</th>
                   <th className="px-3 py-2.5 font-semibold text-right">Saldo</th>
                   <th className="px-3 py-2.5 font-semibold text-center" style={{ width: 60 }}>Bukti</th>
-                  {canEdit && <th className="px-3 py-2.5 font-semibold" style={{ width: 100 }}></th>}
+                  {canEdit && <th className="px-3 py-2.5 font-semibold" style={{ width: periodeAktif ? 100 : 170 }}></th>}
                 </tr>
               </thead>
               <tbody>
@@ -1538,7 +1550,14 @@ function Riwayat({ session, scope, toast, refreshKey }) {
                             style={{ color: COLORS.danger, border: '1px solid ' + COLORS.line, borderRadius: 6, padding: 5 }}>{I.trash}</button>
                         </div>
                       )}
-                      {isTx && !periodeAktif && <span className="text-[10px]" style={{ color: COLORS.muted }}>terkunci</span>}
+                      {isTx && !periodeAktif && (pendingByTx[row.tx.id]
+                        ? <MiniBadge bg="#FBF3E2" fg="#9A6A0B">Menunggu admin</MiniBadge>
+                        : <div className="flex gap-1 justify-end">
+                            <button onClick={function(){setEditTrx(Object.assign({}, row.tx, { _request: true }));}} title="Ajukan perubahan ke admin"
+                              className="text-[10px] font-semibold rounded px-1.5 py-1" style={{ color: COLORS.blue, border: '1px solid ' + COLORS.line }}>Ajukan ubah</button>
+                            <button onClick={function(){setHapusReq(row.tx);}} title="Ajukan hapus ke admin"
+                              className="text-[10px] font-semibold rounded px-1.5 py-1" style={{ color: COLORS.danger, border: '1px solid ' + COLORS.line }}>Ajukan hapus</button>
+                          </div>)}
                     </td>}
                   </tr>;
                 })}
@@ -1548,12 +1567,14 @@ function Riwayat({ session, scope, toast, refreshKey }) {
         )}
       </Card>
 
+      {canEdit && changes.length > 0 && <TxChangeList changes={changes}/>}
+      {hapusReq && <HapusRequestModal trx={hapusReq} toast={toast} onClose={function(){setHapusReq(null);}} onSaved={loadData}/>}
       {editTrx && isLinkedTx(editTrx) && (
-        <EditRealisasiModal trx={editTrx} periode={periode} session={session} toast={toast}
+        <EditRealisasiModal trx={editTrx} periode={periode} session={session} toast={toast} requestMode={!!editTrx._request}
           onClose={function(){setEditTrx(null);}} onSaved={loadData}/>
       )}
       {editTrx && !isLinkedTx(editTrx) && (
-        <EditTransaksiModal trx={editTrx} kategoriMap={kategoriMap} periode={periode}
+        <EditTransaksiModal trx={editTrx} kategoriMap={kategoriMap} periode={periode} requestMode={!!editTrx._request}
           session={session} toast={toast}
           onClose={function(){setEditTrx(null);}}
           onSaved={loadData}/>
@@ -2049,6 +2070,7 @@ function UserForm({ mode, initial, dapur, session, toast, onClose, onSaved }) {
     setSaving(true);
     const action = mode === 'edit' ? 'updateUser' : 'addUser';
     const payload = Object.assign({ role: session.user.role, user_id: session.user.id, target_role: f.target_role }, f);
+    if (f.target_role !== 'akuntan' && f.target_role !== 'pic') payload.dapur = '';
     if (mode === 'edit') { payload.id = initial.id; if (!f.password) delete payload.password; }
     const res = await api(action, payload);
     setSaving(false);
@@ -2065,7 +2087,7 @@ function UserForm({ mode, initial, dapur, session, toast, onClose, onSaved }) {
     <Field label="Peran">
       <select value={f.target_role} onChange={function(e){setF(Object.assign({}, f, {target_role:e.target.value}));}} style={inputStyle}>
         <option value="akuntan">Akuntan</option><option value="pic">PIC Dapur</option>
-        <option value="yayasan">Yayasan</option><option value="admin">Admin</option>
+        <option value="yayasan">Yayasan</option><option value="asisten">Asisten (pengajuan Bahan Baku semua dapur)</option><option value="admin">Admin</option>
       </select>
     </Field>
     {(f.target_role==='akuntan'||f.target_role==='pic') && (
@@ -2340,8 +2362,12 @@ function ItemFields({ row, onChange, kategoriMap, penerima, upsertPenerima, toas
   </div>;
 }
 
-function PengajuanForm({ kategoriMap, penerima, upsertPenerima, toast, onCreated, onCancel }) {
-  const [rows, setRows] = useState([emptyRow()]);
+function PengajuanForm({ kategoriMap, penerima, upsertPenerima, toast, onCreated, onCancel, dapurOptions }) {
+  const onlyJenis = Object.keys(kategoriMap).length === 1 ? Object.keys(kategoriMap)[0] : '';
+  function newRow() { const r = emptyRow(); if (onlyJenis) { r.jenis = onlyJenis; r.kategori = (kategoriMap[onlyJenis] || [])[0] || ''; } return r; }
+  const [rows, setRows] = useState([newRow()]);
+  const [dapur, setDapur] = useState('');
+  const needDapur = !!dapurOptions;
   const [saving, setSaving] = useState(false);
   const [confirm, setConfirm] = useState(false);
   const total = rows.reduce(function(s, r){ return s + (Number(r.nominal) || 0); }, 0);
@@ -2350,7 +2376,7 @@ function PengajuanForm({ kategoriMap, penerima, upsertPenerima, toast, onCreated
   async function submit() {
     setSaving(true);
     const items = rows.map(function(r){ return { jenis: r.jenis, kategori: r.kategori, uraian: r.uraian.trim(), nominal: Number(r.nominal), penerima_id: r.penerima_id, susulan: !!r.susulan }; });
-    const res = await apiPost('createPengajuan', { items: items });
+    const res = await apiPost('createPengajuan', { items: items, dapur: dapur });
     setSaving(false); setConfirm(false);
     if (res.ok) { toast('Pengajuan ' + res.data.nomor + ' terkirim ke Yayasan'); onCreated(); }
     else toast(res.error || 'Gagal mengirim', 'error');
@@ -2359,10 +2385,16 @@ function PengajuanForm({ kategoriMap, penerima, upsertPenerima, toast, onCreated
     <div className="flex items-start justify-between gap-2 mb-3">
       <div>
         <Eyebrow>Pengajuan baru · {fmtDDMMYYYY(todayISO())}</Eyebrow>
-        <div className="text-sm" style={{ color: COLORS.muted }}>Semua baris dibayar dari VA. Nomor Berita Acara dibuat otomatis saat dikirim.</div>
+        <div className="text-sm" style={{ color: COLORS.muted }}>Semua baris dibayar dari VA. Satu nomor Berita Acara per dapur per hari — pengajuan susulan & dari asisten di hari yang sama ikut nomor itu.</div>
       </div>
       <button onClick={onCancel} style={{ color: COLORS.muted }}>{I.x}</button>
     </div>
+    {needDapur && <Field label="Untuk dapur *" hint="Satu pengajuan untuk satu dapur. Untuk dapur lain, kirim pengajuan terpisah.">
+      <select value={dapur} onChange={function(e){ setDapur(e.target.value); }} style={Object.assign({}, inputStyle, dapur ? {} : { borderColor: COLORS.amber })}>
+        <option value="">Pilih dapur…</option>
+        {dapurOptions.map(function(d){ return <option key={d.id} value={d.id} disabled={!d.aktif}>{d.nama}{d.aktif ? '' : ' (belum ada periode aktif)'}</option>; })}
+      </select>
+    </Field>}
     {rows.map(function(r, i){
       return <div key={r.key} className="rounded-lg p-3 mb-3" style={{ border: '1px solid ' + COLORS.line, background: '#FCFBF8' }}>
         <div className="flex items-center justify-between mb-2">
@@ -2374,16 +2406,17 @@ function PengajuanForm({ kategoriMap, penerima, upsertPenerima, toast, onCreated
       </div>;
     })}
     <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-      <Btn kind="ghost" onClick={function(){ setRows(rows.concat([emptyRow()])); }}>{I.plusSm} Tambah baris</Btn>
+      <Btn kind="ghost" onClick={function(){ setRows(rows.concat([newRow()])); }}>{I.plusSm} Tambah baris</Btn>
       <div className="text-right">
         <div className="text-xs" style={{ color: COLORS.muted }}>Total {rows.length} baris</div>
         <div className="text-lg font-bold num" style={{ color: COLORS.ink }}>{fmt(total)}</div>
       </div>
     </div>
+    {needDapur && !dapur && <div className="text-xs mt-2" style={{ color: COLORS.danger }}>• Dapur tujuan belum dipilih</div>}
     {firstErr >= 0 && <div className="text-xs mt-2" style={{ color: COLORS.danger }}>• Baris {firstErr + 1}: {rowError(rows[firstErr])} belum diisi</div>}
-    <div className="mt-3"><Btn full disabled={firstErr >= 0 || saving} onClick={function(){ setConfirm(true); }}>{I.arrowR} Kirim ke Yayasan</Btn></div>
+    <div className="mt-3"><Btn full disabled={firstErr >= 0 || saving || (needDapur && !dapur)} onClick={function(){ setConfirm(true); }}>{I.arrowR} Kirim ke Yayasan</Btn></div>
     {confirm && <ConfirmModal title="Kirim pengajuan?" confirmLabel={saving ? 'Mengirim…' : 'Kirim'}
-      message={'Mengirim ' + rows.length + ' baris senilai ' + fmt(total) + ' ke Yayasan. Setelah dikirim, baris hanya bisa diedit sampai Yayasan memutuskan.'}
+      message={'Mengirim ' + rows.length + ' baris senilai ' + fmt(total) + (needDapur ? ' untuk ' + ((dapurOptions.find(function(d){ return d.id === dapur; }) || {}).nama || '') : '') + ' ke Yayasan. Setelah dikirim, baris hanya bisa diedit sampai Yayasan memutuskan.'}
       onConfirm={function(){ if (!saving) submit(); }} onClose={function(){ setConfirm(false); }}/>}
   </Card>;
 }
@@ -2473,6 +2506,9 @@ function VACard({ va }) {
 function PengajuanPage({ session, scope, dapurList, toast }) {
   const role = session.user.role;
   const isAkuntan = role === 'akuntan';
+  const isAsisten = role === 'asisten';
+  const canCreate = isAkuntan || isAsisten;
+  const showDapur = scope === 'ALL' || isAsisten;
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [kategoriMap, setKategoriMap] = useState({});
@@ -2488,19 +2524,24 @@ function PengajuanPage({ session, scope, dapurList, toast }) {
     setLoading(false);
     if (res.ok) setData(res.data); else toast(res.error || 'Gagal memuat pengajuan', 'error');
   }, [scope]);
-  useEffect(function(){ load(); api('getKategori').then(function(r){ if (r.ok) setKategoriMap(r.data); }); }, [load]);
+  useEffect(function(){ load(); api('getKategori').then(function(r){
+    if (r.ok) setKategoriMap(isAsisten ? { 'Bahan Baku': r.data['Bahan Baku'] || ['Semua Kategori'] } : r.data);
+  }); }, [load]);
 
   if (loading && !data) return <Card><div className="flex items-center gap-2 text-sm" style={{ color: COLORS.muted }}>{I.spinner} Memuat…</div></Card>;
   if (!data) return <Card>Tidak ada data.</Card>;
   const vaKeys = Object.keys(data.va || {});
-  const noPeriode = vaKeys.length === 0;
+  const aktifKeys = Object.keys(data.periodeAktif || {});
+  const noPeriode = aktifKeys.length === 0;
+  const dapurOptions = isAsisten ? (dapurList || []).map(function(d){ return { id: d.id, nama: d.nama, aktif: aktifKeys.indexOf(d.id) >= 0 }; }) : null;
 
   return <div>
     {isAkuntan && vaKeys.length === 1 && <VACard va={data.va[vaKeys[0]]}/>}
-    {noPeriode && <Card className="mb-3"><div className="text-sm" style={{ color: COLORS.danger }}>Belum ada periode aktif. {isAkuntan && 'Buat periode di menu Setup dulu.'}</div></Card>}
+    {noPeriode && <Card className="mb-3"><div className="text-sm" style={{ color: COLORS.danger }}>Belum ada periode aktif. {isAkuntan ? 'Buat periode di menu Setup dulu.' : isAsisten ? 'Akuntan dapur perlu membuat periode dulu.' : ''}</div></Card>}
+    {isAsisten && <Card className="mb-3"><div className="text-sm" style={{ color: COLORS.muted }}>Akun asisten: mengajukan <b>Bahan Baku</b> untuk semua dapur. Realisasi (transfer & bukti) dilakukan oleh akuntan masing-masing dapur.</div></Card>}
 
-    {isAkuntan && !noPeriode && (showForm
-      ? <PengajuanForm kategoriMap={kategoriMap} penerima={penerima} upsertPenerima={upsertPenerima} toast={toast}
+    {canCreate && !noPeriode && (showForm
+      ? <PengajuanForm kategoriMap={kategoriMap} penerima={penerima} upsertPenerima={upsertPenerima} toast={toast} dapurOptions={dapurOptions}
           onCreated={function(){ setShowForm(false); load(); }} onCancel={function(){ setShowForm(false); }}/>
       : <div className="mb-3"><Btn full onClick={function(){ setShowForm(true); }}>{I.plusSm} Buat pengajuan hari ini</Btn></div>)}
 
@@ -2512,7 +2553,7 @@ function PengajuanPage({ session, scope, dapurList, toast }) {
           <div className="min-w-0">
             <div className="font-mono text-xs font-semibold break-all" style={{ color: COLORS.ink }}>{h.nomor}</div>
             <div className="text-xs mt-0.5" style={{ color: COLORS.muted }}>
-              {fmtDDMMYYYY(h.tanggal)} · oleh {h.created_by_nama}{scope === 'ALL' && dapurMap[h.dapur] ? ' · ' + dapurMap[h.dapur] : ''}
+              {fmtDDMMYYYY(h.tanggal)} · oleh {h.created_by_nama}{showDapur && dapurMap[h.dapur] ? ' · ' + dapurMap[h.dapur] : ''}
               {h.decided_by_nama ? ' · diputuskan ' + h.decided_by_nama : ''}
             </div>
           </div>
@@ -2523,12 +2564,12 @@ function PengajuanPage({ session, scope, dapurList, toast }) {
         </div>
         {h.items.map(function(it){
           let actions = null;
-          if (isAkuntan) {
+          if (canCreate) {
             const btn = function(label, color, onClick) { return <button key={label} onClick={onClick} className="text-[11px] font-semibold rounded px-2 py-1" style={{ color: color, border: '1px solid ' + COLORS.line }}>{label}</button>; };
             const a = [];
             if (it.status === 'REVISI') a.push(btn('Perbaiki', COLORS.blue, function(){ setEditItem(it); }));
             if (it.status === 'DIAJUKAN') a.push(btn('Edit', COLORS.blue, function(){ setEditItem(it); }));
-            if (['DIAJUKAN','REVISI','DISETUJUI'].indexOf(it.status) >= 0) a.push(btn('Batalkan', COLORS.danger, function(){ setBatalItem(it); }));
+            if ((isAkuntan ? ['DIAJUKAN','REVISI','DISETUJUI'] : ['DIAJUKAN','REVISI']).indexOf(it.status) >= 0) a.push(btn('Batalkan', COLORS.danger, function(){ setBatalItem(it); }));
             actions = a.length ? a : null;
           }
           return <ItemRow key={it.id} it={it} actions={actions}/>;
@@ -2736,12 +2777,14 @@ function RealisasiPage({ session, toast, onSaved }) {
 }
 
 // Edit transaksi hasil realisasi (field pengajuan terkunci)
-function EditRealisasiModal({ trx, periode, session, toast, onClose, onSaved }) {
+function EditRealisasiModal({ trx, periode, session, toast, onClose, onSaved, requestMode }) {
   const isOps = trx.jenis === 'Operasional';
+  const [alasan, setAlasan] = useState('');
   const [f, setF] = useState({ tanggal: trx.tanggal, no_bukti: trx.no_bukti || '', riil: String(trx.riil || '') });
   const [bukti, setBukti] = useState(null);
   const [saving, setSaving] = useState(false);
-  const err = !f.tanggal ? 'Tanggal wajib' : !f.no_bukti.trim() ? 'No bukti wajib' : (isOps && !(Number(f.riil) > 0)) ? 'Realisasi aktual wajib' : null;
+  const err = !f.tanggal ? 'Tanggal wajib' : !f.no_bukti.trim() ? 'No bukti wajib' : (isOps && !(Number(f.riil) > 0)) ? 'Realisasi aktual wajib' :
+    (requestMode && !alasan.trim()) ? 'Alasan perubahan wajib' : null;
   async function submit() {
     setSaving(true);
     let bukti_url = '';
@@ -2753,11 +2796,14 @@ function EditRealisasiModal({ trx, periode, session, toast, onClose, onSaved }) 
     const payload = { role: session.user.role, user_id: session.user.id, dapur: session.user.dapur, id: trx.id, tanggal: f.tanggal, no_bukti: f.no_bukti.trim() };
     if (isOps) payload.riil = f.riil;
     if (bukti_url) payload.bukti_url = bukti_url;
-    const res = await api('updateTransaksi', payload);
+    let res;
+    if (requestMode) { payload.transaksi_id = trx.id; payload.aksi = 'EDIT'; payload.alasan = alasan.trim(); res = await api('requestTxChange', payload); }
+    else res = await api('updateTransaksi', payload);
     setSaving(false);
-    if (res.ok) { toast('Transaksi diupdate'); onSaved(); onClose(); } else toast(res.error || 'Gagal update', 'error');
+    if (res.ok) { toast(requestMode ? 'Pengajuan perubahan dikirim ke admin' : 'Transaksi diupdate'); onSaved(); onClose(); } else toast(res.error || 'Gagal update', 'error');
   }
-  return <Modal title={'Edit realisasi · ' + (trx.no_bukti || '')} size="lg" onClose={onClose}>
+  return <Modal title={(requestMode ? 'Ajukan perubahan · ' : 'Edit realisasi · ') + (trx.no_bukti || '')} size="lg" onClose={onClose}>
+    {requestMode && <RequestNotice alasan={alasan} setAlasan={setAlasan}/>}
     <div className="rounded-lg p-3 mb-3 text-sm" style={{ background: COLORS.paper }}>
       <div style={{ color: COLORS.ink }}><b>{trx.uraian}</b></div>
       <div className="text-xs" style={{ color: COLORS.muted }}>{trx.jenis} · {trx.kategori} · Anggaran {fmt(trx.unriil)} — dari pengajuan, tidak bisa diubah di sini</div>
@@ -2797,6 +2843,130 @@ function DaruratPage({ session, dapurList, toast, onSaved }) {
       {!mulai && <Btn disabled={!dapur || alasan.trim().length < 5} onClick={function(){ setMulai(true); }}>{I.arrowR} Lanjut input</Btn>}
     </Card>
     {mulai && <InputTransaksi key={dapur} session={session} toast={toast} dapurId={dapur} alasan={alasan.trim()} onSaved={onSaved}/>}
+  </div>;
+}
+
+
+// ---------- Perubahan transaksi periode lalu ----------
+const TX_LABEL = { tanggal: 'Tanggal', no_bukti: 'No Bukti', jenis: 'Jenis', kategori: 'Kategori', uraian: 'Uraian', sumber: 'Sumber',
+  riil: 'Realisasi Aktual', unriil: 'Realisasi Anggaran', bukti_url: 'Bukti' };
+function fmtTxVal(k, v) {
+  if (v === undefined || v === null || v === '') return '—';
+  if (k === 'riil' || k === 'unriil') return fmt(v);
+  if (k === 'tanggal') return fmtDDMMYYYY(v);
+  if (k === 'bukti_url') return <a href={v} target="_blank" rel="noopener" style={{ color: COLORS.green, textDecoration: 'underline' }}>lihat</a>;
+  return String(v);
+}
+function RequestNotice({ alasan, setAlasan }) {
+  return <div className="mb-3">
+    <div className="text-xs rounded-lg p-2.5 mb-2" style={{ background: '#FBF3E2', color: '#9A6A0B' }}>
+      Periode ini sudah ditutup. Perubahan baru berlaku setelah <b>disetujui admin</b>.</div>
+    <Field label="Alasan perubahan *"><input value={alasan} onChange={function(e){ setAlasan(e.target.value); }} style={inputStyle} placeholder="cth. salah ketik nominal, bukti tertukar"/></Field>
+  </div>;
+}
+function HapusRequestModal({ trx, toast, onClose, onSaved }) {
+  const [alasan, setAlasan] = useState('');
+  const [saving, setSaving] = useState(false);
+  async function submit() {
+    setSaving(true);
+    const res = await api('requestTxChange', { transaksi_id: trx.id, aksi: 'HAPUS', alasan: alasan.trim() });
+    setSaving(false);
+    if (res.ok) { toast('Pengajuan hapus dikirim ke admin'); onSaved(); onClose(); } else toast(res.error || 'Gagal', 'error');
+  }
+  return <Modal title="Ajukan hapus transaksi" onClose={onClose}>
+    <p className="text-sm mb-3" style={{ color: COLORS.ink }}>{trx.uraian} · <b>{fmt(trx.unriil)}</b> · {fmtDDMMYYYY(trx.tanggal)}
+      {isLinkedTx(trx) && <span style={{ color: COLORS.muted }}> — berasal dari pengajuan; baris pengajuannya akan berstatus Dibatalkan.</span>}</p>
+    <Field label="Alasan *"><input value={alasan} onChange={function(e){ setAlasan(e.target.value); }} style={inputStyle} placeholder="cth. transaksi ganda"/></Field>
+    <div className="flex gap-2 justify-end"><Btn kind="ghost" onClick={onClose}>Batal</Btn>
+      <Btn kind="danger" onClick={submit} disabled={saving || !alasan.trim()}>{saving ? I.spinner : I.trash} Ajukan hapus</Btn></div>
+  </Modal>;
+}
+function ChangeDiff({ c }) {
+  if (c.aksi === 'HAPUS') {
+    const l = c.data_lama;
+    return <div className="text-xs rounded-lg p-2.5" style={{ background: '#F8E9E5', color: COLORS.danger }}>
+      Hapus: {fmtDDMMYYYY(l.tanggal)} · {l.no_bukti} · {l.uraian} · {l.jenis}/{l.kategori} · Aktual {fmt(l.riil)} · Anggaran {fmt(l.unriil)}</div>;
+  }
+  const keys = Object.keys(c.data_baru);
+  return <div className="overflow-x-auto"><table className="w-full text-xs">
+    <thead><tr style={{ color: COLORS.muted }} className="text-left"><th className="py-1 pr-2 font-semibold">Kolom</th><th className="py-1 pr-2 font-semibold">Lama</th><th className="py-1 font-semibold">Baru</th></tr></thead>
+    <tbody>{keys.map(function(k){
+      return <tr key={k} style={{ borderTop: '1px solid ' + COLORS.line }}>
+        <td className="py-1 pr-2" style={{ color: COLORS.muted }}>{TX_LABEL[k] || k}</td>
+        <td className="py-1 pr-2 num" style={{ color: COLORS.danger, textDecoration: 'line-through' }}>{fmtTxVal(k, c.data_lama[k])}</td>
+        <td className="py-1 num font-semibold" style={{ color: COLORS.green }}>{fmtTxVal(k, c.data_baru[k])}</td>
+      </tr>;
+    })}</tbody>
+  </table></div>;
+}
+const CH_STATUS = { MENUNGGU: ['#FBF3E2', '#9A6A0B', 'Menunggu admin'], DISETUJUI: ['#E8F1EC', '#15663E', 'Disetujui'], DITOLAK: ['#F8E9E5', '#B7472E', 'Ditolak'] };
+function ChangeStatus({ s }) { const c = CH_STATUS[s] || [COLORS.paper, COLORS.muted, s]; return <MiniBadge bg={c[0]} fg={c[1]}>{c[2]}</MiniBadge>; }
+function TxChangeList({ changes }) {
+  return <Card className="mt-3">
+    <Eyebrow>Pengajuan perubahan di periode ini</Eyebrow>
+    {changes.map(function(c){
+      return <div key={c.id} className="py-2.5" style={{ borderTop: '1px solid ' + COLORS.line }}>
+        <div className="flex items-center justify-between gap-2 mb-1.5">
+          <div className="text-sm font-semibold" style={{ color: COLORS.ink }}>{c.aksi === 'HAPUS' ? 'Hapus' : 'Ubah'} · {c.data_lama.uraian}</div>
+          <ChangeStatus s={c.status}/>
+        </div>
+        <ChangeDiff c={c}/>
+        <div className="text-[11px] mt-1" style={{ color: COLORS.muted }}>Alasan: {c.alasan}{c.catatan ? ' · Catatan admin: ' + c.catatan : ''}</div>
+      </div>;
+    })}
+  </Card>;
+}
+function PerubahanAdminPage({ session, dapurList, toast }) {
+  const [rows, setRows] = useState(null);
+  const [tab, setTab] = useState('menunggu');
+  const [act, setAct] = useState(null); // {c, status}
+  const [catatan, setCatatan] = useState('');
+  const [saving, setSaving] = useState(false);
+  const dapurMap = useMemo(function(){ const m = {}; (dapurList || []).forEach(function(d){ m[d.id] = d.nama; }); return m; }, [dapurList]);
+  const load = useCallback(async function() {
+    const r = await api('getTxChanges', { filter: tab === 'menunggu' ? 'menunggu' : '' });
+    if (r.ok) setRows(r.data); else toast(r.error || 'Gagal memuat', 'error');
+  }, [tab]);
+  useEffect(function(){ setRows(null); load(); }, [load]);
+  async function decide() {
+    setSaving(true);
+    const r = await api('decideTxChange', { id: act.c.id, status: act.status, catatan: catatan.trim() });
+    setSaving(false);
+    if (r.ok) { toast(r.data.peringatan || 'Pengajuan ditolak'); setAct(null); setCatatan(''); load(); } else toast(r.error || 'Gagal', 'error');
+  }
+  return <div>
+    <div className="flex gap-2 mb-3">
+      {[['menunggu','Menunggu'],['semua','Semua']].map(function(t){ const on = tab === t[0];
+        return <button key={t[0]} onClick={function(){ setTab(t[0]); }} className="flex-1 sm:flex-none rounded-lg px-4 py-2 text-sm font-semibold"
+          style={{ background: on ? COLORS.green : '#fff', color: on ? '#fff' : COLORS.ink, border: '1px solid ' + (on ? COLORS.green : COLORS.line) }}>{t[1]}</button>; })}
+    </div>
+    <Card className="mb-3"><div className="text-sm" style={{ color: COLORS.muted }}>Perubahan transaksi di <b>periode yang sudah ditutup</b>. Menyetujui akan mengubah laporan periode itu; saldo awal periode berikutnya <b>tidak</b> ikut berubah otomatis.</div></Card>
+    {!rows ? <Card>{I.spinner}</Card> : rows.length === 0 ? <Card><div className="text-sm text-center py-6" style={{ color: COLORS.muted }}>Tidak ada pengajuan perubahan.</div></Card> :
+      rows.map(function(c){
+        return <Card key={c.id} className="mb-3">
+          <div className="flex items-start justify-between gap-2 mb-2">
+            <div className="min-w-0">
+              <div className="text-sm font-bold" style={{ color: COLORS.ink }}>{c.aksi === 'HAPUS' ? 'Hapus transaksi' : 'Ubah transaksi'} · {c.data_lama.uraian}</div>
+              <div className="text-xs" style={{ color: COLORS.muted }}>{dapurMap[c.dapur] || c.dapur} · Periode {c.periode_no} ({c.periode_status}) · oleh {c.requested_by_nama} · {fmtDDMMYYYY(c.requested_at)}</div>
+            </div>
+            <ChangeStatus s={c.status}/>
+          </div>
+          <ChangeDiff c={c}/>
+          <div className="text-xs mt-2" style={{ color: COLORS.ink }}>Alasan akuntan: <b>{c.alasan}</b></div>
+          {c.status !== 'MENUNGGU' && <div className="text-[11px] mt-1" style={{ color: COLORS.muted }}>Diputuskan {c.decided_by_nama}{c.catatan ? ' · ' + c.catatan : ''}</div>}
+          {c.status === 'MENUNGGU' && <div className="grid grid-cols-2 gap-2 mt-3">
+            <Btn kind="danger" onClick={function(){ setAct({ c: c, status: 'DITOLAK' }); }}>{I.x} Tolak</Btn>
+            <Btn onClick={function(){ setAct({ c: c, status: 'DISETUJUI' }); }}>{I.check} Setujui</Btn>
+          </div>}
+        </Card>;
+      })}
+    {act && <Modal title={act.status === 'DISETUJUI' ? 'Setujui perubahan?' : 'Tolak perubahan?'} onClose={function(){ setAct(null); }}>
+      {act.status === 'DISETUJUI' && <p className="text-sm mb-3" style={{ color: COLORS.ink }}>
+        {act.c.aksi === 'HAPUS' ? 'Transaksi akan dihapus permanen dari Periode ' + act.c.periode_no + '.' : 'Transaksi di Periode ' + act.c.periode_no + ' akan diubah.'} Saldo awal periode berikutnya perlu Anda periksa manual di Setup.</p>}
+      <Field label={act.status === 'DITOLAK' ? 'Alasan penolakan *' : 'Catatan (opsional)'}><input value={catatan} onChange={function(e){ setCatatan(e.target.value); }} style={inputStyle}/></Field>
+      <div className="flex gap-2 justify-end"><Btn kind="ghost" onClick={function(){ setAct(null); }}>Batal</Btn>
+        <Btn kind={act.status === 'DITOLAK' ? 'danger' : 'solid'} disabled={saving || (act.status === 'DITOLAK' && !catatan.trim())} onClick={decide}>{saving ? I.spinner : I.check} {act.status === 'DISETUJUI' ? 'Setujui' : 'Tolak'}</Btn></div>
+    </Modal>}
   </div>;
 }
 
@@ -2840,6 +3010,10 @@ function App() {
       ['bukubesar','Buku Besar',I.trend],
       ['profil','Profil',I.user],
     ],
+    asisten: [
+      ['pengajuan','Pengajuan',I.file],
+      ['profil','Profil',I.user],
+    ],
     pic: [
       ['dash','Dashboard',I.dash],
       ['pengajuan','Pengajuan',I.file],
@@ -2863,6 +3037,7 @@ function App() {
       ['riwayat','Riwayat',I.list],
       ['bukubesar','Buku Besar',I.trend],
       ['darurat','Input Darurat',I.warn],
+      ['perubahan','Persetujuan Edit',I.edit],
       ['periode','Periode',I.settings],
       ['users','Pengguna',I.users],
       ['dapur','Dapur',I.building],
@@ -2871,6 +3046,7 @@ function App() {
   })[role] || [];
 
   const canPickScope = role === 'yayasan' || role === 'admin';
+  if (navItems.length && !navItems.some(function(n){ return n[0] === view; })) setTimeout(function(){ setView(navItems[0][0]); }, 0);
   const effScope = canPickScope ? scope : session.user.dapur;
   function logout() { clearSession(); setSession(null); }
 
@@ -2922,6 +3098,7 @@ function App() {
           {view === 'realisasi' && <RealisasiPage session={session} toast={toast}
             onSaved={function(){ setRefreshKey(function(k){return k+1;}); }}/>}
           {view === 'persetujuan' && <PersetujuanPage session={session} scope={effScope} dapurList={dapurList} toast={toast}/>}
+          {view === 'perubahan' && <PerubahanAdminPage session={session} dapurList={dapurList} toast={toast}/>}
           {view === 'darurat' && <DaruratPage session={session} dapurList={dapurList} toast={toast}
             onSaved={function(){ setRefreshKey(function(k){return k+1;}); setView('riwayat'); }}/>}
           {view === 'laporan' && <Laporan session={session} scope={effScope} toast={toast}/>}
