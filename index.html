@@ -1942,6 +1942,7 @@ function Profil({ session, toast, onUpdated }) {
 
   return (
     <div className="max-w-xl">
+      {session.user.role === 'akuntan' && <TtdCard toast={toast}/>}
       <Card className="mb-3">
         <Eyebrow>Akun saya</Eyebrow>
         <div className="grid grid-cols-2 gap-3 mt-2 mb-3">
@@ -2531,6 +2532,7 @@ function PengajuanPage({ session, scope, dapurList, toast }) {
   const [editItem, setEditItem] = useState(null);
   const [batalItem, setBatalItem] = useState(null);
   const [penerima, upsertPenerima] = usePenerimaList();
+  const [baList, setBaList] = useState([]);
   const dapurMap = useMemo(function(){ const m = {}; (dapurList || []).forEach(function(d){ m[d.id] = d.nama; }); return m; }, [dapurList]);
 
   const load = useCallback(async function() {
@@ -2538,6 +2540,7 @@ function PengajuanPage({ session, scope, dapurList, toast }) {
     const res = await api('getPengajuan', { scope: scope || 'ALL' });
     setLoading(false);
     if (res.ok) setData(res.data); else toast(res.error || 'Gagal memuat pengajuan', 'error');
+    if (!isAsisten) { const b = await api('getBADaftar', {}); if (b.ok) setBaList(b.data); }
   }, [scope]);
   useEffect(function(){ load(); api('getKategori').then(function(r){
     if (r.ok) setKategoriMap(isAsisten ? { 'Bahan Baku': r.data['Bahan Baku'] || ['Semua Kategori'] } : r.data);
@@ -2548,6 +2551,12 @@ function PengajuanPage({ session, scope, dapurList, toast }) {
   const vaKeys = Object.keys(data.va || {});
   const aktifKeys = Object.keys(data.periodeAktif || {});
   const noPeriode = aktifKeys.length === 0;
+  // Kelompokkan per hari H lalu per dapur agar 1 bar Berita Acara per dapur per hari
+  const listUrut = data.pengajuan.map(function(h, i){ return [h, i]; }).sort(function(a, b){
+    if (a[0].tanggal !== b[0].tanggal) return a[0].tanggal < b[0].tanggal ? 1 : -1;
+    if (a[0].dapur !== b[0].dapur) return a[0].dapur < b[0].dapur ? -1 : 1;
+    return a[1] - b[1];
+  }).map(function(x){ return x[0]; });
   const dapurOptions = isAsisten ? (dapurList || []).map(function(d){ return { id: d.id, nama: d.nama, aktif: aktifKeys.indexOf(d.id) >= 0 }; }) : null;
 
   return <div>
@@ -2563,8 +2572,14 @@ function PengajuanPage({ session, scope, dapurList, toast }) {
 
     {data.pengajuan.length === 0 ? (
       <Card><div className="text-sm text-center py-4" style={{ color: COLORS.muted }}>Belum ada pengajuan di periode aktif.</div></Card>
-    ) : data.pengajuan.map(function(h){
-      return <Card key={h.id} pad={false} className="mb-3">
+    ) : listUrut.map(function(h, idx){
+      const gKey = h.dapur + '|' + h.tanggal;
+      const prev = listUrut[idx - 1];
+      const firstOfGroup = !prev || (prev.dapur + '|' + prev.tanggal) !== gKey;
+      const g = firstOfGroup && !isAsisten ? baList.find(function(b){ return b.dapur + '|' + b.tanggal === gKey; }) : null;
+      return <React.Fragment key={h.id}>
+      {g && <BAGroupBar g={g} dapurNama={showDapur ? dapurMap[h.dapur] : ''} toast={toast}/>}
+      <Card pad={false} className="mb-3">
         <div className="p-3 sm:p-4 flex flex-col sm:flex-row sm:items-start justify-between gap-2" style={{ background: COLORS.paper, borderRadius: '12px 12px 0 0' }}>
           <div className="min-w-0">
             <div className="font-mono text-xs font-semibold break-all" style={{ color: COLORS.ink }}>{h.nomor}</div>
@@ -2591,13 +2606,300 @@ function PengajuanPage({ session, scope, dapurList, toast }) {
           }
           return <ItemRow key={it.id} it={it} actions={actions}/>;
         })}
-      </Card>;
+      </Card>
+      </React.Fragment>;
     })}
 
     {editItem && <ItemEditModal item={editItem} kategoriMap={kategoriMap} penerima={penerima} upsertPenerima={upsertPenerima}
       toast={toast} onClose={function(){ setEditItem(null); }} onSaved={load}/>}
     {batalItem && <BatalModal item={batalItem} toast={toast} onClose={function(){ setBatalItem(null); }} onSaved={load}/>}
   </div>;
+}
+
+// ---------- Berita Acara (PDF) ----------
+const JSPDF_URLS = ['https://unpkg.com/jspdf@2.5.1/dist/jspdf.umd.min.js', 'https://unpkg.com/jspdf-autotable@3.8.2/dist/jspdf.plugin.autotable.min.js'];
+function loadScriptOnce(src) {
+  return new Promise(function(resolve, reject) {
+    if (document.querySelector('script[data-src="' + src + '"]')) return resolve();
+    const s = document.createElement('script'); s.src = src; s.setAttribute('data-src', src);
+    s.onload = function(){ resolve(); }; s.onerror = function(){ s.remove(); reject(new Error('Gagal memuat ' + src)); };
+    document.head.appendChild(s);
+  });
+}
+async function ensureJsPDF() {
+  if (window.jspdf && window.jspdf.jsPDF && window.jspdf.jsPDF.API.autoTable) return window.jspdf.jsPDF;
+  await loadScriptOnce(JSPDF_URLS[0]);
+  await loadScriptOnce(JSPDF_URLS[1]);
+  return window.jspdf.jsPDF;
+}
+function terbilang(n) {
+  n = Math.floor(Math.abs(n));
+  const s = ['', 'satu', 'dua', 'tiga', 'empat', 'lima', 'enam', 'tujuh', 'delapan', 'sembilan', 'sepuluh', 'sebelas'];
+  function t(x) {
+    if (x < 12) return s[x];
+    if (x < 20) return t(x - 10) + ' belas';
+    if (x < 100) return t(Math.floor(x / 10)) + ' puluh' + (x % 10 ? ' ' + t(x % 10) : '');
+    if (x < 200) return 'seratus' + (x - 100 ? ' ' + t(x - 100) : '');
+    if (x < 1000) return t(Math.floor(x / 100)) + ' ratus' + (x % 100 ? ' ' + t(x % 100) : '');
+    if (x < 2000) return 'seribu' + (x - 1000 ? ' ' + t(x - 1000) : '');
+    if (x < 1e6) return t(Math.floor(x / 1000)) + ' ribu' + (x % 1000 ? ' ' + t(x % 1000) : '');
+    if (x < 1e9) return t(Math.floor(x / 1e6)) + ' juta' + (x % 1e6 ? ' ' + t(x % 1e6) : '');
+    if (x < 1e12) return t(Math.floor(x / 1e9)) + ' miliar' + (x % 1e9 ? ' ' + t(x % 1e9) : '');
+    return t(Math.floor(x / 1e12)) + ' triliun' + (x % 1e12 ? ' ' + t(x % 1e12) : '');
+  }
+  const r = n === 0 ? 'nol' : t(n);
+  return r.charAt(0).toUpperCase() + r.slice(1) + ' rupiah';
+}
+const HARI_ID = ['Minggu', 'Senin', 'Selasa', 'Rabu', 'Kamis', 'Jumat', 'Sabtu'];
+function tglPanjang(ymd) {
+  const p = String(ymd).split('-').map(Number); const d = new Date(p[0], p[1] - 1, p[2]);
+  return { hari: HARI_ID[d.getDay()], tgl: d.toLocaleDateString('id-ID', { day: 'numeric', month: 'long', year: 'numeric' }) };
+}
+function fmtWaktu(ts) {
+  if (!ts) return '';
+  const m = String(ts).match(/^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})/);
+  return m ? m[3] + '-' + m[2] + '-' + m[1] + ' ' + m[4] + ':' + m[5] + ' WIB' : String(ts);
+}
+function imgSize(dataUrl) {
+  return new Promise(function(resolve) { const im = new Image(); im.onload = function(){ resolve({ w: im.naturalWidth, h: im.naturalHeight }); }; im.onerror = function(){ resolve(null); }; im.src = dataUrl; });
+}
+
+async function buildBeritaAcaraPdf(ba) {
+  const JsPDF = await ensureJsPDF();
+  const doc = new JsPDF({ unit: 'mm', format: 'a4', orientation: 'portrait' });
+  const W = 210, M = 15, CW = W - 2 * M;
+  const ink = [33, 37, 41], muted = [110, 110, 110], green = [21, 87, 36];
+  const tg = tglPanjang(ba.tanggal);
+  const sppg = /^SPPG\b/i.test(ba.dapur.nama) ? ba.dapur.nama : 'SPPG ' + ba.dapur.nama;
+  let y = 16;
+  doc.setFont('helvetica', 'bold'); doc.setFontSize(12); doc.setTextColor.apply(doc, ink);
+  doc.text(ba.yayasan.toUpperCase(), W / 2, y, { align: 'center' }); y += 5.5;
+  doc.setFont('helvetica', 'normal'); doc.setFontSize(10);
+  doc.text('Satuan Pelayanan Pemenuhan Gizi — ' + sppg + (ba.dapur.kode ? ' — ' + ba.dapur.kode : ''), W / 2, y, { align: 'center' }); y += 3.5;
+  doc.setDrawColor(40); doc.setLineWidth(0.6); doc.line(M, y, W - M, y); doc.setLineWidth(0.2); doc.line(M, y + 0.9, W - M, y + 0.9); y += 9;
+  doc.setFont('helvetica', 'bold'); doc.setFontSize(12.5);
+  doc.text('BERITA ACARA PENGAJUAN ANGGARAN', W / 2, y, { align: 'center' }); y += 5.5;
+  doc.setFont('helvetica', 'normal'); doc.setFontSize(10);
+  doc.text('Nomor: ' + ba.nomor, W / 2, y, { align: 'center' }); y += 9;
+
+  const periodeTxt = ba.periode && ba.periode.no ? ' periode ke-' + ba.periode.no + ' (' + fmtDDMMYYYY(ba.periode.mulai) + ' s.d. ' + fmtDDMMYYYY(ba.periode.akhir) + ')' : '';
+  const para = 'Untuk kebutuhan penggunaan dana pada hari ' + tg.hari + ', tanggal ' + tg.tgl + ', Akuntan ' + sppg +
+    ' mengajukan anggaran yang dibayarkan melalui Virtual Account SPPG' + periodeTxt + '. Pengajuan tersebut telah diperiksa dan disetujui oleh ' +
+    ba.yayasan + ' dengan rincian sebagai berikut:';
+  doc.setFontSize(10);
+  const lines = doc.splitTextToSize(para, CW);
+  doc.text(lines, M, y, { lineHeightFactor: 1.45 }); y += lines.length * 5.1 + 2;
+
+  const body = ba.rows.map(function(r) {
+    const ur = r.uraian + (r.susulan ? ' (susulan)' : '');
+    return [String(r.no), r.jenis + '\n' + r.kategori, ur + '\nDiajukan: ' + r.diajukan_oleh, r.penerima, r.bank + '\n' + r.no_rek, fmtNoRp(r.nominal)];
+  });
+  doc.autoTable({
+    startY: y, margin: { left: M, right: M }, theme: 'grid',
+    head: [['No', 'Jenis / Kategori', 'Uraian', 'Penerima', 'Bank / No. Rek', 'Nominal (Rp)']],
+    body: body,
+    foot: [[{ content: 'TOTAL DISETUJUI', colSpan: 5, styles: { halign: 'right' } }, fmtNoRp(ba.total)]],
+    styles: { font: 'helvetica', fontSize: 8.5, cellPadding: 1.8, textColor: ink, lineColor: [170, 170, 170], lineWidth: 0.2, valign: 'top' },
+    headStyles: { fillColor: [235, 240, 236], textColor: ink, fontStyle: 'bold', halign: 'center' },
+    footStyles: { fillColor: [235, 240, 236], textColor: ink, fontStyle: 'bold', halign: 'right' },
+    columnStyles: { 0: { cellWidth: 8, halign: 'center' }, 1: { cellWidth: 30 }, 2: { cellWidth: 52 }, 3: { cellWidth: 30 }, 4: { cellWidth: 32 }, 5: { cellWidth: 28, halign: 'right' } },
+    showFoot: 'lastPage',
+  });
+  y = doc.lastAutoTable.finalY + 6;
+  const ensure = function(h) { if (y + h > 297 - 22) { doc.addPage(); y = 20; } };
+
+  ensure(30);
+  doc.setFontSize(9.5); doc.setFont('helvetica', 'italic');
+  const tb = doc.splitTextToSize('Terbilang: ' + terbilang(ba.total), CW);
+  doc.text(tb, M, y); y += tb.length * 4.6 + 3;
+  doc.setFont('helvetica', 'normal'); doc.setFontSize(9); doc.setTextColor.apply(doc, muted);
+  const rg = ba.ringkasan;
+  const notes = [
+    'Ringkasan: diajukan ' + rg.baris_diajukan + ' baris (' + fmt(rg.nominal_diajukan) + ') dalam ' + ba.jumlah_pengajuan + ' kali pengajuan; disetujui ' + rg.baris_disetujui + ' baris (' + fmt(ba.total) + ')' +
+      (rg.baris_tidak ? '; ditolak/dibatalkan ' + rg.baris_tidak + ' baris (' + fmt(rg.nominal_tidak) + ') dan tidak dimuat dalam berita acara ini.' : '.'),
+    'Persetujuan diberikan secara elektronik melalui aplikasi Keuangan MBG oleh ' + (ba.penyetuju.join(', ') || ba.yayasan) +
+      (ba.keputusan_terakhir ? ', keputusan terakhir ' + fmtWaktu(ba.keputusan_terakhir) : '') + '.',
+  ];
+  notes.forEach(function(n) { const l = doc.splitTextToSize(n, CW); ensure(l.length * 4.4); doc.text(l, M, y); y += l.length * 4.4 + 1.2; });
+  doc.setTextColor.apply(doc, ink);
+
+  y += 6; ensure(48);
+  const sx = W - M - 70;
+  doc.setFontSize(10);
+  doc.text(tg.tgl, sx + 35, y, { align: 'center' }); y += 5;
+  doc.text('Yang mengajukan,', sx + 35, y, { align: 'center' }); y += 5;
+  doc.text('Akuntan ' + sppg, sx + 35, y, { align: 'center', maxWidth: 70 }); y += 3;
+  const ttd = ba.akuntan && ba.akuntan.ttd;
+  if (ttd) {
+    const sz = await imgSize(ttd);
+    if (sz) { const maxW = 55, maxH = 24; const k = Math.min(maxW / sz.w, maxH / sz.h); const iw = sz.w * k, ih = sz.h * k;
+      try { doc.addImage(ttd, 'PNG', sx + 35 - iw / 2, y + (maxH - ih) / 2, iw, ih); } catch (e) {} }
+  }
+  y += 27;
+  const nm = (ba.akuntan && ba.akuntan.nama) || '(akuntan belum terdaftar)';
+  doc.setFont('helvetica', 'bold'); doc.text(nm, sx + 35, y, { align: 'center' });
+  const nw = Math.min(doc.getTextWidth(nm), 70); doc.setLineWidth(0.3); doc.line(sx + 35 - nw / 2, y + 1, sx + 35 + nw / 2, y + 1);
+  doc.setFont('helvetica', 'normal');
+
+  const pages = doc.getNumberOfPages();
+  for (let i = 1; i <= pages; i++) {
+    doc.setPage(i); doc.setFontSize(7.5); doc.setTextColor.apply(doc, muted);
+    doc.setDrawColor(200); doc.setLineWidth(0.2); doc.line(M, 297 - 13, W - M, 297 - 13);
+    doc.text(ba.nomor + '  ·  Kode verifikasi ' + ba.kode_verifikasi + '  ·  Dibuat dari aplikasi Keuangan MBG', M, 297 - 9);
+    doc.text('Hal. ' + i + '/' + pages, W - M, 297 - 9, { align: 'right' });
+  }
+  doc.setProperties({ title: 'Berita Acara ' + ba.nomor, subject: 'Berita Acara Pengajuan Anggaran', creator: 'Keuangan MBG' });
+  return doc;
+}
+
+function BAButton({ g, toast, compact }) {
+  const [busy, setBusy] = useState(false);
+  const [warnNoTtd, setWarnNoTtd] = useState(null);
+  const ready = g.menunggu === 0 && g.disetujui > 0;
+  async function save(ba) {
+    const doc = await buildBeritaAcaraPdf(ba);
+    doc.save(String(ba.nomor).split(' / ')[0].replace(/\//g, '_') + '.pdf');
+    toast('Berita Acara ' + ba.nomor + ' diunduh');
+  }
+  async function run() {
+    setBusy(true);
+    try {
+      const res = await api('getBeritaAcara', { dapur: g.dapur, tanggal: g.tanggal });
+      if (!res.ok) { toast(res.error || 'Gagal memuat Berita Acara', 'error'); return; }
+      if (!res.data.akuntan || !res.data.akuntan.ttd) { setWarnNoTtd(res.data); return; }
+      await save(res.data);
+    } catch (e) { toast('Gagal membuat PDF: ' + e.message, 'error'); }
+    finally { setBusy(false); }
+  }
+  const hint = g.disetujui === 0 && g.menunggu === 0 ? 'Tidak ada baris disetujui'
+    : g.menunggu > 0 ? g.menunggu + ' baris belum diputuskan' : null;
+  return <>
+    <Btn size="sm" kind={ready ? 'solid' : 'ghost'} disabled={!ready || busy} onClick={run} title={hint || 'Unduh PDF Berita Acara'}>
+      {busy ? I.spinner : I.download} {compact ? 'PDF' : 'Cetak Berita Acara'}</Btn>
+    {warnNoTtd && <ConfirmModal title="Tanda tangan akuntan belum ada"
+      message={'Akuntan ' + ((warnNoTtd.akuntan && warnNoTtd.akuntan.nama) || 'dapur ini') + ' belum mengunggah tanda tangan di menu Profil. PDF tetap bisa dibuat dengan ruang tanda tangan kosong (untuk ditandatangani basah).'}
+      confirmLabel="Tetap cetak" onConfirm={async function(){ const d = warnNoTtd; setWarnNoTtd(null); try { await save(d); } catch (e) { toast('Gagal membuat PDF: ' + e.message, 'error'); } }}
+      onClose={function(){ setWarnNoTtd(null); }}/>}
+  </>;
+}
+
+function BAGroupBar({ g, dapurNama, toast }) {
+  const ready = g.menunggu === 0 && g.disetujui > 0;
+  return <div className="rounded-xl p-3 mb-2 flex flex-col sm:flex-row sm:items-center justify-between gap-2"
+    style={{ background: ready ? '#EAF3EC' : COLORS.paper, border: '1px dashed ' + (ready ? COLORS.green : COLORS.line) }}>
+    <div className="min-w-0">
+      <div className="text-xs font-semibold" style={{ color: COLORS.ink }}>Berita Acara · Hari H {fmtDDMMYYYY(g.tanggal)}{dapurNama ? ' · ' + dapurNama : ''}</div>
+      <div className="text-[11px] mt-0.5" style={{ color: COLORS.muted }}>
+        {g.pengajuan} pengajuan · {g.disetujui} baris disetujui ({fmt(g.total)})
+        {g.menunggu > 0 ? <span style={{ color: COLORS.amber }}> · {g.menunggu} baris belum final — cetak setelah semua diputuskan</span> : ''}
+      </div>
+    </div>
+    <div className="shrink-0"><BAButton g={g} toast={toast}/></div>
+  </div>;
+}
+
+// Tanda tangan akuntan (Profil): gambar langsung atau unggah foto; latar putih dibuat transparan
+function trimCanvas(src) {
+  const ctx = src.getContext('2d'); const w = src.width, h = src.height;
+  const d = ctx.getImageData(0, 0, w, h).data;
+  let x0 = w, y0 = h, x1 = -1, y1 = -1;
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) if (d[(y * w + x) * 4 + 3] > 20) { if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y; }
+  if (x1 < 0) return null;
+  const pad = 6; x0 = Math.max(0, x0 - pad); y0 = Math.max(0, y0 - pad); x1 = Math.min(w - 1, x1 + pad); y1 = Math.min(h - 1, y1 + pad);
+  const out = document.createElement('canvas'); out.width = x1 - x0 + 1; out.height = y1 - y0 + 1;
+  out.getContext('2d').drawImage(src, x0, y0, out.width, out.height, 0, 0, out.width, out.height);
+  return out;
+}
+function photoToSignature(file) {
+  return new Promise(function(resolve, reject) {
+    const url = URL.createObjectURL(file); const im = new Image();
+    im.onload = function() {
+      const k = Math.min(1, 900 / im.naturalWidth, 500 / im.naturalHeight);
+      const c = document.createElement('canvas'); c.width = Math.round(im.naturalWidth * k); c.height = Math.round(im.naturalHeight * k);
+      const ctx = c.getContext('2d'); ctx.drawImage(im, 0, 0, c.width, c.height);
+      const img = ctx.getImageData(0, 0, c.width, c.height); const d = img.data;
+      for (let i = 0; i < d.length; i += 4) {
+        const lum = 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2];
+        if (lum > 150) d[i + 3] = 0; else { d[i] = 20; d[i + 1] = 40; d[i + 2] = 110; d[i + 3] = Math.min(255, Math.round((150 - lum) * 3)); }
+      }
+      ctx.putImageData(img, 0, 0); URL.revokeObjectURL(url);
+      const t = trimCanvas(c); if (!t) return reject(new Error('Tanda tangan tidak terdeteksi. Gunakan foto tinta gelap di kertas putih.'));
+      resolve(t.toDataURL('image/png'));
+    };
+    im.onerror = function(){ reject(new Error('File bukan gambar')); };
+    im.src = url;
+  });
+}
+function SignaturePad({ onChange }) {
+  const ref = useRef(null); const drawing = useRef(false); const last = useRef(null);
+  useEffect(function() {
+    const c = ref.current; const r = window.devicePixelRatio || 1;
+    c.width = c.clientWidth * r; c.height = c.clientHeight * r;
+    const ctx = c.getContext('2d'); ctx.scale(r, r); ctx.lineCap = 'round'; ctx.lineJoin = 'round'; ctx.lineWidth = 2.4; ctx.strokeStyle = '#14286E';
+  }, []);
+  function pos(e) { const b = ref.current.getBoundingClientRect(); return { x: e.clientX - b.left, y: e.clientY - b.top }; }
+  function down(e) { e.preventDefault(); ref.current.setPointerCapture(e.pointerId); drawing.current = true; last.current = pos(e); }
+  function move(e) { if (!drawing.current) return; const p = pos(e); const ctx = ref.current.getContext('2d');
+    ctx.beginPath(); ctx.moveTo(last.current.x, last.current.y); ctx.lineTo(p.x, p.y); ctx.stroke(); last.current = p; }
+  function up() { if (!drawing.current) return; drawing.current = false; const t = trimCanvas(ref.current); onChange(t ? t.toDataURL('image/png') : null); }
+  function clear() { const c = ref.current; c.getContext('2d').clearRect(0, 0, c.width, c.height); onChange(null); }
+  return <div>
+    <canvas ref={ref} onPointerDown={down} onPointerMove={move} onPointerUp={up} onPointerLeave={up}
+      style={{ width: '100%', height: 160, background: '#fff', border: '1px dashed ' + COLORS.line, borderRadius: 8, touchAction: 'none', cursor: 'crosshair' }}/>
+    <div className="flex justify-between mt-1"><span className="text-[11px]" style={{ color: COLORS.muted }}>Tanda tangan di dalam kotak</span>
+      <button onClick={clear} className="text-xs font-semibold" style={{ color: COLORS.danger }}>Hapus coretan</button></div>
+  </div>;
+}
+function TtdCard({ toast }) {
+  const [cur, setCur] = useState(undefined);
+  const [mode, setMode] = useState(null); // 'draw' | 'upload'
+  const [draft, setDraft] = useState(null);
+  const [saving, setSaving] = useState(false);
+  const [confirmDel, setConfirmDel] = useState(false);
+  function load() { api('getTtd').then(function(r){ setCur(r.ok ? r.data.ttd : null); }); }
+  useEffect(load, []);
+  async function onFile(e) {
+    const f = e.target.files && e.target.files[0]; e.target.value = '';
+    if (!f) return;
+    try { setDraft(await photoToSignature(f)); } catch (err) { toast(err.message, 'error'); }
+  }
+  async function save() {
+    setSaving(true);
+    const res = await apiUpload('saveTtd', { fileData: draft });
+    setSaving(false);
+    if (res.ok) { toast('Tanda tangan tersimpan'); setMode(null); setDraft(null); load(); } else toast(res.error || 'Gagal menyimpan', 'error');
+  }
+  async function del() {
+    const res = await api('hapusTtd'); setConfirmDel(false);
+    if (res.ok) { toast('Tanda tangan dihapus'); setCur(null); } else toast(res.error || 'Gagal', 'error');
+  }
+  return <Card className="mb-3">
+    <Eyebrow>Tanda tangan Berita Acara</Eyebrow>
+    <p className="text-xs mt-1 mb-3" style={{ color: COLORS.muted }}>Dipasang otomatis di setiap PDF Berita Acara pengajuan dapur Anda, termasuk pengajuan yang dibuat asisten. Disimpan privat, tidak dibagikan lewat link.</p>
+    {cur === undefined ? <div className="text-sm flex items-center gap-2" style={{ color: COLORS.muted }}>{I.spinner} Memuat…</div>
+      : !mode && <div className="flex flex-col sm:flex-row sm:items-center gap-3">
+        <div className="rounded-lg flex items-center justify-center" style={{ width: 220, height: 90, background: '#fff', border: '1px solid ' + COLORS.line }}>
+          {cur ? <img src={cur} alt="Tanda tangan" style={{ maxWidth: 200, maxHeight: 80 }}/> : <span className="text-xs" style={{ color: COLORS.danger }}>Belum ada tanda tangan</span>}
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <Btn size="sm" onClick={function(){ setMode('draw'); setDraft(null); }}>{cur ? 'Ganti (gambar)' : 'Gambar tanda tangan'}</Btn>
+          <Btn size="sm" kind="ghost" onClick={function(){ setMode('upload'); setDraft(null); }}>Unggah foto</Btn>
+          {cur && <Btn size="sm" kind="ghost" onClick={function(){ setConfirmDel(true); }}><span style={{ color: COLORS.danger }}>Hapus</span></Btn>}
+        </div>
+      </div>}
+    {mode === 'draw' && <SignaturePad onChange={setDraft}/>}
+    {mode === 'upload' && <div>
+      <input type="file" accept="image/*" onChange={onFile} className="text-sm"/>
+      <div className="text-[11px] mt-1" style={{ color: COLORS.muted }}>Foto tanda tangan tinta gelap di kertas putih polos. Latar putih otomatis dihapus.</div>
+      {draft && <div className="mt-2 rounded-lg p-2 inline-block" style={{ background: '#fff', border: '1px solid ' + COLORS.line }}><img src={draft} alt="Pratinjau" style={{ maxWidth: 260, maxHeight: 100 }}/></div>}
+    </div>}
+    {mode && <div className="flex gap-2 mt-3">
+      <Btn size="sm" disabled={!draft || saving} onClick={save}>{saving ? I.spinner : I.check} Simpan tanda tangan</Btn>
+      <Btn size="sm" kind="ghost" onClick={function(){ setMode(null); setDraft(null); }}>Batal</Btn>
+    </div>}
+    {confirmDel && <ConfirmModal title="Hapus tanda tangan?" danger confirmLabel="Hapus"
+      message="Berita Acara berikutnya akan dicetak tanpa tanda tangan sampai Anda mengunggah lagi." onConfirm={del} onClose={function(){ setConfirmDel(false); }}/>}
+  </Card>;
 }
 
 // ---------- Persetujuan (Yayasan) ----------
