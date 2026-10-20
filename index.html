@@ -2362,12 +2362,15 @@ function ItemFields({ row, onChange, kategoriMap, penerima, upsertPenerima, toas
   </div>;
 }
 
-function PengajuanForm({ kategoriMap, penerima, upsertPenerima, toast, onCreated, onCancel, dapurOptions }) {
+function PengajuanForm({ kategoriMap, penerima, upsertPenerima, toast, onCreated, onCancel, dapurOptions, periodeRange, ownDapur }) {
+  const [tanggal, setTanggal] = useState(todayISO());
   const onlyJenis = Object.keys(kategoriMap).length === 1 ? Object.keys(kategoriMap)[0] : '';
   function newRow() { const r = emptyRow(); if (onlyJenis) { r.jenis = onlyJenis; r.kategori = (kategoriMap[onlyJenis] || [])[0] || ''; } return r; }
   const [rows, setRows] = useState([newRow()]);
   const [dapur, setDapur] = useState('');
   const needDapur = !!dapurOptions;
+  const rng = periodeRange ? periodeRange[needDapur ? dapur : ownDapur] : null;
+  const tglErr = !tanggal ? 'Tanggal wajib diisi' : (rng && (tanggal < rng.mulai || tanggal > rng.akhir)) ? 'Di luar periode aktif (' + fmtDDMMYYYY(rng.mulai) + ' – ' + fmtDDMMYYYY(rng.akhir) + ')' : null;
   const [saving, setSaving] = useState(false);
   const [confirm, setConfirm] = useState(false);
   const total = rows.reduce(function(s, r){ return s + (Number(r.nominal) || 0); }, 0);
@@ -2376,7 +2379,7 @@ function PengajuanForm({ kategoriMap, penerima, upsertPenerima, toast, onCreated
   async function submit() {
     setSaving(true);
     const items = rows.map(function(r){ return { jenis: r.jenis, kategori: r.kategori, uraian: r.uraian.trim(), nominal: Number(r.nominal), penerima_id: r.penerima_id, susulan: !!r.susulan }; });
-    const res = await apiPost('createPengajuan', { items: items, dapur: dapur });
+    const res = await apiPost('createPengajuan', { items: items, dapur: dapur, tanggal: tanggal });
     setSaving(false); setConfirm(false);
     if (res.ok) { toast('Pengajuan ' + res.data.nomor + ' terkirim ke Yayasan'); onCreated(); }
     else toast(res.error || 'Gagal mengirim', 'error');
@@ -2384,8 +2387,8 @@ function PengajuanForm({ kategoriMap, penerima, upsertPenerima, toast, onCreated
   return <Card className="mb-3">
     <div className="flex items-start justify-between gap-2 mb-3">
       <div>
-        <Eyebrow>Pengajuan baru · {fmtDDMMYYYY(todayISO())}</Eyebrow>
-        <div className="text-sm" style={{ color: COLORS.muted }}>Semua baris dibayar dari VA. Satu nomor Berita Acara per dapur per hari — pengajuan susulan & dari asisten di hari yang sama ikut nomor itu.</div>
+        <Eyebrow>Pengajuan baru</Eyebrow>
+        <div className="text-sm" style={{ color: COLORS.muted }}>Semua baris dibayar dari VA. Satu nomor Berita Acara per dapur per tanggal pengajuan — pengajuan lain (susulan / dari asisten) dengan tanggal yang sama ikut nomor itu.</div>
       </div>
       <button onClick={onCancel} style={{ color: COLORS.muted }}>{I.x}</button>
     </div>
@@ -2395,6 +2398,12 @@ function PengajuanForm({ kategoriMap, penerima, upsertPenerima, toast, onCreated
         {dapurOptions.map(function(d){ return <option key={d.id} value={d.id} disabled={!d.aktif}>{d.nama}{d.aktif ? '' : ' (belum ada periode aktif)'}</option>; })}
       </select>
     </Field>}
+    <Field label="Tanggal pengajuan (hari H penggunaan dana) *"
+      hint={tglErr ? '⚠️ ' + tglErr : tanggal < todayISO() ? 'Tanggal mundur — akan ditandai "diajukan setelah hari H" ke Yayasan' : tanggal > todayISO() ? 'Pengajuan untuk hari mendatang' : 'Hari ini'}
+      hintColor={tglErr ? COLORS.danger : tanggal < todayISO() ? '#9A6A0B' : null}>
+      <input type="date" value={tanggal} min={rng ? rng.mulai : undefined} max={rng ? rng.akhir : undefined}
+        onChange={function(e){ setTanggal(e.target.value); }} style={Object.assign({}, inputStyle, tglErr ? { borderColor: COLORS.danger } : {})}/>
+    </Field>
     {rows.map(function(r, i){
       return <div key={r.key} className="rounded-lg p-3 mb-3" style={{ border: '1px solid ' + COLORS.line, background: '#FCFBF8' }}>
         <div className="flex items-center justify-between mb-2">
@@ -2414,9 +2423,9 @@ function PengajuanForm({ kategoriMap, penerima, upsertPenerima, toast, onCreated
     </div>
     {needDapur && !dapur && <div className="text-xs mt-2" style={{ color: COLORS.danger }}>• Dapur tujuan belum dipilih</div>}
     {firstErr >= 0 && <div className="text-xs mt-2" style={{ color: COLORS.danger }}>• Baris {firstErr + 1}: {rowError(rows[firstErr])} belum diisi</div>}
-    <div className="mt-3"><Btn full disabled={firstErr >= 0 || saving || (needDapur && !dapur)} onClick={function(){ setConfirm(true); }}>{I.arrowR} Kirim ke Yayasan</Btn></div>
+    <div className="mt-3"><Btn full disabled={firstErr >= 0 || saving || (needDapur && !dapur) || !!tglErr} onClick={function(){ setConfirm(true); }}>{I.arrowR} Kirim ke Yayasan</Btn></div>
     {confirm && <ConfirmModal title="Kirim pengajuan?" confirmLabel={saving ? 'Mengirim…' : 'Kirim'}
-      message={'Mengirim ' + rows.length + ' baris senilai ' + fmt(total) + (needDapur ? ' untuk ' + ((dapurOptions.find(function(d){ return d.id === dapur; }) || {}).nama || '') : '') + ' ke Yayasan. Setelah dikirim, baris hanya bisa diedit sampai Yayasan memutuskan.'}
+      message={'Pengajuan tanggal ' + fmtDDMMYYYY(tanggal) + ': ' + rows.length + ' baris senilai ' + fmt(total) + (needDapur ? ' untuk ' + ((dapurOptions.find(function(d){ return d.id === dapur; }) || {}).nama || '') : '') + ' ke Yayasan. Setelah dikirim, baris hanya bisa diedit sampai Yayasan memutuskan.'}
       onConfirm={function(){ if (!saving) submit(); }} onClose={function(){ setConfirm(false); }}/>}
   </Card>;
 }
@@ -2460,6 +2469,12 @@ function BatalModal({ item, toast, onClose, onSaved }) {
 }
 
 function pendingSt(it) { return it.status === 'DIAJUKAN' || it.status === 'REVISI'; }
+function TimingBadge({ h }) {
+  const dibuat = String(h.created_at || '').substring(0, 10);
+  if (!dibuat || dibuat === h.tanggal) return null;
+  if (dibuat > h.tanggal) return <MiniBadge bg="#FBF3E2" fg="#9A6A0B">Diajukan setelah hari H ({fmtDDMMYYYY(dibuat)})</MiniBadge>;
+  return <MiniBadge bg="#EAF0F8" fg={COLORS.blue}>Diajukan lebih awal ({fmtDDMMYYYY(dibuat)})</MiniBadge>;
+}
 function ItemFlags({ it }) {
   return <>
     {it.susulan && <MiniBadge bg="#FBF3E2" fg="#9A6A0B">Susulan · sudah dibeli</MiniBadge>}
@@ -2542,6 +2557,7 @@ function PengajuanPage({ session, scope, dapurList, toast }) {
 
     {canCreate && !noPeriode && (showForm
       ? <PengajuanForm kategoriMap={kategoriMap} penerima={penerima} upsertPenerima={upsertPenerima} toast={toast} dapurOptions={dapurOptions}
+          periodeRange={data.periodeRange || {}} ownDapur={session.user.dapur}
           onCreated={function(){ setShowForm(false); load(); }} onCancel={function(){ setShowForm(false); }}/>
       : <div className="mb-3"><Btn full onClick={function(){ setShowForm(true); }}>{I.plusSm} Buat pengajuan hari ini</Btn></div>)}
 
@@ -2553,9 +2569,10 @@ function PengajuanPage({ session, scope, dapurList, toast }) {
           <div className="min-w-0">
             <div className="font-mono text-xs font-semibold break-all" style={{ color: COLORS.ink }}>{h.nomor}</div>
             <div className="text-xs mt-0.5" style={{ color: COLORS.muted }}>
-              {fmtDDMMYYYY(h.tanggal)} · oleh {h.created_by_nama}{showDapur && dapurMap[h.dapur] ? ' · ' + dapurMap[h.dapur] : ''}
+              Hari H {fmtDDMMYYYY(h.tanggal)} · oleh {h.created_by_nama}{showDapur && dapurMap[h.dapur] ? ' · ' + dapurMap[h.dapur] : ''}
               {h.decided_by_nama ? ' · diputuskan ' + h.decided_by_nama : ''}
             </div>
+            <div className="mt-1"><TimingBadge h={h}/></div>
           </div>
           <div className="sm:text-right shrink-0">
             <StatusBadge status={h.status}/>
@@ -2619,7 +2636,8 @@ function PersetujuanCard({ h, va, dapurNama, toast, onDone }) {
       <div className="min-w-0">
         <div className="text-sm font-bold" style={{ color: COLORS.ink }}>{dapurNama}</div>
         <div className="font-mono text-xs break-all" style={{ color: COLORS.ink }}>{h.nomor}</div>
-        <div className="text-xs" style={{ color: COLORS.muted }}>{fmtDDMMYYYY(h.tanggal)} · oleh {h.created_by_nama} · {pending.length} baris menunggu</div>
+        <div className="text-xs" style={{ color: COLORS.muted }}>Hari H {fmtDDMMYYYY(h.tanggal)} · oleh {h.created_by_nama} · {pending.length} baris menunggu</div>
+        <div className="mt-1"><TimingBadge h={h}/></div>
       </div>
       {pending.length > 1 && <Btn size="sm" kind="ghost" onClick={function(){ const d = {}; pending.forEach(function(i){ d[i.id] = Object.assign({}, dec[i.id] || {}, { status: 'DISETUJUI' }); }); setDec(d); }}>{I.check} Setujui semua</Btn>}
     </div>
