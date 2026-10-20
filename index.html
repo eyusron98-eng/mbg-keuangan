@@ -103,6 +103,7 @@ const fmtDateRange = (a, b) => {
 };
 const getBulan = s => { const d = new Date(s); return isNaN(d) ? '' : BULAN_FULL[d.getMonth()]; };
 const getTglDayMonth = s => { const d = new Date(s); return isNaN(d) ? '' : d.getDate() + ' ' + BULAN_SHORT[d.getMonth()]; };
+const fmtDDMMYYYY = s => { const d = new Date(s); if (isNaN(d)) return ''; const p = n => (n < 10 ? '0' + n : '' + n); return p(d.getDate()) + '-' + p(d.getMonth()+1) + '-' + d.getFullYear(); };
 const driveThumb = url => {
   if (!url) return '';
   const m = url.match(/\/d\/([^\/]+)/) || url.match(/id=([^&]+)/);
@@ -137,11 +138,21 @@ function clearSession() { sessionStorage.removeItem(SESS_KEY); }
 
 // Build ledger rows: Saldo Awal + VA Topups + Transaksi (sorted by date)
 // mode: 'aktual' uses riil, 'anggaran' uses unriil
+// Urut kronologis: hari (tanggal) naik, lalu urutan pencatatan (seq) naik.
+// Yang dicatat lebih dulu ada di atas. Top-up VA diprioritaskan di awal hari.
+function sortEventsChrono(events) {
+  events.sort((a, b) => {
+    if (a._ts !== b._ts) return a._ts - b._ts;
+    if (a._grp !== b._grp) return a._grp - b._grp;   // top-up (0) sebelum transaksi (1)
+    return a._seq - b._seq;                           // urutan input (seq naik)
+  });
+}
+
 function buildLedger(saldoAwalVA, saldoAwalPetty, vaTopups, transaksi, mode) {
   const events = [];
-  vaTopups.forEach(t => events.push({ tanggal: t.tanggal, type: 'topup_va', amount: t.jumlah, ket: t.keterangan, _ts: new Date(t.tanggal).getTime() }));
-  transaksi.forEach(t => events.push({ tanggal: t.tanggal, type: 'transaksi', tx: t, amount: mode === 'anggaran' ? t.unriil : t.riil, _ts: new Date(t.tanggal).getTime() }));
-  events.sort((a, b) => a._ts - b._ts);
+  vaTopups.forEach((t, i) => events.push({ tanggal: t.tanggal, type: 'topup_va', amount: t.jumlah, ket: t.keterangan, _ts: new Date(t.tanggal).getTime(), _grp: 0, _seq: (t.seq != null ? t.seq : i) }));
+  transaksi.forEach((t, i) => events.push({ tanggal: t.tanggal, type: 'transaksi', tx: t, amount: mode === 'anggaran' ? t.unriil : t.riil, _ts: new Date(t.tanggal).getTime(), _grp: 1, _seq: (t.seq != null ? t.seq : i) }));
+  sortEventsChrono(events);
 
   const saldoAwal = (saldoAwalVA || 0) + (saldoAwalPetty || 0);
   let running = saldoAwal;
@@ -165,9 +176,9 @@ function buildLedger(saldoAwalVA, saldoAwalPetty, vaTopups, transaksi, mode) {
 // Dual-mode ledger: 1 baris, 2 kolom Kredit (Aktual & Anggaran), 2 kolom Saldo
 function buildDualLedger(saldoAwalVA, saldoAwalPetty, vaTopups, transaksi) {
   const events = [];
-  vaTopups.forEach(t => events.push({ tanggal: t.tanggal, type: 'topup_va', amount: t.jumlah, ket: t.keterangan, _ts: new Date(t.tanggal).getTime() }));
-  transaksi.forEach(t => events.push({ tanggal: t.tanggal, type: 'transaksi', tx: t, aktual: t.riil, anggaran: t.unriil, _ts: new Date(t.tanggal).getTime() }));
-  events.sort((a, b) => a._ts - b._ts);
+  vaTopups.forEach((t, i) => events.push({ tanggal: t.tanggal, type: 'topup_va', amount: t.jumlah, ket: t.keterangan, _ts: new Date(t.tanggal).getTime(), _grp: 0, _seq: (t.seq != null ? t.seq : i) }));
+  transaksi.forEach((t, i) => events.push({ tanggal: t.tanggal, type: 'transaksi', tx: t, aktual: t.riil, anggaran: t.unriil, _ts: new Date(t.tanggal).getTime(), _grp: 1, _seq: (t.seq != null ? t.seq : i) }));
+  sortEventsChrono(events);
 
   const saldoAwal = (saldoAwalVA || 0) + (saldoAwalPetty || 0);
   let runAktual = saldoAwal, runAnggaran = saldoAwal;
@@ -1169,13 +1180,12 @@ function Laporan({ session, scope, toast }) {
             <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11 }}>
               <thead>
                 <tr style={{ background: COLORS.paper, color: COLORS.ink }}>
-                  <th style={{ padding: '6px 6px', textAlign: 'left', fontWeight: 700, width: '9%', border: '1px solid ' + COLORS.line }}>Bulan</th>
-                  <th style={{ padding: '6px 6px', textAlign: 'left', fontWeight: 700, width: '9%', border: '1px solid ' + COLORS.line }}>Tanggal</th>
-                  <th style={{ padding: '6px 6px', textAlign: 'left', fontWeight: 700, width: '10%', border: '1px solid ' + COLORS.line }}>No Bukti</th>
+                  <th style={{ padding: '6px 6px', textAlign: 'left', fontWeight: 700, width: '12%', border: '1px solid ' + COLORS.line }}>Tanggal</th>
+                  <th style={{ padding: '6px 6px', textAlign: 'left', fontWeight: 700, width: '11%', border: '1px solid ' + COLORS.line }}>No Bukti</th>
                   <th style={{ padding: '6px 6px', textAlign: 'left', fontWeight: 700, border: '1px solid ' + COLORS.line }}>Uraian Transaksi</th>
-                  <th style={{ padding: '6px 6px', textAlign: 'right', fontWeight: 700, width: '13%', border: '1px solid ' + COLORS.line }}>Debit</th>
-                  <th style={{ padding: '6px 6px', textAlign: 'right', fontWeight: 700, width: '13%', border: '1px solid ' + COLORS.line }}>Kredit</th>
-                  <th style={{ padding: '6px 6px', textAlign: 'right', fontWeight: 700, width: '13%', border: '1px solid ' + COLORS.line }}>Saldo</th>
+                  <th style={{ padding: '6px 6px', textAlign: 'right', fontWeight: 700, width: '14%', border: '1px solid ' + COLORS.line }}>Debit</th>
+                  <th style={{ padding: '6px 6px', textAlign: 'right', fontWeight: 700, width: '14%', border: '1px solid ' + COLORS.line }}>Kredit</th>
+                  <th style={{ padding: '6px 6px', textAlign: 'right', fontWeight: 700, width: '14%', border: '1px solid ' + COLORS.line }}>Saldo</th>
                 </tr>
               </thead>
               <tbody>
@@ -1183,8 +1193,7 @@ function Laporan({ session, scope, toast }) {
                   const isAwal = row.kind === 'awal';
                   const isTopup = row.kind === 'topup';
                   return <tr key={idx} style={{ background: isAwal ? '#F0F7F2' : (isTopup ? '#F0F4FA' : '#fff') }}>
-                    <td style={{ padding: '5px 6px', color: COLORS.ink, border: '1px solid ' + COLORS.line }}>{row.bulan}</td>
-                    <td style={{ padding: '5px 6px', color: COLORS.ink, border: '1px solid ' + COLORS.line }}>{row.kind === 'awal' ? '-' : getTglDayMonth(row.tanggal)}</td>
+                    <td style={{ padding: '5px 6px', color: COLORS.ink, border: '1px solid ' + COLORS.line }}>{row.kind === 'awal' ? '-' : fmtDDMMYYYY(row.tanggal)}</td>
                     <td style={{ padding: '5px 6px', color: COLORS.ink, border: '1px solid ' + COLORS.line }}>{row.no_bukti}</td>
                     <td style={{ padding: '5px 6px', color: COLORS.ink, border: '1px solid ' + COLORS.line, fontStyle: isAwal||isTopup ? 'italic' : 'normal' }}>
                       {row.uraian}
@@ -1292,7 +1301,7 @@ function exportRiwayatExcel(rows, dapurMap, namaFile) {
   // Ledger sheet
   const ledgerData = rows.map(function(r){
     return {
-      'Bulan': r.bulan, 'Tanggal': r.tanggal === '-' ? '-' : r.tanggal,
+      'Tanggal': r.tanggal === '-' ? '-' : fmtDDMMYYYY(r.tanggal),
       'No Bukti': r.no_bukti, 'Uraian': r.uraian,
       'Debit': r.debit || 0, 'Kredit': r.kredit || 0, 'Saldo': r.saldo || 0,
       'Jenis': r.tx ? r.tx.jenis : (r.kind === 'topup' ? 'Top-up VA' : 'Saldo Awal'),
@@ -1304,7 +1313,7 @@ function exportRiwayatExcel(rows, dapurMap, namaFile) {
   });
   const ws = XLSX.utils.json_to_sheet(ledgerData);
   ws['!cols'] = [
-    { wch: 10 }, { wch: 12 }, { wch: 12 }, { wch: 40 },
+    { wch: 12 }, { wch: 12 }, { wch: 40 },
     { wch: 14 }, { wch: 14 }, { wch: 14 },
     { wch: 14 }, { wch: 24 }, { wch: 12 }, { wch: 24 }, { wch: 50 },
   ];
@@ -1434,7 +1443,6 @@ function Riwayat({ session, scope, toast, refreshKey }) {
             <table className="w-full text-sm" style={{ minWidth: 1000 }}>
               <thead>
                 <tr style={{ color: COLORS.muted, background: COLORS.paper }} className="text-left text-xs uppercase">
-                  <th className="px-3 py-2.5 font-semibold">Bulan</th>
                   <th className="px-3 py-2.5 font-semibold">Tanggal</th>
                   <th className="px-3 py-2.5 font-semibold">No Bukti</th>
                   <th className="px-3 py-2.5 font-semibold">Uraian Transaksi</th>
@@ -1447,14 +1455,13 @@ function Riwayat({ session, scope, toast, refreshKey }) {
               </thead>
               <tbody>
                 {ledger.length === 0 ? (
-                  <tr><td colSpan={canEdit ? 9 : 8} className="px-4 py-8 text-center" style={{ color: COLORS.muted }}>Belum ada data di periode ini.</td></tr>
+                  <tr><td colSpan={canEdit ? 8 : 7} className="px-4 py-8 text-center" style={{ color: COLORS.muted }}>Belum ada data di periode ini.</td></tr>
                 ) : ledger.map(function(row, idx){
                   const isAwal = row.kind === 'awal';
                   const isTopup = row.kind === 'topup';
                   const isTx = row.kind === 'tx';
                   return <tr key={idx} style={{ borderTop: '1px solid ' + COLORS.line, background: isAwal ? '#F0F7F2' : (isTopup ? '#F0F4FA' : 'transparent') }}>
-                    <td className="px-3 py-2" style={{ color: COLORS.muted }}>{row.bulan}</td>
-                    <td className="px-3 py-2" style={{ color: COLORS.muted }}>{row.kind === 'awal' ? '-' : getTglDayMonth(row.tanggal)}</td>
+                    <td className="px-3 py-2" style={{ color: COLORS.muted }}>{row.kind === 'awal' ? '-' : fmtDDMMYYYY(row.tanggal)}</td>
                     <td className="px-3 py-2 text-xs" style={{ color: COLORS.muted }}>{row.no_bukti}</td>
                     <td className="px-3 py-2" style={{ color: COLORS.ink, fontStyle: isAwal||isTopup ? 'italic' : 'normal' }}>
                       <div>{row.uraian}</div>
@@ -1519,7 +1526,7 @@ function Riwayat({ session, scope, toast, refreshKey }) {
 function bukuBesarExportExcel(rows, dapurMap, namaFile) {
   const data = rows.map(function(r){
     return {
-      'Bulan': r.bulan, 'Tanggal': r.tanggal === '-' ? '-' : r.tanggal,
+      'Tanggal': r.tanggal === '-' ? '-' : fmtDDMMYYYY(r.tanggal),
       'No Bukti': r.no_bukti, 'Uraian': r.uraian,
       'Debit': r.debit || 0,
       'Kredit Aktual': r.kreditAktual || 0, 'Kredit Anggaran': r.kreditAnggaran || 0,
@@ -1534,7 +1541,7 @@ function bukuBesarExportExcel(rows, dapurMap, namaFile) {
   });
   const ws = XLSX.utils.json_to_sheet(data);
   ws['!cols'] = [
-    { wch: 10 }, { wch: 12 }, { wch: 14 }, { wch: 36 }, { wch: 14 },
+    { wch: 12 }, { wch: 14 }, { wch: 36 }, { wch: 14 },
     { wch: 14 }, { wch: 14 }, { wch: 14 }, { wch: 14 }, { wch: 14 },
     { wch: 14 }, { wch: 26 }, { wch: 12 }, { wch: 24 }, { wch: 50 },
   ];
@@ -1658,7 +1665,6 @@ function BukuBesar({ session, scope, toast }) {
           <table className="w-full text-sm" style={{ minWidth: 1200 }}>
             <thead>
               <tr style={{ color: COLORS.muted, background: COLORS.paper }} className="text-left text-xs uppercase">
-                <th className="px-3 py-2.5 font-semibold">Bulan</th>
                 <th className="px-3 py-2.5 font-semibold">Tanggal</th>
                 <th className="px-3 py-2.5 font-semibold">No Bukti</th>
                 <th className="px-3 py-2.5 font-semibold">Uraian</th>
@@ -1672,13 +1678,12 @@ function BukuBesar({ session, scope, toast }) {
             </thead>
             <tbody>
               {ledger.length === 0 ? (
-                <tr><td colSpan="10" className="px-4 py-8 text-center" style={{ color: COLORS.muted }}>Belum ada data.</td></tr>
+                <tr><td colSpan="9" className="px-4 py-8 text-center" style={{ color: COLORS.muted }}>Belum ada data.</td></tr>
               ) : ledger.map(function(row, idx){
                 const isAwal = row.kind === 'awal', isTopup = row.kind === 'topup', isTx = row.kind === 'tx';
                 const selisihRow = (row.saldoAnggaran||0) - (row.saldoAktual||0);
                 return <tr key={idx} style={{ borderTop: '1px solid ' + COLORS.line, background: isAwal ? '#F0F7F2' : (isTopup ? '#F0F4FA' : 'transparent') }}>
-                  <td className="px-3 py-2" style={{ color: COLORS.muted }}>{row.bulan}</td>
-                  <td className="px-3 py-2" style={{ color: COLORS.muted }}>{row.kind === 'awal' ? '-' : getTglDayMonth(row.tanggal)}</td>
+                  <td className="px-3 py-2" style={{ color: COLORS.muted }}>{row.kind === 'awal' ? '-' : fmtDDMMYYYY(row.tanggal)}</td>
                   <td className="px-3 py-2 text-xs" style={{ color: COLORS.muted }}>{row.no_bukti}</td>
                   <td className="px-3 py-2" style={{ color: COLORS.ink, fontStyle: isAwal||isTopup ? 'italic' : 'normal' }}>
                     <div>{row.uraian}</div>
