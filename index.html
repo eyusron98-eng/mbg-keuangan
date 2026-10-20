@@ -110,17 +110,34 @@ const driveThumb = url => {
   return m ? 'https://drive.google.com/thumbnail?id=' + m[1] + '&sz=w1000' : url;
 };
 
+// Token sesi dikirim otomatis; kalau server bilang sesi tidak valid → paksa login ulang
+let AUTH_TOKEN = null;
+let ON_SESSION_INVALID = null;
+function checkSession(j) {
+  if (j && j.ok === false && /Sesi tidak valid/.test(j.error || '') && ON_SESSION_INVALID) ON_SESSION_INVALID(j.error);
+  return j;
+}
 async function api(action, params) {
   params = params || {};
   const url = new URL(API_URL);
   url.searchParams.set('action', action);
+  if (AUTH_TOKEN && !params.token) url.searchParams.set('token', AUTH_TOKEN);
   Object.keys(params).forEach(function(k) {
     if (params[k] !== undefined && params[k] !== null) {
       url.searchParams.set(k, typeof params[k] === 'object' ? JSON.stringify(params[k]) : String(params[k]));
     }
   });
-  try { const res = await fetch(url.toString(), { method: 'GET', redirect: 'follow' }); return await res.json(); }
+  try { const res = await fetch(url.toString(), { method: 'GET', redirect: 'follow' }); return checkSession(await res.json()); }
   catch (e) { return { ok: false, error: 'Koneksi gagal: ' + e.message }; }
+}
+// POST untuk payload besar (tabel pengajuan, keputusan)
+async function apiPost(action, params) {
+  try {
+    const res = await fetch(API_URL, { method: 'POST', redirect: 'follow',
+      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+      body: JSON.stringify(Object.assign({ action: action, token: AUTH_TOKEN }, params)) });
+    return checkSession(await res.json());
+  } catch (e) { return { ok: false, error: 'Koneksi gagal: ' + e.message }; }
 }
 async function apiUpload(action, params) {
   try {
@@ -687,6 +704,31 @@ function Dashboard({ session, scope, toast }) {
         <KPICard icon={I.trend} label="Total Realisasi Aktual" value={fmtShort(k.totalRiil)} sub={k.serap + '% terserap'} accent={COLORS.green} />
       </div>
 
+      {!noActive && k.komitmen !== undefined && (
+        <Card className="mb-3">
+          <Eyebrow>Pengajuan anggaran</Eyebrow>
+          <div className="grid grid-cols-3 gap-2 mt-2">
+            <div className="rounded-lg p-2.5 sm:p-3" style={{ background: COLORS.paper }}>
+              <div className="text-[11px] sm:text-xs leading-tight" style={{ color: COLORS.muted }}>VA tersedia</div>
+              <div className="font-bold num text-sm sm:text-lg leading-tight mt-0.5" title={fmt(k.vaTersedia)} style={{ color: k.vaTersedia < 0 ? COLORS.danger : COLORS.blue, wordBreak: 'break-word' }}>{fmtShort(k.vaTersedia)}</div>
+              <div className="text-[10px] mt-0.5 leading-tight" style={{ color: COLORS.muted }}>Sisa VA − disetujui</div>
+            </div>
+            <div className="rounded-lg p-2.5 sm:p-3" style={{ background: COLORS.paper }}>
+              <div className="text-[11px] sm:text-xs leading-tight" style={{ color: COLORS.muted }}>Disetujui, belum realisasi</div>
+              <div className="font-bold num text-sm sm:text-lg leading-tight mt-0.5" title={fmt(k.komitmen)} style={{ color: COLORS.green, wordBreak: 'break-word' }}>{fmtShort(k.komitmen)}</div>
+              <div className="text-[10px] mt-0.5 leading-tight" style={{ color: COLORS.muted }}>{k.komitmenCount} baris</div>
+            </div>
+            <div className="rounded-lg p-2.5 sm:p-3" style={{ background: COLORS.paper }}>
+              <div className="text-[11px] sm:text-xs leading-tight" style={{ color: COLORS.muted }}>Menunggu persetujuan</div>
+              <div className="font-bold num text-sm sm:text-lg leading-tight mt-0.5" title={fmt(k.menungguNominal)} style={{ color: COLORS.amber, wordBreak: 'break-word' }}>{fmtShort(k.menungguNominal)}</div>
+              <div className="text-[10px] mt-0.5 leading-tight" style={{ color: COLORS.muted }}>{k.menungguCount} baris</div>
+            </div>
+          </div>
+          {k.vaTersedia < 0 && <div className="text-xs mt-2 rounded-lg p-2" style={{ background: '#F8E9E5', color: COLORS.danger }}>⚠️ VA tersedia minus: realisasi aktual melebihi anggaran yang disetujui.</div>}
+          {k.daruratCount > 0 && <div className="text-xs mt-2 rounded-lg p-2" style={{ background: '#F8E9E5', color: COLORS.danger }}>⚠️ {k.daruratCount} transaksi diinput admin tanpa pengajuan (jalur darurat). Lihat tanda merah di Riwayat.</div>}
+        </Card>
+      )}
+
       {!noActive && (
         <Card className="mb-3">
           <Eyebrow>Realisasi Aktual vs Anggaran</Eyebrow>
@@ -915,7 +957,8 @@ function buktiFileName(file, tanggal, noBukti) {
   return tanggal + '_' + safeBukti + '.' + ext;
 }
 
-function InputTransaksi({ session, toast, onSaved, goToSetup }) {
+function InputTransaksi({ session, toast, onSaved, goToSetup, dapurId, alasan }) {
+  const dId = dapurId || session.user.dapur;
   const [periode, setPeriode] = useState(null);
   const [loadingPeriode, setLoadingPeriode] = useState(true);
   const [kategoriMap, setKategoriMap] = useState({});
@@ -924,7 +967,7 @@ function InputTransaksi({ session, toast, onSaved, goToSetup }) {
   const [submitting, setSubmitting] = useState(false);
 
   useEffect(function() {
-    Promise.all([api('getActivePeriode', { dapur: session.user.dapur }), api('getKategori')]).then(function(arr){
+    Promise.all([api('getActivePeriode', { dapur: dId }), api('getKategori')]).then(function(arr){
       setLoadingPeriode(false);
       if (arr[0].ok) setPeriode(arr[0].data);
       if (arr[1].ok) setKategoriMap(arr[1].data);
@@ -941,7 +984,7 @@ function InputTransaksi({ session, toast, onSaved, goToSetup }) {
       else { toast('Gagal upload bukti: ' + up.error, 'error'); setSubmitting(false); return; }
     }
     const res = await api('addTransaksi', {
-      role: session.user.role, user_id: session.user.id, dapur: session.user.dapur,
+      role: session.user.role, user_id: session.user.id, dapur: dId, alasan: alasan || '',
       tanggal: form.tanggal, no_bukti: form.no_bukti, jenis: form.jenis, kategori: form.kategori, uraian: form.uraian,
       sumber: form.sumber, riil: form.riil, unriil: form.unriil, bukti_url: bukti_url,
     });
@@ -961,7 +1004,7 @@ function InputTransaksi({ session, toast, onSaved, goToSetup }) {
           <div className="mb-3 flex justify-center" style={{ color: COLORS.danger }}>{I.warn}</div>
           <div className="text-base font-bold mb-1" style={{ color: COLORS.ink }}>Belum ada periode aktif</div>
           <div className="text-sm mb-4" style={{ color: COLORS.muted }}>Setup periode dulu sebelum input transaksi.</div>
-          <Btn onClick={goToSetup}>{I.settings} Ke Setup Periode</Btn>
+          {goToSetup && <Btn onClick={goToSetup}>{I.settings} Ke Setup Periode</Btn>}
         </div>
       </Card>
     );
@@ -1471,6 +1514,7 @@ function Riwayat({ session, scope, toast, refreshKey }) {
                         <span className="ml-1.5">·</span>
                         <span className="ml-1.5">{row.tx.sumber}</span>
                         {scope === 'ALL' && row.tx.dapur && <><span className="ml-1.5">·</span><span className="ml-1.5">{dapurMap[row.tx.dapur]}</span></>}
+                        <TxSourceBadge tx={row.tx}/>
                       </div>}
                     </td>
                     <td className="px-3 py-2 text-right font-medium num" style={{ color: row.debit ? COLORS.green : COLORS.muted }}>{row.debit ? fmt(row.debit) : '-'}</td>
@@ -1504,7 +1548,11 @@ function Riwayat({ session, scope, toast, refreshKey }) {
         )}
       </Card>
 
-      {editTrx && (
+      {editTrx && isLinkedTx(editTrx) && (
+        <EditRealisasiModal trx={editTrx} periode={periode} session={session} toast={toast}
+          onClose={function(){setEditTrx(null);}} onSaved={loadData}/>
+      )}
+      {editTrx && !isLinkedTx(editTrx) && (
         <EditTransaksiModal trx={editTrx} kategoriMap={kategoriMap} periode={periode}
           session={session} toast={toast}
           onClose={function(){setEditTrx(null);}}
@@ -1512,7 +1560,8 @@ function Riwayat({ session, scope, toast, refreshKey }) {
       )}
       {confirmDel && (
         <ConfirmModal title="Hapus Transaksi"
-          message={'Hapus transaksi "' + confirmDel.uraian + '" (' + fmt(confirmDel.riil) + ')? Tidak bisa dibatalkan.'}
+          message={'Hapus transaksi "' + confirmDel.uraian + '" (' + fmt(confirmDel.riil) + ')? Tidak bisa dibatalkan.' +
+            (isLinkedTx(confirmDel) ? ' Baris pengajuannya akan kembali berstatus Disetujui (belum terealisasi).' : '')}
           onConfirm={doDelete} onClose={function(){setConfirmDel(null);}} confirmLabel="Hapus" danger/>
       )}
     </div>
@@ -2072,6 +2121,7 @@ function DapurPage({ session, toast }) {
         <thead><tr style={{ color: COLORS.muted, background: COLORS.paper }} className="text-left text-xs uppercase">
           <th className="px-4 py-2.5 font-semibold">ID</th>
           <th className="px-4 py-2.5 font-semibold">Nama</th>
+          <th className="px-4 py-2.5 font-semibold">Kode</th>
           <th className="px-4 py-2.5 font-semibold">Alamat</th>
           <th className="px-4 py-2.5 font-semibold"></th>
         </tr></thead>
@@ -2079,6 +2129,7 @@ function DapurPage({ session, toast }) {
           return <tr key={d.id} style={{ borderTop: '1px solid ' + COLORS.line }}>
             <td className="px-4 py-2.5 font-mono text-xs" style={{ color: COLORS.muted }}>{d.id}</td>
             <td className="px-4 py-2.5 font-medium" style={{ color: COLORS.ink }}>{d.nama}</td>
+            <td className="px-4 py-2.5 font-mono text-xs" style={{ color: d.kode ? COLORS.ink : COLORS.danger }}>{d.kode || 'belum diisi'}</td>
             <td className="px-4 py-2.5" style={{ color: COLORS.muted }}>{d.alamat || '—'}</td>
             <td className="px-4 py-2.5">
               <div className="flex gap-1 justify-end">
@@ -2104,7 +2155,7 @@ function DapurPage({ session, toast }) {
 }
 
 function DapurForm({ mode, initial, session, toast, onClose, onSaved }) {
-  const [f, setF] = useState(initial || { nama: '', alamat: '' });
+  const [f, setF] = useState(Object.assign({ nama: '', alamat: '', kode: '' }, initial || {}));
   const [saving, setSaving] = useState(false);
 
   async function submit() {
@@ -2121,9 +2172,632 @@ function DapurForm({ mode, initial, session, toast, onClose, onSaved }) {
 
   return <Modal title={mode === 'edit' ? 'Edit dapur' : 'Tambah dapur'} onClose={onClose}>
     <Field label="Nama dapur"><input value={f.nama} onChange={function(e){setF(Object.assign({}, f, {nama:e.target.value}));}} style={inputStyle} placeholder="cth. SPPG Kebon Jeruk 01"/></Field>
+    <Field label="Kode SPPG" hint="Dipakai di nomor Berita Acara, cth. CPJ02 → BA-PA/CPJ02/2026/10/001"><input value={f.kode} onChange={function(e){setF(Object.assign({}, f, {kode:e.target.value.toUpperCase().replace(/[^A-Z0-9]/g,'')}));}} style={inputStyle} placeholder="CPJ02" maxLength={8}/></Field>
     <Field label="Alamat" hint="Opsional"><input value={f.alamat} onChange={function(e){setF(Object.assign({}, f, {alamat:e.target.value}));}} style={inputStyle}/></Field>
     <div className="flex gap-2"><Btn kind="ghost" onClick={onClose}>Batal</Btn><Btn onClick={submit} disabled={saving}>{saving ? I.spinner : I.check} Simpan</Btn></div>
   </Modal>;
+}
+
+// ============================================================
+//  v6 — PENGAJUAN ANGGARAN · PERSETUJUAN · REALISASI
+// ============================================================
+const STATUS_STYLE = {
+  DIAJUKAN:    { bg: '#FBF3E2', fg: '#9A6A0B', label: 'Menunggu' },
+  DISETUJUI:   { bg: '#E8F1EC', fg: '#15663E', label: 'Disetujui' },
+  REVISI:      { bg: '#EAF0F8', fg: '#3E6BAE', label: 'Revisi' },
+  DITOLAK:     { bg: '#F8E9E5', fg: '#B7472E', label: 'Ditolak' },
+  TEREALISASI: { bg: '#DCEBE2', fg: '#0E4429', label: 'Terealisasi' },
+  DIBATALKAN:  { bg: '#F1F0EC', fg: '#6E7B70', label: 'Dibatalkan' },
+  MENUNGGU:    { bg: '#FBF3E2', fg: '#9A6A0B', label: 'Menunggu keputusan' },
+  SELESAI:     { bg: '#E8F1EC', fg: '#15663E', label: 'Sudah diputuskan' },
+};
+function StatusBadge({ status }) {
+  const st = STATUS_STYLE[status] || { bg: COLORS.paper, fg: COLORS.muted, label: status };
+  return <span className="inline-block rounded px-1.5 py-0.5 text-[11px] font-semibold whitespace-nowrap" style={{ background: st.bg, color: st.fg }}>{st.label}</span>;
+}
+function MiniBadge({ bg, fg, children }) {
+  return <span className="inline-block rounded px-1.5 py-0.5 text-[10px] font-semibold whitespace-nowrap" style={{ background: bg, color: fg }}>{children}</span>;
+}
+function RupiahInput({ value, onChange, disabled }) {
+  return <div style={{ position: 'relative' }}>
+    <span style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)', color: COLORS.muted, fontSize: 14, pointerEvents: 'none' }}>Rp</span>
+    <input type="text" inputMode="numeric" value={fmtRupiahInput(value)} disabled={disabled}
+      onChange={function(e){ onChange(parseRupiahInput(e.target.value)); }} placeholder="0"
+      style={Object.assign({}, inputStyle, { paddingLeft: 32, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }, disabled ? { background: COLORS.paper } : {})}/>
+  </div>;
+}
+function isLinkedTx(tx) { const l = String((tx && tx.pengajuan_item_id) || ''); return !!l && l.indexOf('DARURAT') !== 0; }
+function TxSourceBadge({ tx }) {
+  const l = String(tx.pengajuan_item_id || '');
+  if (!l) return null;
+  if (l.indexOf('DARURAT') === 0) return <span className="ml-1.5" title={l}><MiniBadge bg="#F8E9E5" fg={COLORS.danger}>Tanpa pengajuan</MiniBadge></span>;
+  return <span className="ml-1.5"><MiniBadge bg="#E8F1EC" fg={COLORS.green}>Pengajuan</MiniBadge></span>;
+}
+function todayISO() { const d = new Date(); const p = n => (n < 10 ? '0' + n : '' + n); return d.getFullYear() + '-' + p(d.getMonth()+1) + '-' + p(d.getDate()); }
+
+function BuktiPicker({ bukti, setBukti, existing }) {
+  return <div>
+    <div className="rounded-lg p-3 mb-2 flex items-center gap-2"
+      style={{ border: '1.5px dashed ' + (bukti || existing ? COLORS.green : COLORS.line), background: bukti ? '#E8F1EC' : '#fff' }}>
+      <span style={{ color: bukti ? COLORS.green : COLORS.muted }}>{bukti ? I.check : I.image}</span>
+      <span className="text-sm flex-1 truncate" style={{ color: bukti ? COLORS.ink : COLORS.muted }}>
+        {bukti ? bukti.name : (existing ? 'Bukti lama tersimpan — pilih baru untuk mengganti' : 'Belum ada bukti dipilih')}
+      </span>
+      {bukti && <button onClick={function(){setBukti(null);}} title="Hapus pilihan" style={{ color: COLORS.danger }}>{I.x}</button>}
+    </div>
+    <div className="grid grid-cols-2 gap-2">
+      <label className="flex flex-col items-center justify-center gap-1 rounded-lg py-3.5 cursor-pointer text-sm font-semibold active:opacity-70"
+        style={{ border: '1.5px solid ' + COLORS.line, color: COLORS.green, background: '#fff' }}>
+        <span className="flex items-center gap-1.5">{I.image} Galeri / File</span>
+        <span className="text-[10px] font-normal" style={{ color: COLORS.muted }}>Foto tersimpan / PDF</span>
+        <input type="file" className="hidden" accept="image/*,application/pdf" onChange={function(e){ if(e.target.files[0]) setBukti(e.target.files[0]); }}/>
+      </label>
+      <label className="flex flex-col items-center justify-center gap-1 rounded-lg py-3.5 cursor-pointer text-sm font-semibold active:opacity-70"
+        style={{ border: '1.5px solid ' + COLORS.line, color: COLORS.green, background: '#fff' }}>
+        <span className="flex items-center gap-1.5">{I.camera} Kamera</span>
+        <span className="text-[10px] font-normal" style={{ color: COLORS.muted }}>Ambil foto langsung</span>
+        <input type="file" className="hidden" accept="image/*" capture="environment" onChange={function(e){ if(e.target.files[0]) setBukti(e.target.files[0]); }}/>
+      </label>
+    </div>
+  </div>;
+}
+
+// ---------- Penerima (daftar tujuan transfer) ----------
+const BANK_LIST = ['BCA','BRI','BNI','Mandiri','BSI','BJB','BTN','CIMB Niaga','Danamon','Permata','OCBC','Bank Jago','SeaBank','BPR'];
+function PenerimaForm({ initial, onClose, onSaved, toast }) {
+  const [f, setF] = useState(Object.assign({ nama: '', bank: '', no_rek: '' }, initial || {}));
+  const [saving, setSaving] = useState(false);
+  const rekChanged = initial && (initial.bank !== f.bank || initial.no_rek !== f.no_rek.replace(/[\s.-]/g, ''));
+  function set(k, v) { setF(Object.assign({}, f, { [k]: v })); }
+  async function submit() {
+    if (!f.nama.trim() || !f.bank.trim() || !f.no_rek.trim()) { toast('Nama, bank, dan nomor rekening wajib', 'error'); return; }
+    setSaving(true);
+    const res = await api('savePenerima', { id: initial ? initial.id : '', nama: f.nama.trim(), bank: f.bank.trim(), no_rek: f.no_rek.replace(/[\s.-]/g, '') });
+    setSaving(false);
+    if (res.ok) { toast(initial ? 'Penerima diperbarui' : 'Penerima ditambahkan'); onSaved(res.data); onClose(); }
+    else toast(res.error || 'Gagal menyimpan', 'error');
+  }
+  return <Modal title={initial ? 'Ubah penerima' : 'Tambah penerima baru'} onClose={onClose}>
+    <Field label="Nama penerima *" hint="Nama toko / orang / instansi tujuan transfer"><input value={f.nama} onChange={function(e){set('nama', e.target.value);}} style={inputStyle} placeholder="cth. Toko Beras Barokah"/></Field>
+    <Field label="Bank *">
+      <input value={f.bank} onChange={function(e){set('bank', e.target.value);}} list="bank-list-v6" style={inputStyle} placeholder="Pilih atau ketik nama bank"/>
+      <datalist id="bank-list-v6">{BANK_LIST.map(function(b){ return <option key={b} value={b}/>; })}</datalist>
+    </Field>
+    <Field label="Nomor rekening *" hint="Angka saja. Periksa ulang — aplikasi tidak bisa mencocokkan nama pemilik rekening.">
+      <input value={f.no_rek} onChange={function(e){set('no_rek', e.target.value.replace(/[^\d\s.-]/g, ''));}} inputMode="numeric" style={inputStyle} placeholder="1234567890"/>
+    </Field>
+    {rekChanged && <div className="text-xs rounded-lg p-2.5 mb-3" style={{ background: '#FBF3E2', color: '#9A6A0B' }}>
+      Perubahan bank/nomor rekening akan <b>ditandai ke Yayasan</b> pada pengajuan berikutnya ke penerima ini.
+    </div>}
+    <div className="flex gap-2 justify-end"><Btn kind="ghost" onClick={onClose}>Batal</Btn><Btn onClick={submit} disabled={saving}>{saving ? I.spinner : I.check} Simpan</Btn></div>
+  </Modal>;
+}
+
+function PenerimaSelect({ list, value, onChange, onListChange, toast }) {
+  const [form, setForm] = useState(null); // null | 'new' | penerima obj
+  const cur = list.find(function(p){ return p.id === value; });
+  return <div>
+    <div className="flex gap-1.5">
+      <select value={value} onChange={function(e){ onChange(e.target.value); }} style={Object.assign({}, inputStyle, { flex: 1, minWidth: 0 })}>
+        <option value="">Pilih penerima…</option>
+        {list.map(function(p){ return <option key={p.id} value={p.id}>{p.nama} — {p.bank} {p.no_rek}</option>; })}
+      </select>
+      <button type="button" onClick={function(){ setForm('new'); }} title="Tambah penerima baru"
+        className="rounded-lg px-2.5 shrink-0" style={{ border: '1px solid ' + COLORS.line, color: COLORS.green }}>{I.plusSm}</button>
+      {cur && <button type="button" onClick={function(){ setForm(cur); }} title="Ubah data penerima"
+        className="rounded-lg px-2.5 shrink-0" style={{ border: '1px solid ' + COLORS.line, color: COLORS.blue }}>{I.edit}</button>}
+    </div>
+    {form && <PenerimaForm initial={form === 'new' ? null : form} toast={toast} onClose={function(){ setForm(null); }}
+      onSaved={function(saved){ onListChange(saved); onChange(saved.id); }}/>}
+  </div>;
+}
+
+function usePenerimaList() {
+  const [list, setList] = useState([]);
+  const reload = useCallback(function() { api('getPenerima').then(function(r){ if (r.ok) setList(r.data); }); }, []);
+  useEffect(reload, []);
+  function upsert(saved) {
+    setList(function(l) {
+      const other = l.filter(function(p){ return p.id !== saved.id; });
+      return other.concat([Object.assign({ aktif: true }, saved)]).sort(function(a,b){ return a.nama.localeCompare(b.nama); });
+    });
+  }
+  return [list, upsert, reload];
+}
+
+// ---------- Baris pengajuan (form) ----------
+function emptyRow() { return { key: Math.random().toString(36).slice(2), jenis: '', kategori: '', uraian: '', nominal: '', penerima_id: '', susulan: false }; }
+function rowError(r) {
+  if (!r.jenis) return 'jenis'; if (!r.kategori) return 'kategori'; if (!String(r.uraian).trim()) return 'uraian';
+  if (!(Number(r.nominal) > 0)) return 'nominal'; if (!r.penerima_id) return 'penerima'; return null;
+}
+function ItemFields({ row, onChange, kategoriMap, penerima, upsertPenerima, toast }) {
+  function set(k, v) { const n = Object.assign({}, row, { [k]: v }); if (k === 'jenis') n.kategori = (kategoriMap[v] || []).length === 1 ? kategoriMap[v][0] : ''; onChange(n); }
+  return <div className="grid sm:grid-cols-2 gap-x-3">
+    <Field label="Jenis *">
+      <select value={row.jenis} onChange={function(e){ set('jenis', e.target.value); }} style={inputStyle}>
+        <option value="">Pilih jenis…</option>
+        {Object.keys(kategoriMap).map(function(j){ return <option key={j} value={j}>{j}</option>; })}
+      </select>
+    </Field>
+    <Field label="Kategori *">
+      <select value={row.kategori} onChange={function(e){ set('kategori', e.target.value); }} style={inputStyle} disabled={!row.jenis}>
+        <option value="">{row.jenis ? 'Pilih kategori…' : 'Pilih jenis dulu'}</option>
+        {(kategoriMap[row.jenis] || []).map(function(k){ return <option key={k} value={k}>{k}</option>; })}
+      </select>
+    </Field>
+    <Field label="Uraian *"><input value={row.uraian} onChange={function(e){ set('uraian', e.target.value); }} style={inputStyle} placeholder="cth. Beras 50 kg"/></Field>
+    <Field label="Nominal *"><RupiahInput value={row.nominal} onChange={function(v){ set('nominal', v); }}/></Field>
+    <div className="sm:col-span-2">
+      <Field label="Ditransfer ke *" hint="Bank & nomor rekening terisi otomatis dari daftar penerima">
+        <PenerimaSelect list={penerima} value={row.penerima_id} onChange={function(v){ set('penerima_id', v); }} onListChange={upsertPenerima} toast={toast}/>
+      </Field>
+    </div>
+    <label className="sm:col-span-2 flex items-start gap-2 text-sm mb-2 cursor-pointer" style={{ color: COLORS.ink }}>
+      <input type="checkbox" checked={!!row.susulan} onChange={function(e){ set('susulan', e.target.checked); }} style={{ marginTop: 3 }}/>
+      <span><b>Susulan</b> — barang/jasa sudah dibeli sebelum pengajuan ini <span style={{ color: COLORS.muted }}>(akan ditandai ke Yayasan)</span></span>
+    </label>
+  </div>;
+}
+
+function PengajuanForm({ kategoriMap, penerima, upsertPenerima, toast, onCreated, onCancel }) {
+  const [rows, setRows] = useState([emptyRow()]);
+  const [saving, setSaving] = useState(false);
+  const [confirm, setConfirm] = useState(false);
+  const total = rows.reduce(function(s, r){ return s + (Number(r.nominal) || 0); }, 0);
+  const firstErr = rows.map(rowError).findIndex(function(e){ return !!e; });
+  function update(i, n) { setRows(rows.map(function(r, j){ return j === i ? n : r; })); }
+  async function submit() {
+    setSaving(true);
+    const items = rows.map(function(r){ return { jenis: r.jenis, kategori: r.kategori, uraian: r.uraian.trim(), nominal: Number(r.nominal), penerima_id: r.penerima_id, susulan: !!r.susulan }; });
+    const res = await apiPost('createPengajuan', { items: items });
+    setSaving(false); setConfirm(false);
+    if (res.ok) { toast('Pengajuan ' + res.data.nomor + ' terkirim ke Yayasan'); onCreated(); }
+    else toast(res.error || 'Gagal mengirim', 'error');
+  }
+  return <Card className="mb-3">
+    <div className="flex items-start justify-between gap-2 mb-3">
+      <div>
+        <Eyebrow>Pengajuan baru · {fmtDDMMYYYY(todayISO())}</Eyebrow>
+        <div className="text-sm" style={{ color: COLORS.muted }}>Semua baris dibayar dari VA. Nomor Berita Acara dibuat otomatis saat dikirim.</div>
+      </div>
+      <button onClick={onCancel} style={{ color: COLORS.muted }}>{I.x}</button>
+    </div>
+    {rows.map(function(r, i){
+      return <div key={r.key} className="rounded-lg p-3 mb-3" style={{ border: '1px solid ' + COLORS.line, background: '#FCFBF8' }}>
+        <div className="flex items-center justify-between mb-2">
+          <div className="text-sm font-bold" style={{ color: COLORS.ink }}>Baris {i + 1}</div>
+          {rows.length > 1 && <button onClick={function(){ setRows(rows.filter(function(_, j){ return j !== i; })); }}
+            className="text-xs inline-flex items-center gap-1" style={{ color: COLORS.danger }}>{I.trash} Hapus baris</button>}
+        </div>
+        <ItemFields row={r} onChange={function(n){ update(i, n); }} kategoriMap={kategoriMap} penerima={penerima} upsertPenerima={upsertPenerima} toast={toast}/>
+      </div>;
+    })}
+    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+      <Btn kind="ghost" onClick={function(){ setRows(rows.concat([emptyRow()])); }}>{I.plusSm} Tambah baris</Btn>
+      <div className="text-right">
+        <div className="text-xs" style={{ color: COLORS.muted }}>Total {rows.length} baris</div>
+        <div className="text-lg font-bold num" style={{ color: COLORS.ink }}>{fmt(total)}</div>
+      </div>
+    </div>
+    {firstErr >= 0 && <div className="text-xs mt-2" style={{ color: COLORS.danger }}>• Baris {firstErr + 1}: {rowError(rows[firstErr])} belum diisi</div>}
+    <div className="mt-3"><Btn full disabled={firstErr >= 0 || saving} onClick={function(){ setConfirm(true); }}>{I.arrowR} Kirim ke Yayasan</Btn></div>
+    {confirm && <ConfirmModal title="Kirim pengajuan?" confirmLabel={saving ? 'Mengirim…' : 'Kirim'}
+      message={'Mengirim ' + rows.length + ' baris senilai ' + fmt(total) + ' ke Yayasan. Setelah dikirim, baris hanya bisa diedit sampai Yayasan memutuskan.'}
+      onConfirm={function(){ if (!saving) submit(); }} onClose={function(){ setConfirm(false); }}/>}
+  </Card>;
+}
+
+function ItemEditModal({ item, kategoriMap, penerima, upsertPenerima, toast, onClose, onSaved }) {
+  const [row, setRow] = useState({ jenis: item.jenis, kategori: item.kategori, uraian: item.uraian, nominal: String(item.nominal), penerima_id: item.penerima_id, susulan: item.susulan });
+  const [saving, setSaving] = useState(false);
+  const err = rowError(row);
+  const revisi = item.status === 'REVISI';
+  async function submit() {
+    setSaving(true);
+    const res = await api('updatePengajuanItem', { item_id: item.id, jenis: row.jenis, kategori: row.kategori, uraian: row.uraian.trim(),
+      nominal: row.nominal, penerima_id: row.penerima_id, susulan: row.susulan ? 'true' : 'false' });
+    setSaving(false);
+    if (res.ok) { toast(revisi ? 'Baris diajukan ulang' : 'Baris diperbarui'); onSaved(); onClose(); }
+    else toast(res.error || 'Gagal menyimpan', 'error');
+  }
+  return <Modal title={(revisi ? 'Perbaiki & ajukan ulang' : 'Edit baris') + ' · #' + item.urut} size="lg" onClose={onClose}>
+    {revisi && item.catatan && <div className="text-sm rounded-lg p-2.5 mb-3" style={{ background: '#EAF0F8', color: COLORS.blue }}>Catatan Yayasan: {item.catatan}</div>}
+    <ItemFields row={row} onChange={setRow} kategoriMap={kategoriMap} penerima={penerima} upsertPenerima={upsertPenerima} toast={toast}/>
+    <div className="flex gap-2 justify-end"><Btn kind="ghost" onClick={onClose}>Batal</Btn>
+      <Btn onClick={submit} disabled={!!err || saving}>{saving ? I.spinner : I.check} {revisi ? 'Ajukan ulang' : 'Simpan'}</Btn></div>
+  </Modal>;
+}
+
+function BatalModal({ item, toast, onClose, onSaved }) {
+  const [alasan, setAlasan] = useState('');
+  const [saving, setSaving] = useState(false);
+  async function submit() {
+    setSaving(true);
+    const res = await api('batalkanItem', { item_id: item.id, alasan: alasan });
+    setSaving(false);
+    if (res.ok) { toast('Baris dibatalkan'); onSaved(); onClose(); } else toast(res.error || 'Gagal', 'error');
+  }
+  return <Modal title={'Batalkan baris #' + item.urut} onClose={onClose}>
+    <p className="text-sm mb-3" style={{ color: COLORS.ink }}>{item.uraian} · <b>{fmt(item.nominal)}</b>
+      {item.status === 'DISETUJUI' && <span style={{ color: COLORS.muted }}> — sudah disetujui; membatalkan akan mengembalikan jumlah ini ke VA tersedia.</span>}</p>
+    <Field label="Alasan" hint="Opsional, tercatat di riwayat"><input value={alasan} onChange={function(e){ setAlasan(e.target.value); }} style={inputStyle} placeholder="cth. tidak jadi dibeli"/></Field>
+    <div className="flex gap-2 justify-end"><Btn kind="ghost" onClick={onClose}>Kembali</Btn><Btn kind="danger" onClick={submit} disabled={saving}>{saving ? I.spinner : I.trash} Batalkan baris</Btn></div>
+  </Modal>;
+}
+
+function pendingSt(it) { return it.status === 'DIAJUKAN' || it.status === 'REVISI'; }
+function ItemFlags({ it }) {
+  return <>
+    {it.susulan && <MiniBadge bg="#FBF3E2" fg="#9A6A0B">Susulan · sudah dibeli</MiniBadge>}
+    {pendingSt(it) && it.penerima_baru && <MiniBadge bg="#EAF0F8" fg={COLORS.blue}>Penerima baru</MiniBadge>}
+    {pendingSt(it) && it.rek_berubah && <MiniBadge bg="#F8E9E5" fg={COLORS.danger}>Rekening berubah</MiniBadge>}
+  </>;
+}
+
+function ItemRow({ it, actions, children }) {
+  return <div className="px-3 sm:px-4 py-3" style={{ borderTop: '1px solid ' + COLORS.line }}>
+    <div className="flex items-start justify-between gap-3">
+      <div className="min-w-0 flex-1">
+        <div className="text-sm font-semibold" style={{ color: COLORS.ink }}>
+          <span style={{ color: COLORS.muted }}>#{it.urut}</span> {it.uraian}
+        </div>
+        <div className="text-[11px] mt-0.5" style={{ color: COLORS.muted }}>{it.jenis} · {it.kategori}</div>
+        <div className="text-xs mt-1" style={{ color: COLORS.ink }}>→ <b>{it.penerima_nama}</b> <span style={{ color: COLORS.muted }}>· {it.bank} {it.no_rek}</span></div>
+        <div className="flex flex-wrap gap-1 mt-1.5"><StatusBadge status={it.status}/><ItemFlags it={it}/>{it.putaran > 1 && <MiniBadge bg={COLORS.paper} fg={COLORS.muted}>Putaran {it.putaran}</MiniBadge>}</div>
+        {pendingSt(it) && it.rek_berubah && <div className="text-[11px] mt-1.5 rounded p-1.5" style={{ background: '#F8E9E5', color: COLORS.danger }}>
+          Rekening berbeda dari pembayaran terakhir yang disetujui: {it.rek_berubah.dari} → <b>{it.rek_berubah.ke}</b></div>}
+        {it.catatan && (it.status === 'REVISI' || it.status === 'DITOLAK' || it.status === 'DIBATALKAN') &&
+          <div className="text-[11px] mt-1.5" style={{ color: it.status === 'DIBATALKAN' ? COLORS.muted : (it.status === 'REVISI' ? COLORS.blue : COLORS.danger) }}>Catatan: {it.catatan}</div>}
+      </div>
+      <div className="text-right shrink-0">
+        <div className="text-sm font-bold num" style={{ color: COLORS.ink }}>{fmt(it.nominal)}</div>
+        {actions && <div className="flex gap-1 justify-end mt-1.5 flex-wrap">{actions}</div>}
+      </div>
+    </div>
+    {children}
+  </div>;
+}
+
+function VACard({ va }) {
+  if (!va) return null;
+  return <Card className="mb-3">
+    <div className="grid grid-cols-3 gap-2">
+      <div><div className="text-[11px] leading-tight" style={{ color: COLORS.muted }}>Sisa VA</div><div className="font-bold num text-sm sm:text-base" style={{ color: COLORS.ink }}>{fmt(va.sisaVA)}</div></div>
+      <div><div className="text-[11px] leading-tight" style={{ color: COLORS.muted }}>Disetujui, belum realisasi</div><div className="font-bold num text-sm sm:text-base" style={{ color: COLORS.green }}>{fmt(va.komitmen)}</div></div>
+      <div><div className="text-[11px] leading-tight" style={{ color: COLORS.muted }}>VA tersedia</div><div className="font-bold num text-sm sm:text-base" style={{ color: va.tersedia < 0 ? COLORS.danger : COLORS.blue }}>{fmt(va.tersedia)}</div></div>
+    </div>
+  </Card>;
+}
+
+function PengajuanPage({ session, scope, dapurList, toast }) {
+  const role = session.user.role;
+  const isAkuntan = role === 'akuntan';
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [kategoriMap, setKategoriMap] = useState({});
+  const [showForm, setShowForm] = useState(false);
+  const [editItem, setEditItem] = useState(null);
+  const [batalItem, setBatalItem] = useState(null);
+  const [penerima, upsertPenerima] = usePenerimaList();
+  const dapurMap = useMemo(function(){ const m = {}; (dapurList || []).forEach(function(d){ m[d.id] = d.nama; }); return m; }, [dapurList]);
+
+  const load = useCallback(async function() {
+    setLoading(true);
+    const res = await api('getPengajuan', { scope: scope || 'ALL' });
+    setLoading(false);
+    if (res.ok) setData(res.data); else toast(res.error || 'Gagal memuat pengajuan', 'error');
+  }, [scope]);
+  useEffect(function(){ load(); api('getKategori').then(function(r){ if (r.ok) setKategoriMap(r.data); }); }, [load]);
+
+  if (loading && !data) return <Card><div className="flex items-center gap-2 text-sm" style={{ color: COLORS.muted }}>{I.spinner} Memuat…</div></Card>;
+  if (!data) return <Card>Tidak ada data.</Card>;
+  const vaKeys = Object.keys(data.va || {});
+  const noPeriode = vaKeys.length === 0;
+
+  return <div>
+    {isAkuntan && vaKeys.length === 1 && <VACard va={data.va[vaKeys[0]]}/>}
+    {noPeriode && <Card className="mb-3"><div className="text-sm" style={{ color: COLORS.danger }}>Belum ada periode aktif. {isAkuntan && 'Buat periode di menu Setup dulu.'}</div></Card>}
+
+    {isAkuntan && !noPeriode && (showForm
+      ? <PengajuanForm kategoriMap={kategoriMap} penerima={penerima} upsertPenerima={upsertPenerima} toast={toast}
+          onCreated={function(){ setShowForm(false); load(); }} onCancel={function(){ setShowForm(false); }}/>
+      : <div className="mb-3"><Btn full onClick={function(){ setShowForm(true); }}>{I.plusSm} Buat pengajuan hari ini</Btn></div>)}
+
+    {data.pengajuan.length === 0 ? (
+      <Card><div className="text-sm text-center py-4" style={{ color: COLORS.muted }}>Belum ada pengajuan di periode aktif.</div></Card>
+    ) : data.pengajuan.map(function(h){
+      return <Card key={h.id} pad={false} className="mb-3">
+        <div className="p-3 sm:p-4 flex flex-col sm:flex-row sm:items-start justify-between gap-2" style={{ background: COLORS.paper, borderRadius: '12px 12px 0 0' }}>
+          <div className="min-w-0">
+            <div className="font-mono text-xs font-semibold break-all" style={{ color: COLORS.ink }}>{h.nomor}</div>
+            <div className="text-xs mt-0.5" style={{ color: COLORS.muted }}>
+              {fmtDDMMYYYY(h.tanggal)} · oleh {h.created_by_nama}{scope === 'ALL' && dapurMap[h.dapur] ? ' · ' + dapurMap[h.dapur] : ''}
+              {h.decided_by_nama ? ' · diputuskan ' + h.decided_by_nama : ''}
+            </div>
+          </div>
+          <div className="sm:text-right shrink-0">
+            <StatusBadge status={h.status}/>
+            <div className="text-xs mt-1 num" style={{ color: COLORS.muted }}>Diajukan {fmt(h.total_diajukan)} · <span style={{ color: COLORS.green }}>Disetujui {fmt(h.total_disetujui)}</span></div>
+          </div>
+        </div>
+        {h.items.map(function(it){
+          let actions = null;
+          if (isAkuntan) {
+            const btn = function(label, color, onClick) { return <button key={label} onClick={onClick} className="text-[11px] font-semibold rounded px-2 py-1" style={{ color: color, border: '1px solid ' + COLORS.line }}>{label}</button>; };
+            const a = [];
+            if (it.status === 'REVISI') a.push(btn('Perbaiki', COLORS.blue, function(){ setEditItem(it); }));
+            if (it.status === 'DIAJUKAN') a.push(btn('Edit', COLORS.blue, function(){ setEditItem(it); }));
+            if (['DIAJUKAN','REVISI','DISETUJUI'].indexOf(it.status) >= 0) a.push(btn('Batalkan', COLORS.danger, function(){ setBatalItem(it); }));
+            actions = a.length ? a : null;
+          }
+          return <ItemRow key={it.id} it={it} actions={actions}/>;
+        })}
+      </Card>;
+    })}
+
+    {editItem && <ItemEditModal item={editItem} kategoriMap={kategoriMap} penerima={penerima} upsertPenerima={upsertPenerima}
+      toast={toast} onClose={function(){ setEditItem(null); }} onSaved={load}/>}
+    {batalItem && <BatalModal item={batalItem} toast={toast} onClose={function(){ setBatalItem(null); }} onSaved={load}/>}
+  </div>;
+}
+
+// ---------- Persetujuan (Yayasan) ----------
+function DecisionButtons({ value, onChange }) {
+  const opts = [['DISETUJUI','Setuju',COLORS.green],['REVISI','Revisi',COLORS.blue],['DITOLAK','Tolak',COLORS.danger]];
+  return <div className="grid grid-cols-3 gap-1.5">
+    {opts.map(function(o){
+      const on = value === o[0];
+      return <button key={o[0]} onClick={function(){ onChange(o[0]); }} className="rounded-lg py-2 text-xs font-semibold"
+        style={{ border: '1.5px solid ' + (on ? o[2] : COLORS.line), background: on ? o[2] : '#fff', color: on ? '#fff' : o[2] }}>{o[1]}</button>;
+    })}
+  </div>;
+}
+
+function PersetujuanCard({ h, va, dapurNama, toast, onDone }) {
+  const pending = h.items.filter(function(i){ return i.status === 'DIAJUKAN'; });
+  const [dec, setDec] = useState({});
+  const [saving, setSaving] = useState(false);
+  const [confirm, setConfirm] = useState(false);
+  function setD(id, patch) { setDec(function(d){ return Object.assign({}, d, { [id]: Object.assign({}, d[id] || {}, patch) }); }); }
+  const totalSetuju = pending.reduce(function(s, i){ return s + ((dec[i.id] || {}).status === 'DISETUJUI' ? i.nominal : 0); }, 0);
+  const missing = pending.filter(function(i){ const d = dec[i.id]; return !d || !d.status || ((d.status === 'REVISI' || d.status === 'DITOLAK') && !String(d.catatan || '').trim()); });
+  const over = va && totalSetuju > va.tersedia;
+  const count = function(st){ return pending.filter(function(i){ return (dec[i.id] || {}).status === st; }).length; };
+
+  async function submit() {
+    setSaving(true);
+    const keputusan = pending.map(function(i){ return { item_id: i.id, status: dec[i.id].status, catatan: dec[i.id].catatan || '' }; });
+    const res = await apiPost('decidePengajuan', { pengajuan_id: h.id, keputusan: keputusan });
+    setSaving(false); setConfirm(false);
+    if (res.ok) { toast('Keputusan ' + h.nomor + ' tersimpan'); onDone(); } else toast(res.error || 'Gagal menyimpan', 'error');
+  }
+
+  return <Card pad={false} className="mb-3">
+    <div className="p-3 sm:p-4 flex flex-col sm:flex-row sm:items-start justify-between gap-2" style={{ background: COLORS.paper, borderRadius: '12px 12px 0 0' }}>
+      <div className="min-w-0">
+        <div className="text-sm font-bold" style={{ color: COLORS.ink }}>{dapurNama}</div>
+        <div className="font-mono text-xs break-all" style={{ color: COLORS.ink }}>{h.nomor}</div>
+        <div className="text-xs" style={{ color: COLORS.muted }}>{fmtDDMMYYYY(h.tanggal)} · oleh {h.created_by_nama} · {pending.length} baris menunggu</div>
+      </div>
+      {pending.length > 1 && <Btn size="sm" kind="ghost" onClick={function(){ const d = {}; pending.forEach(function(i){ d[i.id] = Object.assign({}, dec[i.id] || {}, { status: 'DISETUJUI' }); }); setDec(d); }}>{I.check} Setujui semua</Btn>}
+    </div>
+    {h.items.map(function(it){
+      if (it.status !== 'DIAJUKAN') return <ItemRow key={it.id} it={it}/>;
+      const d = dec[it.id] || {};
+      const needNote = d.status === 'REVISI' || d.status === 'DITOLAK';
+      return <ItemRow key={it.id} it={it}>
+        <div className="mt-2.5">
+          <DecisionButtons value={d.status} onChange={function(v){ setD(it.id, { status: v }); }}/>
+          {needNote && <input value={d.catatan || ''} onChange={function(e){ setD(it.id, { catatan: e.target.value }); }}
+            placeholder={d.status === 'REVISI' ? 'Catatan revisi (wajib) — apa yang harus diperbaiki?' : 'Alasan ditolak (wajib)'}
+            style={Object.assign({}, inputStyle, { marginTop: 8, fontSize: 13, borderColor: String(d.catatan || '').trim() ? COLORS.line : COLORS.danger })}/>}
+        </div>
+      </ItemRow>;
+    })}
+    <div className="p-3 sm:p-4" style={{ borderTop: '1px solid ' + COLORS.line }}>
+      <div className="flex justify-between text-sm mb-1"><span style={{ color: COLORS.muted }}>Total disetujui</span><b className="num" style={{ color: over ? COLORS.danger : COLORS.green }}>{fmt(totalSetuju)}</b></div>
+      {va && <div className="flex justify-between text-xs mb-3"><span style={{ color: COLORS.muted }}>VA tersedia {dapurNama}</span><span className="num" style={{ color: COLORS.ink }}>{fmt(va.tersedia)}</span></div>}
+      {over && <div className="text-xs rounded-lg p-2 mb-2" style={{ background: '#F8E9E5', color: COLORS.danger }}>Total disetujui melebihi VA tersedia. Kurangi baris yang disetujui.</div>}
+      {missing.length > 0 && <div className="text-xs mb-2" style={{ color: COLORS.muted }}>{missing.length} baris belum diputuskan / catatan belum diisi</div>}
+      <Btn full disabled={missing.length > 0 || over || saving} onClick={function(){ setConfirm(true); }}>{I.check} Kirim keputusan</Btn>
+    </div>
+    {confirm && <ConfirmModal title={'Kirim keputusan ' + h.nomor + '?'} confirmLabel={saving ? 'Menyimpan…' : 'Kirim'}
+      message={count('DISETUJUI') + ' disetujui (' + fmt(totalSetuju) + '), ' + count('REVISI') + ' revisi, ' + count('DITOLAK') + ' ditolak. Keputusan tidak bisa diubah setelah dikirim.'}
+      onConfirm={function(){ if (!saving) submit(); }} onClose={function(){ setConfirm(false); }}/>}
+  </Card>;
+}
+
+function PersetujuanPage({ session, scope, dapurList, toast }) {
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [tab, setTab] = useState('menunggu');
+  const dapurMap = useMemo(function(){ const m = {}; (dapurList || []).forEach(function(d){ m[d.id] = d.nama; }); return m; }, [dapurList]);
+  const load = useCallback(async function() {
+    setLoading(true);
+    const res = await api('getPengajuan', { scope: scope || 'ALL', filter: tab === 'menunggu' ? 'menunggu' : '' });
+    setLoading(false);
+    if (res.ok) setData(res.data); else toast(res.error || 'Gagal memuat', 'error');
+  }, [scope, tab]);
+  useEffect(function(){ load(); }, [load]);
+
+  return <div>
+    <div className="flex gap-2 mb-3">
+      {[['menunggu','Menunggu keputusan'],['semua','Semua pengajuan']].map(function(t){
+        const on = tab === t[0];
+        return <button key={t[0]} onClick={function(){ setTab(t[0]); }} className="flex-1 sm:flex-none rounded-lg px-4 py-2 text-sm font-semibold"
+          style={{ background: on ? COLORS.green : '#fff', color: on ? '#fff' : COLORS.ink, border: '1px solid ' + (on ? COLORS.green : COLORS.line) }}>{t[1]}</button>;
+      })}
+      <Btn kind="ghost" onClick={load}>{loading ? I.spinner : 'Muat ulang'}</Btn>
+    </div>
+    {loading && !data ? <Card>{I.spinner}</Card> : !data ? <Card>Tidak ada data.</Card> :
+      data.pengajuan.length === 0 ? <Card><div className="text-sm text-center py-6" style={{ color: COLORS.muted }}>
+        {tab === 'menunggu' ? 'Tidak ada pengajuan yang menunggu keputusan.' : 'Belum ada pengajuan di periode aktif.'}</div></Card> :
+      data.pengajuan.map(function(h){
+        if (h.status === 'MENUNGGU') return <PersetujuanCard key={h.id + '-' + h.items.length} h={h} va={data.va[h.dapur]} dapurNama={dapurMap[h.dapur] || h.dapur} toast={toast} onDone={load}/>;
+        return <Card key={h.id} pad={false} className="mb-3">
+          <div className="p-3 sm:p-4 flex justify-between gap-2" style={{ background: COLORS.paper, borderRadius: '12px 12px 0 0' }}>
+            <div className="min-w-0"><div className="text-sm font-bold" style={{ color: COLORS.ink }}>{dapurMap[h.dapur] || h.dapur}</div>
+              <div className="font-mono text-xs break-all">{h.nomor}</div>
+              <div className="text-xs" style={{ color: COLORS.muted }}>{fmtDDMMYYYY(h.tanggal)} · disetujui {fmt(h.total_disetujui)}</div></div>
+            <StatusBadge status={h.status}/>
+          </div>
+          {h.items.map(function(it){ return <ItemRow key={it.id} it={it}/>; })}
+        </Card>;
+      })}
+  </div>;
+}
+
+// ---------- Realisasi (akuntan) ----------
+function RealisasiForm({ item, periode, toast, onClose, onSaved }) {
+  const isOps = item.jenis === 'Operasional';
+  const today = todayISO();
+  const [f, setF] = useState({ tanggal: periode && today >= periode.tanggal_mulai && today <= periode.tanggal_akhir ? today : (periode ? periode.tanggal_mulai : today), no_bukti: '', riil: isOps ? '' : String(item.nominal) });
+  const [bukti, setBukti] = useState(null);
+  const [saving, setSaving] = useState(false);
+  const outRange = periode && (f.tanggal < periode.tanggal_mulai || f.tanggal > periode.tanggal_akhir);
+  const err = !f.tanggal ? 'Tanggal wajib' : outRange ? 'Tanggal di luar periode' : !f.no_bukti.trim() ? 'No bukti wajib' :
+    (isOps && !(Number(f.riil) > 0)) ? 'Realisasi aktual wajib' : !bukti ? 'Bukti transfer wajib diunggah' : null;
+  async function submit() {
+    setSaving(true);
+    const b64 = await fileToBase64(bukti);
+    const up = await apiUpload('uploadBukti', { fileData: b64, fileName: buktiFileName(bukti, f.tanggal, f.no_bukti), mimeType: bukti.type });
+    if (!up.ok) { setSaving(false); toast('Gagal upload bukti: ' + up.error, 'error'); return; }
+    const res = await api('realisasiItem', { item_id: item.id, tanggal: f.tanggal, no_bukti: f.no_bukti.trim(), riil: isOps ? f.riil : item.nominal, bukti_url: up.data.url });
+    setSaving(false);
+    if (res.ok) { toast('Realisasi tersimpan'); onSaved(); onClose(); } else toast(res.error || 'Gagal menyimpan', 'error');
+  }
+  return <Modal title={'Realisasi #' + item.urut + ' · ' + item.uraian} size="lg" onClose={onClose}>
+    <div className="rounded-lg p-3 mb-3 text-sm" style={{ background: COLORS.paper }}>
+      <div className="font-mono text-[11px]" style={{ color: COLORS.muted }}>{item.nomor}</div>
+      <div style={{ color: COLORS.ink }}>{item.jenis} · {item.kategori}</div>
+      <div style={{ color: COLORS.ink }}>→ <b>{item.penerima_nama}</b> · {item.bank} {item.no_rek}</div>
+      <div className="mt-1">Nominal disetujui: <b className="num">{fmt(item.nominal)}</b></div>
+    </div>
+    <div className="grid sm:grid-cols-2 gap-x-4">
+      <Field label="Tanggal transfer *" hint={outRange ? '⚠️ Di luar periode' : null} hintColor={COLORS.danger}>
+        <input type="date" value={f.tanggal} min={periode && periode.tanggal_mulai} max={periode && periode.tanggal_akhir}
+          onChange={function(e){ setF(Object.assign({}, f, { tanggal: e.target.value })); }} style={inputStyle}/>
+      </Field>
+      <Field label="No Bukti *" hint="Juga dipakai sebagai nama file bukti">
+        <input value={f.no_bukti} onChange={function(e){ setF(Object.assign({}, f, { no_bukti: e.target.value })); }} style={inputStyle} placeholder="NB-001"/>
+      </Field>
+      {isOps ? <>
+        <Field label="Realisasi Anggaran" hint="Terkunci = nominal disetujui"><RupiahInput value={String(item.nominal)} onChange={function(){}} disabled/></Field>
+        <Field label="Realisasi Aktual *" hint="Yang benar-benar ditransfer"><RupiahInput value={f.riil} onChange={function(v){ setF(Object.assign({}, f, { riil: v })); }}/></Field>
+      </> : <Field label="Nominal" hint="Terkunci = nominal disetujui"><RupiahInput value={String(item.nominal)} onChange={function(){}} disabled/></Field>}
+    </div>
+    <Field label="Bukti transfer *" hint="Nama file otomatis: {Tanggal}_{No Bukti}"><BuktiPicker bukti={bukti} setBukti={setBukti}/></Field>
+    {err && <div className="text-xs mb-2" style={{ color: COLORS.danger }}>• {err}</div>}
+    <Btn full disabled={!!err || saving} onClick={submit}>{saving ? I.spinner : I.check} {saving ? 'Menyimpan…' : 'Simpan realisasi'}</Btn>
+  </Modal>;
+}
+
+function RealisasiPage({ session, toast, onSaved }) {
+  const [items, setItems] = useState([]);
+  const [periode, setPeriode] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [sel, setSel] = useState(null);
+  const load = useCallback(async function() {
+    setLoading(true);
+    const [r, p] = await Promise.all([api('getRealisasiList'), api('getActivePeriode', { dapur: session.user.dapur })]);
+    setLoading(false);
+    if (r.ok) setItems(r.data); else toast(r.error || 'Gagal memuat', 'error');
+    if (p.ok) setPeriode(p.data);
+  }, []);
+  useEffect(function(){ load(); }, [load]);
+  const total = items.reduce(function(s, i){ return s + i.nominal; }, 0);
+  if (loading) return <Card><div className="flex items-center gap-2 text-sm" style={{ color: COLORS.muted }}>{I.spinner} Memuat…</div></Card>;
+  return <div>
+    <Card className="mb-3">
+      <Eyebrow>Siap direalisasikan</Eyebrow>
+      <div className="text-sm" style={{ color: COLORS.muted }}>Baris yang sudah disetujui Yayasan. Pilih satu, isi tanggal transfer dan unggah bukti.</div>
+      <div className="text-lg font-bold num mt-1" style={{ color: COLORS.ink }}>{items.length} baris · {fmt(total)}</div>
+    </Card>
+    {items.length === 0 ? <Card><div className="text-sm text-center py-6" style={{ color: COLORS.muted }}>Tidak ada baris yang menunggu realisasi.</div></Card> :
+      <Card pad={false}>
+        {items.map(function(it, idx){
+          return <button key={it.id} onClick={function(){ setSel(it); }} className="w-full text-left block hover:bg-gray-50"
+            style={{ borderTop: idx ? '1px solid ' + COLORS.line : 'none' }}>
+            <div className="px-3 sm:px-4 py-3 flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <div className="text-sm font-semibold" style={{ color: COLORS.ink }}>{it.uraian}</div>
+                <div className="text-[11px]" style={{ color: COLORS.muted }}>{it.jenis} · {it.kategori} · <span className="font-mono">{it.nomor}</span></div>
+                <div className="text-xs mt-0.5" style={{ color: COLORS.ink }}>→ {it.penerima_nama} <span style={{ color: COLORS.muted }}>· {it.bank} {it.no_rek}</span></div>
+              </div>
+              <div className="text-right shrink-0"><div className="text-sm font-bold num">{fmt(it.nominal)}</div>
+                <div className="text-[11px] font-semibold mt-1 inline-flex items-center gap-1" style={{ color: COLORS.green }}>Realisasi {I.arrowR}</div></div>
+            </div>
+          </button>;
+        })}
+      </Card>}
+    {sel && <RealisasiForm item={sel} periode={periode} toast={toast} onClose={function(){ setSel(null); }} onSaved={function(){ load(); onSaved && onSaved(); }}/>}
+  </div>;
+}
+
+// Edit transaksi hasil realisasi (field pengajuan terkunci)
+function EditRealisasiModal({ trx, periode, session, toast, onClose, onSaved }) {
+  const isOps = trx.jenis === 'Operasional';
+  const [f, setF] = useState({ tanggal: trx.tanggal, no_bukti: trx.no_bukti || '', riil: String(trx.riil || '') });
+  const [bukti, setBukti] = useState(null);
+  const [saving, setSaving] = useState(false);
+  const err = !f.tanggal ? 'Tanggal wajib' : !f.no_bukti.trim() ? 'No bukti wajib' : (isOps && !(Number(f.riil) > 0)) ? 'Realisasi aktual wajib' : null;
+  async function submit() {
+    setSaving(true);
+    let bukti_url = '';
+    if (bukti) {
+      const up = await apiUpload('uploadBukti', { fileData: await fileToBase64(bukti), fileName: buktiFileName(bukti, f.tanggal, f.no_bukti), mimeType: bukti.type });
+      if (!up.ok) { setSaving(false); toast('Gagal upload bukti: ' + up.error, 'error'); return; }
+      bukti_url = up.data.url;
+    }
+    const payload = { role: session.user.role, user_id: session.user.id, dapur: session.user.dapur, id: trx.id, tanggal: f.tanggal, no_bukti: f.no_bukti.trim() };
+    if (isOps) payload.riil = f.riil;
+    if (bukti_url) payload.bukti_url = bukti_url;
+    const res = await api('updateTransaksi', payload);
+    setSaving(false);
+    if (res.ok) { toast('Transaksi diupdate'); onSaved(); onClose(); } else toast(res.error || 'Gagal update', 'error');
+  }
+  return <Modal title={'Edit realisasi · ' + (trx.no_bukti || '')} size="lg" onClose={onClose}>
+    <div className="rounded-lg p-3 mb-3 text-sm" style={{ background: COLORS.paper }}>
+      <div style={{ color: COLORS.ink }}><b>{trx.uraian}</b></div>
+      <div className="text-xs" style={{ color: COLORS.muted }}>{trx.jenis} · {trx.kategori} · Anggaran {fmt(trx.unriil)} — dari pengajuan, tidak bisa diubah di sini</div>
+    </div>
+    <div className="grid sm:grid-cols-2 gap-x-4">
+      <Field label="Tanggal transfer *"><input type="date" value={f.tanggal} min={periode && periode.tanggal_mulai} max={periode && periode.tanggal_akhir} onChange={function(e){ setF(Object.assign({}, f, { tanggal: e.target.value })); }} style={inputStyle}/></Field>
+      <Field label="No Bukti *"><input value={f.no_bukti} onChange={function(e){ setF(Object.assign({}, f, { no_bukti: e.target.value })); }} style={inputStyle}/></Field>
+      {isOps && <Field label="Realisasi Aktual *"><RupiahInput value={f.riil} onChange={function(v){ setF(Object.assign({}, f, { riil: v })); }}/></Field>}
+    </div>
+    <Field label="Bukti transfer (opsional kalau tidak ganti)"><BuktiPicker bukti={bukti} setBukti={setBukti} existing={!!trx.bukti_url}/></Field>
+    {err && <div className="text-xs mb-2" style={{ color: COLORS.danger }}>• {err}</div>}
+    <Btn full disabled={!!err || saving} onClick={submit}>{saving ? I.spinner : I.check} Simpan perubahan</Btn>
+  </Modal>;
+}
+
+// ---------- Input darurat (admin) ----------
+function DaruratPage({ session, dapurList, toast, onSaved }) {
+  const [dapur, setDapur] = useState('');
+  const [alasan, setAlasan] = useState('');
+  const [mulai, setMulai] = useState(false);
+  return <div>
+    <Card className="mb-3">
+      <div className="flex items-start gap-2 rounded-lg p-3 mb-3" style={{ background: '#F8E9E5', color: COLORS.danger }}>
+        {I.warn}<div className="text-sm">Jalur darurat: transaksi dicatat <b>tanpa pengajuan dan tanpa persetujuan Yayasan</b>. Setiap transaksi ditandai merah di Riwayat dan dihitung di Dashboard. Pakai hanya saat Yayasan tidak bisa dihubungi.</div>
+      </div>
+      <div className="grid sm:grid-cols-2 gap-x-4">
+        <Field label="Dapur *">
+          <select value={dapur} onChange={function(e){ setDapur(e.target.value); setMulai(false); }} style={inputStyle}>
+            <option value="">Pilih dapur…</option>
+            {dapurList.map(function(d){ return <option key={d.id} value={d.id}>{d.nama}</option>; })}
+          </select>
+        </Field>
+        <Field label="Alasan darurat *" hint="Tercatat permanen bersama transaksi">
+          <input value={alasan} onChange={function(e){ setAlasan(e.target.value); setMulai(false); }} style={inputStyle} placeholder="cth. Yayasan tidak dapat dihubungi, gas habis"/>
+        </Field>
+      </div>
+      {!mulai && <Btn disabled={!dapur || alasan.trim().length < 5} onClick={function(){ setMulai(true); }}>{I.arrowR} Lanjut input</Btn>}
+    </Card>
+    {mulai && <InputTransaksi key={dapur} session={session} toast={toast} dapurId={dapur} alasan={alasan.trim()} onSaved={onSaved}/>}
+  </div>;
 }
 
 // ============================================================
@@ -2138,6 +2812,8 @@ function App() {
   const [refreshKey, setRefreshKey] = useState(0);
 
   function toast(msg, type) { setToastData({ msg: msg, type: type || 'ok' }); }
+  AUTH_TOKEN = session ? session.token : null;
+  ON_SESSION_INVALID = function(msg) { clearSession(); setSession(null); toast(msg || 'Sesi berakhir, silakan masuk lagi', 'error'); };
 
   useEffect(function() {
     if (session) {
@@ -2152,12 +2828,13 @@ function App() {
   </>);
 
   const role = session.user.role;
-  // Nav: setup, dash, input, laporan, riwayat, bukubesar, profil + (admin: pengguna, dapur)
+  // Nav v6: akuntan Pengajuan + Realisasi (input bebas dihapus); yayasan Persetujuan; admin Input Darurat
   const navItems = ({
     akuntan: [
       ['setup','Setup',I.settings],
       ['dash','Dashboard',I.dash],
-      ['input','Input',I.plus],
+      ['pengajuan','Pengajuan',I.file],
+      ['realisasi','Realisasi',I.plus],
       ['laporan','Laporan',I.report],
       ['riwayat','Riwayat',I.list],
       ['bukubesar','Buku Besar',I.trend],
@@ -2165,6 +2842,7 @@ function App() {
     ],
     pic: [
       ['dash','Dashboard',I.dash],
+      ['pengajuan','Pengajuan',I.file],
       ['laporan','Laporan',I.report],
       ['riwayat','Riwayat',I.list],
       ['bukubesar','Buku Besar',I.trend],
@@ -2172,6 +2850,7 @@ function App() {
     ],
     yayasan: [
       ['dash','Dashboard',I.dash],
+      ['persetujuan','Persetujuan',I.check],
       ['laporan','Laporan',I.report],
       ['riwayat','Riwayat',I.list],
       ['bukubesar','Buku Besar',I.trend],
@@ -2179,9 +2858,11 @@ function App() {
     ],
     admin: [
       ['dash','Dashboard',I.dash],
+      ['pengajuan','Pengajuan',I.file],
       ['laporan','Laporan',I.report],
       ['riwayat','Riwayat',I.list],
       ['bukubesar','Buku Besar',I.trend],
+      ['darurat','Input Darurat',I.warn],
       ['periode','Periode',I.settings],
       ['users','Pengguna',I.users],
       ['dapur','Dapur',I.building],
@@ -2210,7 +2891,7 @@ function App() {
           </div>
         </div>
         <div className="flex items-center gap-2 shrink-0">
-          {canPickScope && (view==='dash'||view==='riwayat'||view==='laporan'||view==='bukubesar') && (
+          {canPickScope && (view==='dash'||view==='riwayat'||view==='laporan'||view==='bukubesar'||view==='pengajuan'||view==='persetujuan') && (
             <select value={scope} onChange={function(e){setScope(e.target.value);}}
               style={Object.assign({}, inputStyle, { width: 'auto', maxWidth: 120, padding: '6px 8px', fontSize: 12 })}>
               <option value="ALL">Semua dapur</option>
@@ -2237,9 +2918,12 @@ function App() {
         <main className="flex-1 p-4 sm:p-6 overflow-x-hidden md:!pb-6" style={{ paddingBottom: 'calc(env(safe-area-inset-bottom, 0px) + 88px)' }}>
           {view === 'setup'   && <SetupPeriode session={session} toast={toast}/>}
           {view === 'dash'    && <Dashboard key={'d'+refreshKey} session={session} scope={effScope} toast={toast}/>}
-          {view === 'input'   && <InputTransaksi session={session} toast={toast}
-            onSaved={function(){ setRefreshKey(function(k){return k+1;}); setView('riwayat'); }}
-            goToSetup={function(){setView('setup');}}/>}
+          {view === 'pengajuan' && <PengajuanPage session={session} scope={effScope} dapurList={dapurList} toast={toast}/>}
+          {view === 'realisasi' && <RealisasiPage session={session} toast={toast}
+            onSaved={function(){ setRefreshKey(function(k){return k+1;}); }}/>}
+          {view === 'persetujuan' && <PersetujuanPage session={session} scope={effScope} dapurList={dapurList} toast={toast}/>}
+          {view === 'darurat' && <DaruratPage session={session} dapurList={dapurList} toast={toast}
+            onSaved={function(){ setRefreshKey(function(k){return k+1;}); setView('riwayat'); }}/>}
           {view === 'laporan' && <Laporan session={session} scope={effScope} toast={toast}/>}
           {view === 'riwayat' && <Riwayat session={session} scope={effScope} toast={toast} refreshKey={refreshKey}/>}
           {view === 'bukubesar' && <BukuBesar session={session} scope={effScope} toast={toast}/>}
