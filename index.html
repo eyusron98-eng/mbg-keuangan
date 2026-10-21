@@ -1193,12 +1193,18 @@ function Laporan({ session, scope, toast }) {
 
   // Lampiran bukti
   let lampiranNo = 0;
+  // Biaya admin memakai bukti yang sama dengan transfer utamanya → tidak dilampirkan dua kali
   const lampiranList = transaksi.map(function(t){
-    if (t.bukti_url) { lampiranNo++; return { tx: t, no: lampiranNo }; }
+    if (t.bukti_url && !isFeeTx(t)) { lampiranNo++; return { tx: t, no: lampiranNo }; }
     return null;
   }).filter(Boolean);
   const txToLampiranNo = {};
   lampiranList.forEach(function(l){ txToLampiranNo[l.tx.id] = l.no; });
+  transaksi.forEach(function(t){
+    if (!isFeeTx(t)) return;
+    const main = transaksi.find(function(m){ return 'ADMIN:' + m.pengajuan_item_id === t.pengajuan_item_id; });
+    if (main && txToLampiranNo[main.id]) txToLampiranNo[t.id] = txToLampiranNo[main.id];
+  });
 
   function doPrint() { window.print(); }
   if (loading) return <Card>{I.spinner}</Card>;
@@ -1584,6 +1590,7 @@ function Riwayat({ session, scope, toast, refreshKey }) {
       {hapusReq && <HapusRequestModal trx={hapusReq} toast={toast} onClose={function(){setHapusReq(null);}} onSaved={loadData}/>}
       {editTrx && isLinkedTx(editTrx) && (
         <EditRealisasiModal trx={editTrx} periode={periode} session={session} toast={toast} requestMode={!!editTrx._request}
+          hasFee={transaksi.some(function(t){ return t.pengajuan_item_id === 'ADMIN:' + editTrx.pengajuan_item_id; })}
           onClose={function(){setEditTrx(null);}} onSaved={loadData}/>
       )}
       {editTrx && !isLinkedTx(editTrx) && (
@@ -1595,7 +1602,8 @@ function Riwayat({ session, scope, toast, refreshKey }) {
       {confirmDel && (
         <ConfirmModal title="Hapus Transaksi"
           message={'Hapus transaksi "' + confirmDel.uraian + '" (' + fmt(confirmDel.riil) + ')? Tidak bisa dibatalkan.' +
-            (isLinkedTx(confirmDel) ? ' Baris pengajuannya akan kembali berstatus Disetujui (belum terealisasi).' : '')}
+            (isFeeTx(confirmDel) ? ' Hanya biaya admin yang dihapus; realisasinya tetap.' :
+             isLinkedTx(confirmDel) ? ' Baris pengajuannya akan kembali berstatus Disetujui (belum terealisasi). Biaya admin terkait ikut terhapus.' : '')}
           onConfirm={doDelete} onClose={function(){setConfirmDel(null);}} confirmLabel="Hapus" danger/>
       )}
     </div>
@@ -2248,10 +2256,13 @@ function RupiahInput({ value, onChange, disabled }) {
   </div>;
 }
 function isLinkedTx(tx) { const l = String((tx && tx.pengajuan_item_id) || ''); return !!l && l.indexOf('DARURAT') !== 0; }
+function isFeeTx(tx) { return String((tx && tx.pengajuan_item_id) || '').indexOf('ADMIN:') === 0; }
+const BIAYA_ADMIN_DEFAULT = 6500;
 function TxSourceBadge({ tx }) {
   const l = String(tx.pengajuan_item_id || '');
   if (!l) return null;
   if (l.indexOf('DARURAT') === 0) return <span className="ml-1.5" title={l}><MiniBadge bg="#F8E9E5" fg={COLORS.danger}>Tanpa pengajuan</MiniBadge></span>;
+  if (l.indexOf('ADMIN:') === 0) return <span className="ml-1.5"><MiniBadge bg="#F3EFE5" fg={COLORS.muted}>Biaya admin</MiniBadge></span>;
   return <span className="ml-1.5"><MiniBadge bg="#E8F1EC" fg={COLORS.green}>Pengajuan</MiniBadge></span>;
 }
 function todayISO() { const d = new Date(); const p = n => (n < 10 ? '0' + n : '' + n); return d.getFullYear() + '-' + p(d.getMonth()+1) + '-' + p(d.getDate()); }
@@ -3244,18 +3255,21 @@ function PersetujuanPage({ session, scope, dapurList, toast }) {
 function RealisasiForm({ item, periode, toast, onClose, onSaved }) {
   const isOps = item.jenis === 'Operasional';
   const today = todayISO();
-  const [f, setF] = useState({ tanggal: periode && today >= periode.tanggal_mulai && today <= periode.tanggal_akhir ? today : (periode ? periode.tanggal_mulai : today), no_bukti: '', riil: isOps ? '' : String(item.nominal) });
+  const [f, setF] = useState({ tanggal: periode && today >= periode.tanggal_mulai && today <= periode.tanggal_akhir ? today : (periode ? periode.tanggal_mulai : today), no_bukti: '', riil: isOps ? '' : String(item.nominal), adaAdmin: false, biaya: String(BIAYA_ADMIN_DEFAULT) });
   const [bukti, setBukti] = useState(null);
   const [saving, setSaving] = useState(false);
   const outRange = periode && (f.tanggal < periode.tanggal_mulai || f.tanggal > periode.tanggal_akhir);
   const err = !f.tanggal ? 'Tanggal wajib' : outRange ? 'Tanggal di luar periode' : !f.no_bukti.trim() ? 'No bukti wajib' :
-    (isOps && !(Number(f.riil) > 0)) ? 'Realisasi aktual wajib' : !bukti ? 'Bukti transfer wajib diunggah' : null;
+    (isOps && !(Number(f.riil) > 0)) ? 'Realisasi aktual wajib' : (f.adaAdmin && !(Number(f.biaya) > 0 && Number(f.biaya) <= 50000)) ? 'Biaya admin Rp 1 – Rp 50.000' :
+    !bukti ? 'Bukti transfer wajib diunggah' : null;
+  const keluarVA = (isOps ? Number(f.riil || 0) : item.nominal) + (f.adaAdmin ? Number(f.biaya || 0) : 0);
   async function submit() {
     setSaving(true);
     const b64 = await fileToBase64(bukti);
     const up = await apiUpload('uploadBukti', { fileData: b64, fileName: buktiFileName(bukti, f.tanggal, f.no_bukti), mimeType: bukti.type });
     if (!up.ok) { setSaving(false); toast('Gagal upload bukti: ' + up.error, 'error'); return; }
-    const res = await api('realisasiItem', { item_id: item.id, tanggal: f.tanggal, no_bukti: f.no_bukti.trim(), riil: isOps ? f.riil : item.nominal, bukti_url: up.data.url });
+    const res = await api('realisasiItem', { item_id: item.id, tanggal: f.tanggal, no_bukti: f.no_bukti.trim(), riil: isOps ? f.riil : item.nominal, bukti_url: up.data.url,
+      biaya_admin: f.adaAdmin ? f.biaya : 0 });
     setSaving(false);
     if (res.ok) { toast('Realisasi tersimpan'); onSaved(); onClose(); } else toast(res.error || 'Gagal menyimpan', 'error');
   }
@@ -3279,10 +3293,24 @@ function RealisasiForm({ item, periode, toast, onClose, onSaved }) {
         <Field label="Realisasi Aktual *" hint="Yang benar-benar ditransfer"><RupiahInput value={f.riil} onChange={function(v){ setF(Object.assign({}, f, { riil: v })); }}/></Field>
       </> : <Field label="Nominal" hint="Terkunci = nominal disetujui"><RupiahInput value={String(item.nominal)} onChange={function(){}} disabled/></Field>}
     </div>
+    <BiayaAdminField ada={f.adaAdmin} biaya={f.biaya} onChange={function(patch){ setF(Object.assign({}, f, patch)); }}/>
     <Field label="Bukti transfer *" hint="Nama file otomatis: {Tanggal}_{No Bukti}"><BuktiPicker bukti={bukti} setBukti={setBukti}/></Field>
+    {f.adaAdmin && <div className="text-xs mb-2" style={{ color: COLORS.muted }}>Total keluar dari VA: <b className="num" style={{ color: COLORS.ink }}>{fmt(keluarVA)}</b> (transfer + biaya admin, dicatat sebagai 2 transaksi)</div>}
     {err && <div className="text-xs mb-2" style={{ color: COLORS.danger }}>• {err}</div>}
     <Btn full disabled={!!err || saving} onClick={submit}>{saving ? I.spinner : I.check} {saving ? 'Menyimpan…' : 'Simpan realisasi'}</Btn>
   </Modal>;
+}
+
+function BiayaAdminField({ ada, biaya, onChange }) {
+  return <div className="rounded-lg p-3 mb-3" style={{ border: '1px solid ' + (ada ? COLORS.amber : COLORS.line), background: ada ? '#FBF3E2' : '#fff' }}>
+    <label className="flex items-start gap-2 cursor-pointer">
+      <input type="checkbox" checked={ada} onChange={function(e){ onChange({ adaAdmin: e.target.checked }); }} style={{ marginTop: 3, width: 16, height: 16 }}/>
+      <span className="text-sm" style={{ color: COLORS.ink }}><b>Ada biaya admin transfer</b> (beda bank)
+        <span className="block text-xs" style={{ color: COLORS.muted }}>Otomatis dicatat sebagai transaksi terpisah: Operasional · Biaya Admin Bank.</span></span>
+    </label>
+    {ada && <div className="mt-2" style={{ maxWidth: 220 }}><RupiahInput value={biaya} onChange={function(v){ onChange({ biaya: v }); }}/>
+      <div className="text-[11px] mt-1" style={{ color: COLORS.muted }}>Default Rp 6.500. Ubah bila potongan bank berbeda.</div></div>}
+  </div>;
 }
 
 function RealisasiPage({ session, toast, onSaved }) {
@@ -3328,13 +3356,18 @@ function RealisasiPage({ session, toast, onSaved }) {
 }
 
 // Edit transaksi hasil realisasi (field pengajuan terkunci)
-function EditRealisasiModal({ trx, periode, session, toast, onClose, onSaved, requestMode }) {
+function EditRealisasiModal({ trx, periode, session, toast, onClose, onSaved, requestMode, hasFee }) {
   const isOps = trx.jenis === 'Operasional';
+  const isFee = isFeeTx(trx);
+  const [tambahFee, setTambahFee] = useState({ adaAdmin: false, biaya: String(BIAYA_ADMIN_DEFAULT) });
+  const canAddFee = !requestMode && !isFee && !hasFee;
   const [alasan, setAlasan] = useState('');
   const [f, setF] = useState({ tanggal: trx.tanggal, no_bukti: trx.no_bukti || '', riil: String(trx.riil || '') });
   const [bukti, setBukti] = useState(null);
   const [saving, setSaving] = useState(false);
-  const err = !f.tanggal ? 'Tanggal wajib' : !f.no_bukti.trim() ? 'No bukti wajib' : (isOps && !(Number(f.riil) > 0)) ? 'Realisasi aktual wajib' :
+  const err = !f.tanggal ? 'Tanggal wajib' : !f.no_bukti.trim() ? 'No bukti wajib' : (isOps && !(Number(f.riil) > 0)) ? (isFee ? 'Biaya admin wajib' : 'Realisasi aktual wajib') :
+    (isFee && Number(f.riil) > 50000) ? 'Biaya admin maksimal Rp 50.000' :
+    (tambahFee.adaAdmin && !(Number(tambahFee.biaya) > 0 && Number(tambahFee.biaya) <= 50000)) ? 'Biaya admin Rp 1 – Rp 50.000' :
     (requestMode && !alasan.trim()) ? 'Alasan perubahan wajib' : null;
   async function submit() {
     setSaving(true);
@@ -3350,6 +3383,10 @@ function EditRealisasiModal({ trx, periode, session, toast, onClose, onSaved, re
     let res;
     if (requestMode) { payload.transaksi_id = trx.id; payload.aksi = 'EDIT'; payload.alasan = alasan.trim(); res = await api('requestTxChange', payload); }
     else res = await api('updateTransaksi', payload);
+    if (res.ok && canAddFee && tambahFee.adaAdmin) {
+      const r2 = await api('addBiayaAdmin', { transaksi_id: trx.id, nominal: tambahFee.biaya });
+      if (!r2.ok) toast('Realisasi tersimpan, tapi biaya admin gagal: ' + r2.error, 'error');
+    }
     setSaving(false);
     if (res.ok) { toast(requestMode ? 'Pengajuan perubahan dikirim ke admin' : 'Transaksi diupdate'); onSaved(); onClose(); } else toast(res.error || 'Gagal update', 'error');
   }
@@ -3357,13 +3394,14 @@ function EditRealisasiModal({ trx, periode, session, toast, onClose, onSaved, re
     {requestMode && <RequestNotice alasan={alasan} setAlasan={setAlasan}/>}
     <div className="rounded-lg p-3 mb-3 text-sm" style={{ background: COLORS.paper }}>
       <div style={{ color: COLORS.ink }}><b>{trx.uraian}</b></div>
-      <div className="text-xs" style={{ color: COLORS.muted }}>{trx.jenis} · {trx.kategori} · Anggaran {fmt(trx.unriil)} — dari pengajuan, tidak bisa diubah di sini</div>
+      <div className="text-xs" style={{ color: COLORS.muted }}>{isFee ? 'Biaya admin transfer, menempel pada realisasinya. Terhapus otomatis bila realisasinya dihapus.' : trx.jenis + ' · ' + trx.kategori + ' · Anggaran ' + fmt(trx.unriil) + ' — dari pengajuan, tidak bisa diubah di sini'}</div>
     </div>
     <div className="grid sm:grid-cols-2 gap-x-4">
       <Field label="Tanggal transfer *"><input type="date" value={f.tanggal} min={periode && periode.tanggal_mulai} max={periode && periode.tanggal_akhir} onChange={function(e){ setF(Object.assign({}, f, { tanggal: e.target.value })); }} style={inputStyle}/></Field>
       <Field label="No Bukti *"><input value={f.no_bukti} onChange={function(e){ setF(Object.assign({}, f, { no_bukti: e.target.value })); }} style={inputStyle}/></Field>
-      {isOps && <Field label="Realisasi Aktual *"><RupiahInput value={f.riil} onChange={function(v){ setF(Object.assign({}, f, { riil: v })); }}/></Field>}
+      {isOps && <Field label={isFee ? 'Biaya admin *' : 'Realisasi Aktual *'}><RupiahInput value={f.riil} onChange={function(v){ setF(Object.assign({}, f, { riil: v })); }}/></Field>}
     </div>
+    {canAddFee && <BiayaAdminField ada={tambahFee.adaAdmin} biaya={tambahFee.biaya} onChange={function(patch){ setTambahFee(Object.assign({}, tambahFee, patch)); }}/>}
     <Field label="Bukti transfer (opsional kalau tidak ganti)"><BuktiPicker bukti={bukti} setBukti={setBukti} existing={!!trx.bukti_url}/></Field>
     {err && <div className="text-xs mb-2" style={{ color: COLORS.danger }}>• {err}</div>}
     <Btn full disabled={!!err || saving} onClick={submit}>{saving ? I.spinner : I.check} Simpan perubahan</Btn>
