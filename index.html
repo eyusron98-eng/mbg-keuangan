@@ -168,9 +168,9 @@ async function apiUpload(action, params) {
 }
 
 // Kredensial (password) jangan lewat query string GET: URL tercatat di log proxy/Google & riwayat browser.
-// Kirim lewat body POST. Fallback GET hanya bila backend lama belum mengenal aksi tersebut via POST;
-// setelah doPost di Apps Script mendukung login/updateMyProfile/addUser/updateUser, ubah ke false.
-const ALLOW_GET_FALLBACK = true;
+// Backend (doPost → handleRequest) sudah menerima login/updateMyProfile/addUser/updateUser via POST,
+// jadi fallback GET dimatikan. Ubah ke true hanya sementara bila backend lama perlu didukung.
+const ALLOW_GET_FALLBACK = false;
 async function apiSecure(action, params) {
   const res = await apiPost(action, params);
   if (!res.ok && ALLOW_GET_FALLBACK && /unknown action|action tidak dikenal|aksi tidak dikenal|tidak dikenal|Unexpected token|not valid JSON/i.test(res.error || '')) {
