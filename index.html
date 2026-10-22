@@ -8,7 +8,26 @@
 <style>
   body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #F4F2EC; margin: 0; }
   * { -webkit-tap-highlight-color: transparent; }
+  html { -webkit-text-size-adjust: 100%; scroll-behavior: smooth; }
+  body { line-height: 1.5; -webkit-font-smoothing: antialiased; }
   .num { font-variant-numeric: tabular-nums; }
+
+  /* Kenyamanan: fokus jelas, sentuhan responsif, animasi halus */
+  input:focus, select:focus, textarea:focus { border-color: #15663E !important; box-shadow: 0 0 0 3px rgba(21,102,62,0.16); }
+  button:focus-visible, a:focus-visible { outline: 2px solid #15663E; outline-offset: 2px; }
+  button { transition: transform .08s ease, opacity .15s ease, background-color .15s ease; }
+  button:not(:disabled):active { transform: scale(0.97); }
+  button:disabled { cursor: not-allowed; }
+  @keyframes fadeUp { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+  @keyframes sheetUp { from { transform: translateY(24px); opacity: 0; } to { transform: none; opacity: 1; } }
+  main > div { animation: fadeUp .22s ease both; }
+  .sheet { animation: sheetUp .2s ease both; }
+  @media (pointer: coarse) { button { min-height: 40px; } }
+  /* 16px mencegah iOS memperbesar layar sendiri saat mengetik */
+  @media (max-width: 640px) {
+    input:not([type=checkbox]):not([type=file]), select, textarea { font-size: 16px !important; }
+  }
+  @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; scroll-behavior: auto !important; } }
   #loading-screen { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; background: #F4F2EC; z-index: 9999; flex-direction: column; gap: 16px; }
   #loading-screen .sp { width: 36px; height: 36px; border: 3px solid #E3E0D6; border-top-color: #15663E; border-radius: 50%; animation: spin 0.8s linear infinite; }
   @keyframes spin { to { transform: rotate(360deg); } }
@@ -148,6 +167,18 @@ async function apiUpload(action, params) {
   } catch (e) { return { ok: false, error: 'Upload gagal: ' + e.message }; }
 }
 
+// Kredensial (password) jangan lewat query string GET: URL tercatat di log proxy/Google & riwayat browser.
+// Kirim lewat body POST. Fallback GET hanya bila backend lama belum mengenal aksi tersebut via POST;
+// setelah doPost di Apps Script mendukung login/updateMyProfile/addUser/updateUser, ubah ke false.
+const ALLOW_GET_FALLBACK = true;
+async function apiSecure(action, params) {
+  const res = await apiPost(action, params);
+  if (!res.ok && ALLOW_GET_FALLBACK && /unknown action|action tidak dikenal|aksi tidak dikenal|tidak dikenal|Unexpected token|not valid JSON/i.test(res.error || '')) {
+    return api(action, params);
+  }
+  return res;
+}
+
 const SESS_KEY = 'mbg_session_v4';
 function loadSession() { try { return JSON.parse(sessionStorage.getItem(SESS_KEY) || 'null'); } catch (e) { return null; } }
 function saveSession(s) { sessionStorage.setItem(SESS_KEY, JSON.stringify(s)); }
@@ -263,15 +294,15 @@ function Btn(p) {
     : kind === 'amber' ? { background: COLORS.amber, color: '#fff' }
     : kind === 'blue' ? { background: COLORS.blue, color: '#fff' }
     : { background: 'transparent', color: COLORS.green, border: '1px solid ' + COLORS.line };
-  const sizePad = p.size === 'sm' ? 'px-2.5 py-1.5 text-xs' : 'px-4 py-2.5 text-sm';
+  const sizePad = p.size === 'sm' ? 'px-3 py-2 text-xs' : 'px-4 py-2.5 text-sm';
   return <button type={p.type||'button'} onClick={p.onClick} disabled={p.disabled} title={p.title}
-    style={Object.assign({}, sty, { opacity: p.disabled ? 0.6 : 1, width: p.full ? '100%' : 'auto' })}
+    style={Object.assign({}, sty, { opacity: p.disabled ? 0.6 : 1, width: p.full ? '100%' : 'auto', minHeight: p.size === 'sm' ? 36 : 44 })}
     className={'inline-flex items-center justify-center gap-1.5 rounded-lg font-semibold transition ' + sizePad}>{p.children}</button>;
 }
 function Card(p) {
   const pad = p.pad !== false;
-  return <div className={'rounded-xl ' + (pad ? 'p-4 sm:p-5 ' : '') + (p.className||'')}
-    style={{ background: COLORS.surface, border: '1px solid ' + COLORS.line }}>{p.children}</div>;
+  return <div className={'rounded-2xl ' + (pad ? 'p-4 sm:p-5 ' : '') + (p.className||'')}
+    style={{ background: COLORS.surface, border: '1px solid ' + COLORS.line, boxShadow: '0 1px 2px rgba(23,42,31,0.04)' }}>{p.children}</div>;
 }
 function Field(p) {
   return <label className="block mb-4">
@@ -280,22 +311,24 @@ function Field(p) {
     {p.hint && <div className="text-xs mt-1" style={{ color: p.hintColor || COLORS.muted }}>{p.hint}</div>}
   </label>;
 }
-const inputStyle = { width: '100%', border: '1px solid ' + COLORS.line, borderRadius: 8, padding: '10px 12px', fontSize: 14, background: '#fff', color: COLORS.ink, outline: 'none' };
+const inputStyle = { width: '100%', minHeight: 44, border: '1px solid ' + COLORS.line, borderRadius: 10, padding: '10px 12px', fontSize: 15, background: '#fff', color: COLORS.ink, outline: 'none' };
 
 function Toast(p) {
-  useEffect(function() { const t = setTimeout(p.onClose, 3500); return function() { clearTimeout(t); }; }, []);
-  return <div className="fixed top-4 left-1/2 -translate-x-1/2 z-[60] rounded-lg px-4 py-2.5 text-sm font-medium shadow-lg"
-    style={{ background: p.type === 'error' ? COLORS.danger : COLORS.deep, color: '#fff', maxWidth: '90vw' }}>{p.msg}</div>;
+  // timer dimulai ulang tiap pesan baru; pesan panjang diberi waktu baca lebih lama
+  useEffect(function() { const t = setTimeout(p.onClose, Math.max(3500, String(p.msg || '').length * 60)); return function() { clearTimeout(t); }; }, [p.msg]);
+  return <div className="sheet fixed left-1/2 -translate-x-1/2 z-[60] rounded-xl px-4 py-3 text-sm font-medium shadow-lg"
+    style={{ top: 'calc(env(safe-area-inset-top, 0px) + 16px)', background: p.type === 'error' ? COLORS.danger : COLORS.deep, color: '#fff', maxWidth: 'min(92vw, 420px)', lineHeight: 1.45 }}>{p.msg}</div>;
 }
 function Modal(p) {
-  const maxW = p.size === 'lg' ? 'max-w-2xl' : 'max-w-md';
-  return <div className="fixed inset-0 z-40 flex items-center justify-center p-4 no-print" style={{ background: 'rgba(0,0,0,0.5)' }} onClick={p.onClose}>
-    <div className={'w-full ' + maxW + ' max-h-[90vh] overflow-y-auto rounded-xl'}
-      style={{ background: COLORS.surface, border: '1px solid ' + COLORS.line, padding: 20 }}
+  const maxW = p.size === 'lg' ? 'sm:max-w-2xl' : 'sm:max-w-md';
+  // HP: muncul sebagai lembar dari bawah (mudah dijangkau jempol); layar lebar: di tengah
+  return <div className="fixed inset-0 z-40 flex items-end sm:items-center justify-center sm:p-4 no-print" style={{ background: 'rgba(0,0,0,0.5)' }} onClick={p.onClose}>
+    <div className={'sheet w-full ' + maxW + ' max-h-[92vh] overflow-y-auto rounded-t-2xl sm:rounded-2xl'}
+      style={{ background: COLORS.surface, border: '1px solid ' + COLORS.line, padding: 20, paddingBottom: 'calc(env(safe-area-inset-bottom, 0px) + 20px)' }}
       onClick={function(e){e.stopPropagation();}}>
       <div className="flex items-center justify-between mb-3">
         <div className="font-bold" style={{ color: COLORS.ink }}>{p.title}</div>
-        <button onClick={p.onClose} style={{ color: COLORS.muted }}>{I.x}</button>
+        <button onClick={p.onClose} aria-label="Tutup" className="rounded-lg p-1.5" style={{ color: COLORS.muted }}>{I.x}</button>
       </div>
       {p.children}
     </div>
@@ -321,7 +354,7 @@ function Login(props) {
   async function submit() {
     if (!username || !password) { props.toast('Isi username dan password', 'error'); return; }
     setLoading(true);
-    const res = await api('login', { username: username, password: password });
+    const res = await apiSecure('login', { username: username.trim(), password: password });
     setLoading(false);
     if (res.ok) props.onLogin(res.data); else props.toast(res.error || 'Login gagal', 'error');
   }
@@ -339,9 +372,10 @@ function Login(props) {
         </div>
         <Card>
           <Eyebrow>Masuk ke akun</Eyebrow>
-          <Field label="Username"><input value={username} onChange={function(e){setUsername(e.target.value);}} style={inputStyle} placeholder="cth. akuntan1" autoCapitalize="off"/></Field>
+          <Field label="Username"><input value={username} onChange={function(e){setUsername(e.target.value);}} style={inputStyle} placeholder="cth. akuntan1"
+            autoCapitalize="off" autoCorrect="off" spellCheck={false} autoComplete="username" enterKeyHint="next"/></Field>
           <Field label="Password"><input type="password" value={password} onChange={function(e){setPassword(e.target.value);}}
-            onKeyDown={function(e){ if(e.key==='Enter') submit(); }} style={inputStyle} placeholder="••••••••"/></Field>
+            onKeyDown={function(e){ if(e.key==='Enter') submit(); }} style={inputStyle} placeholder="••••••••" autoComplete="current-password" enterKeyHint="go"/></Field>
           <Btn full onClick={submit} disabled={loading}>{loading ? I.spinner : I.arrowR} {loading ? 'Memeriksa…' : 'Masuk'}</Btn>
         </Card>
         <p className="text-center text-xs mt-4" style={{ color: COLORS.muted }}>Lupa password? Hubungi Super Admin.</p>
@@ -359,16 +393,107 @@ function PeriodeBadge(p) {
     style={{ background: aktif ? '#E8F1EC' : '#F3EFE5', color: aktif ? COLORS.green : COLORS.muted }}>{p.status}</span>;
 }
 
-function PeriodeForm({ initial, onClose, onSaved, session, toast }) {
-  const [f, setF] = useState(Object.assign({ alasan: '' }, initial || { tanggal_mulai: '', tanggal_akhir: '', penerima: '', saldoVA: '', saldoPettyAwal: '' }));
+// ---------- Sinkron saldo antar periode ----------
+// Saldo akhir aktual (riil = uang yang benar-benar keluar) periode lalu dihitung ulang dari transaksinya,
+// jadi perubahan di periode tertutup yang disetujui admin otomatis terbaca sebagai selisih terhadap saldo awal periode berikutnya.
+function hitungSaldoAkhir(p, vaTopups, pettyTopups, tx) {
+  const sum = function(a, f){ return a.reduce(function(s, x){ return s + (Number(f(x)) || 0); }, 0); };
+  const va = vaTopups.filter(function(t){ return t.periode_id === p.id; });
+  const pc = pettyTopups.filter(function(t){ return t.periode_id === p.id; });
+  const keluarPetty = sum(tx.filter(function(t){ return t.sumber === 'Petty Cash'; }), function(t){ return t.riil; });
+  const keluarVA = sum(tx.filter(function(t){ return t.sumber !== 'Petty Cash'; }), function(t){ return t.riil; });
+  const topupPetty = sum(pc, function(t){ return t.jumlah; });
+  return {
+    va: Number(p.saldoVA || 0) + sum(va, function(t){ return t.jumlah; }) - topupPetty - keluarVA,
+    petty: Number(p.saldoPettyAwal || 0) + topupPetty - keluarPetty,
+  };
+}
+async function fetchSaldoSync(session) {
+  const dapur = session.user.dapur;
+  const [pl, va, pc] = await Promise.all([
+    api('getPeriodeList', { role: session.user.role, dapur: dapur, scope: dapur }),
+    api('getVATopups', { dapur: dapur }),
+    api('getPettyTopups', { dapur: dapur }),
+  ]);
+  if (!pl.ok || !va.ok || !pc.ok) return null;
+  const aktif = pl.data.find(function(p){ return p.status === 'AKTIF'; }) || null;
+  const prev = pl.data.filter(function(p){ return p.status !== 'AKTIF' && (!aktif || p.periode_no < aktif.periode_no); })
+    .sort(function(a, b){ return b.periode_no - a.periode_no; })[0];
+  if (!prev) return null;
+  const tx = await api('getTransaksi', { role: session.user.role, dapur: dapur || '', scope: dapur, periode_id: prev.id });
+  if (!tx.ok) return null;
+  const akhir = hitungSaldoAkhir(prev, va.data, pc.data, tx.data);
+  const awal = aktif ? { va: Number(aktif.saldoVA || 0), petty: Number(aktif.saldoPettyAwal || 0) } : null;
+  return { aktif: aktif, prev: prev, akhir: akhir, awal: awal,
+    selisihVA: awal ? awal.va - akhir.va : 0, selisihPetty: awal ? awal.petty - akhir.petty : 0 };
+}
+function syncKey(s) { return 'mbg_sync_ack:' + s.aktif.id + ':' + s.selisihVA + ':' + s.selisihPetty; }
+
+function SaldoSyncCard({ sync, onSamakan }) {
+  if (!sync || !sync.aktif) return null;
+  const sama = sync.selisihVA === 0 && sync.selisihPetty === 0;
+  const cell = function(v, warn) { return <td className="px-2 py-1.5 text-right num" style={{ color: warn ? COLORS.amber : COLORS.ink, fontWeight: warn ? 700 : 500 }}>{fmt(v)}</td>; };
+  return <Card className="mb-3">
+    <Eyebrow>Sinkron saldo dengan periode sebelumnya</Eyebrow>
+    <div className="overflow-x-auto"><table className="w-full text-sm mt-1">
+      <thead><tr className="text-xs text-right" style={{ color: COLORS.muted }}><th></th><th className="px-2 py-1 font-semibold">VA</th><th className="px-2 py-1 font-semibold">Petty Cash</th></tr></thead>
+      <tbody>
+        <tr><td className="px-2 py-1.5" style={{ color: COLORS.muted }}>Saldo akhir Periode {sync.prev.periode_no}</td>{cell(sync.akhir.va)}{cell(sync.akhir.petty)}</tr>
+        <tr style={{ borderTop: '1px solid ' + COLORS.line }}><td className="px-2 py-1.5" style={{ color: COLORS.muted }}>Saldo awal Periode {sync.aktif.periode_no}</td>{cell(sync.awal.va)}{cell(sync.awal.petty)}</tr>
+        <tr style={{ borderTop: '1px solid ' + COLORS.line }}><td className="px-2 py-1.5 font-semibold" style={{ color: COLORS.ink }}>Selisih</td>{cell(sync.selisihVA, sync.selisihVA !== 0)}{cell(sync.selisihPetty, sync.selisihPetty !== 0)}</tr>
+      </tbody>
+    </table></div>
+    {sama
+      ? <div className="text-xs mt-2 rounded-lg p-2.5" style={{ background: '#E8F1EC', color: COLORS.green }}>✓ Saldo awal periode ini nyambung dengan saldo akhir periode sebelumnya.</div>
+      : <div className="text-xs mt-2 rounded-lg p-2.5" style={{ background: '#FBF3E2', color: '#9A6A0B' }}>
+          Saldo awal tidak sama dengan saldo akhir periode lalu. Ini wajar bila ada <b>penambahan kas di pergantian periode</b>. Bila penyebabnya perubahan transaksi periode lalu (mis. edit yang baru disetujui admin), samakan saldo awal. Perubahan saldo awal wajib disertai alasan dan tercatat di log.
+          <div className="mt-2"><Btn size="sm" kind="amber" onClick={onSamakan}>Samakan dengan saldo akhir Periode {sync.prev.periode_no}</Btn></div>
+        </div>}
+  </Card>;
+}
+
+function SaldoSyncBanner({ session, onGoSetup }) {
+  const [sync, setSync] = useState(null);
+  const [, bump] = useState(0);
+  useEffect(function() {
+    let live = true;
+    fetchSaldoSync(session).then(function(s){ if (live) setSync(s); });
+    return function() { live = false; };
+  }, []);
+  if (!sync || !sync.aktif || (sync.selisihVA === 0 && sync.selisihPetty === 0)) return null;
+  let acked = false; try { acked = !!localStorage.getItem(syncKey(sync)); } catch (e) {}
+  if (acked) return null;
+  function abaikan() { try { localStorage.setItem(syncKey(sync), '1'); } catch (e) {} bump(function(n){ return n + 1; }); }
+  return <Card className="mb-3">
+    <div className="flex items-start gap-2.5">
+      <span style={{ color: COLORS.amber }}>{I.warn}</span>
+      <div className="flex-1 min-w-0">
+        <div className="text-sm font-semibold" style={{ color: COLORS.ink }}>Saldo awal Periode {sync.aktif.periode_no} tidak sama dengan saldo akhir Periode {sync.prev.periode_no}</div>
+        <div className="text-xs mt-0.5" style={{ color: COLORS.muted }}>Selisih VA {fmt(sync.selisihVA)}{sync.selisihPetty !== 0 ? ' · Petty ' + fmt(sync.selisihPetty) : ''}. Bisa sah (penambahan kas) atau akibat perubahan transaksi periode lalu.</div>
+        <div className="flex gap-2 mt-2"><Btn size="sm" onClick={onGoSetup}>Periksa di Setup</Btn><Btn size="sm" kind="ghost" onClick={abaikan}>Sudah sesuai</Btn></div>
+      </div>
+    </div>
+  </Card>;
+}
+
+function PeriodeForm({ initial, carry, prefill, onClose, onSaved, session, toast }) {
+  const [f, setF] = useState(function() {
+    const base = Object.assign({ alasan: '' }, initial || { tanggal_mulai: '', tanggal_akhir: '', penerima: '',
+      saldoVA: carry ? String(Math.max(0, carry.va)) : '', saldoPettyAwal: carry ? String(Math.max(0, carry.petty)) : '' }, prefill || {});
+    base.saldoVA = base.saldoVA === '' || base.saldoVA == null ? '' : String(Math.max(0, Number(base.saldoVA) || 0));
+    base.saldoPettyAwal = base.saldoPettyAwal === '' || base.saldoPettyAwal == null ? '' : String(Math.max(0, Number(base.saldoPettyAwal) || 0));
+    return base;
+  });
   const [saving, setSaving] = useState(false);
   const isEdit = !!initial && !!initial.id;
-  const saldoBerubah = isEdit && Number(f.saldoVA || 0) !== Number(initial.saldoVA || 0);
+  const saldoBerubah = isEdit && (Number(f.saldoVA || 0) !== Number(initial.saldoVA || 0) || Number(f.saldoPettyAwal || 0) !== Number(initial.saldoPettyAwal || 0));
+  const bedaCarry = !isEdit && !!carry && (Number(f.saldoVA || 0) !== carry.va || Number(f.saldoPettyAwal || 0) !== carry.petty);
+  const perluAlasan = saldoBerubah || bedaCarry;
   function set(k, v) { setF(function(p){ const n = Object.assign({}, p); n[k] = v; return n; }); }
   async function submit() {
     if (!f.tanggal_mulai || !f.tanggal_akhir) { toast('Isi tanggal mulai & akhir', 'error'); return; }
     if (f.tanggal_mulai >= f.tanggal_akhir) { toast('Tanggal mulai harus sebelum tanggal akhir', 'error'); return; }
-    if (saldoBerubah && !String(f.alasan || '').trim()) { toast('Isi alasan perubahan saldo awal VA', 'error'); return; }
+    if (perluAlasan && !String(f.alasan || '').trim()) { toast('Isi alasan saldo awal', 'error'); return; }
     setSaving(true);
     const action = isEdit ? 'updatePeriode' : 'addPeriode';
     const payload = Object.assign({ role: session.user.role, user_id: session.user.id, dapur: session.user.dapur,
@@ -385,21 +510,30 @@ function PeriodeForm({ initial, onClose, onSaved, session, toast }) {
       <Field label="Tanggal mulai"><input type="date" value={f.tanggal_mulai} onChange={function(e){set('tanggal_mulai', e.target.value);}} style={inputStyle}/></Field>
       <Field label="Tanggal akhir"><input type="date" value={f.tanggal_akhir} onChange={function(e){set('tanggal_akhir', e.target.value);}} style={inputStyle}/></Field>
       <Field label="Jumlah penerima manfaat" hint="porsi/hari"><input type="number" value={f.penerima} onChange={function(e){set('penerima', e.target.value);}} style={inputStyle} placeholder="0"/></Field>
-      <Field label="Saldo VA awal" hint={isEdit ? 'Saldo VA saat periode dimulai. Perubahan tercatat di log beserta alasannya.' : null}><input type="number" value={f.saldoVA} onChange={function(e){set('saldoVA', e.target.value);}} style={inputStyle} placeholder="0"/></Field>
-      {saldoBerubah && <Field label="Alasan perubahan saldo awal VA *" hint={'Sebelumnya ' + fmt(initial.saldoVA) + ' → menjadi ' + fmt(Number(f.saldoVA || 0))}>
-        <input value={f.alasan} onChange={function(e){set('alasan', e.target.value);}} style={inputStyle} placeholder="cth. salah input, sesuai rekening koran 1 Okt"/></Field>}
-      <Field label="Saldo Petty Cash awal" hint="Boleh 0. Petty Cash akan diisi via Top-up (diambil dari saldo VA)."><input type="number" value={f.saldoPettyAwal} onChange={function(e){set('saldoPettyAwal', e.target.value);}} style={inputStyle} placeholder="0"/></Field>
+      {carry && <div className="mb-3 rounded-lg p-3 text-xs" style={{ background: COLORS.paper, color: COLORS.muted }}>
+        Saldo akhir Periode {carry.no}: VA <b className="num" style={{ color: COLORS.ink }}>{fmt(carry.va)}</b> · Petty <b className="num" style={{ color: COLORS.ink }}>{fmt(carry.petty)}</b>
+        {isEdit
+          ? <div className="mt-1.5"><button type="button" className="font-semibold" style={{ color: COLORS.blue }} onClick={function(){ set('saldoVA', String(Math.max(0, carry.va))); set('saldoPettyAwal', String(Math.max(0, carry.petty))); }}>Pakai saldo akhir ini</button></div>
+          : <div className="mt-1">Terisi otomatis. Ubah bila ada penambahan kas di pergantian periode — wajib isi alasan.</div>}
+      </div>}
+      <Field label="Saldo VA awal" hint={isEdit ? 'Saldo VA saat periode dimulai. Perubahan tercatat di log beserta alasannya.' : null}><RupiahInput value={f.saldoVA} onChange={function(v){set('saldoVA', v);}}/></Field>
+      <Field label="Saldo Petty Cash awal" hint="Boleh 0. Petty Cash akan diisi via Top-up (diambil dari saldo VA)."><RupiahInput value={f.saldoPettyAwal} onChange={function(v){set('saldoPettyAwal', v);}}/></Field>
+      {perluAlasan && <Field label={isEdit ? 'Alasan perubahan saldo awal *' : 'Alasan saldo awal berbeda dari saldo akhir periode lalu *'}
+        hint={isEdit ? 'VA: ' + fmt(initial.saldoVA) + ' → ' + fmt(Number(f.saldoVA || 0)) + ' · Petty: ' + fmt(initial.saldoPettyAwal) + ' → ' + fmt(Number(f.saldoPettyAwal || 0))
+          : carry ? 'Selisih VA ' + fmt(Number(f.saldoVA || 0) - carry.va) + ' · Petty ' + fmt(Number(f.saldoPettyAwal || 0) - carry.petty) : null}>
+        <input value={f.alasan} onChange={function(e){set('alasan', e.target.value);}} style={inputStyle} placeholder="cth. penambahan kas dari yayasan 1 Nov, sesuai rekening koran"/></Field>}
       <div className="flex gap-2"><Btn kind="ghost" onClick={onClose}>Batal</Btn><Btn onClick={submit} disabled={saving}>{saving ? I.spinner : I.check} Simpan</Btn></div>
     </Modal>
   );
 }
 
 function TopupForm({ tipe, periode, onClose, onSaved, session, toast }) {
-  const [f, setF] = useState({ tanggal: new Date().toISOString().substring(0,10), jumlah: '', keterangan: '' });
+  const [f, setF] = useState({ tanggal: todayISO(), jumlah: '', keterangan: '' });
   const [saving, setSaving] = useState(false);
   function set(k, v) { setF(function(p){ const n = Object.assign({}, p); n[k] = v; return n; }); }
   async function submit() {
-    if (!f.tanggal || !f.jumlah) { toast('Isi tanggal & jumlah', 'error'); return; }
+    if (!f.tanggal || !(Number(f.jumlah) > 0)) { toast('Isi tanggal & jumlah (lebih dari 0)', 'error'); return; }
+    if (tipe === 'Petty' && Number(f.jumlah) > Number(periode.sisaVA || 0)) { toast('Jumlah melebihi saldo VA tersedia (' + fmt(periode.sisaVA) + ')', 'error'); return; }
     setSaving(true);
     const action = tipe === 'VA' ? 'addVATopup' : 'addPettyTopup';
     const res = await api(action, { role: session.user.role, user_id: session.user.id, dapur: session.user.dapur,
@@ -419,7 +553,7 @@ function TopupForm({ tipe, periode, onClose, onSaved, session, toast }) {
       </div>
       <Field label="Tanggal terima"><input type="date" value={f.tanggal} min={periode.tanggal_mulai} max={periode.tanggal_akhir} onChange={function(e){set('tanggal', e.target.value);}} style={inputStyle}/></Field>
       <Field label="Jumlah" hint={isPetty ? 'Maks Rp ' + new Intl.NumberFormat('id-ID').format(periode.sisaVA) : null}>
-        <input type="number" value={f.jumlah} onChange={function(e){set('jumlah', e.target.value);}} style={inputStyle} placeholder="0"/>
+        <RupiahInput value={f.jumlah} onChange={function(v){set('jumlah', v);}}/>
       </Field>
       <Field label="Keterangan" hint={tipe==='VA' ? 'cth. Transfer dari yayasan' : 'cth. Tarik tunai untuk kas operasional'}>
         <input value={f.keterangan} onChange={function(e){set('keterangan', e.target.value);}} style={inputStyle}/>
@@ -506,6 +640,8 @@ function SetupPeriode({ session, toast }) {
   const [editPeriode, setEditPeriode] = useState(null);
   const [openTopup, setOpenTopup] = useState(null);
   const [confirmClose, setConfirmClose] = useState(null);
+  const [sync, setSync] = useState(null);
+  const [prefill, setPrefill] = useState(null);
 
   const load = useCallback(async function() {
     setLoading(true);
@@ -520,6 +656,7 @@ function SetupPeriode({ session, toast }) {
     if (pl.ok) setList(pl.data);
     if (va.ok) setVaTopups(va.data);
     if (pc.ok) setPettyTopups(pc.data);
+    fetchSaldoSync(session).then(setSync);   // tidak memblokir tampilan Setup
   }, []);
   useEffect(function() { load(); }, [load]);
 
@@ -528,6 +665,14 @@ function SetupPeriode({ session, toast }) {
   const closed = list.filter(p => p.status !== 'AKTIF').sort((a,b)=>b.periode_no-a.periode_no);
   const aktifVATopups = periode ? vaTopups.filter(t => t.periode_id === periode.id) : [];
   const aktifPettyTopups = periode ? pettyTopups.filter(t => t.periode_id === periode.id) : [];
+  const carry = sync ? { va: sync.akhir.va, petty: sync.akhir.petty, no: sync.prev.periode_no } : null;
+  function openEdit(pre) {
+    setEditPeriode({ id: periode.id, periode_no: periode.periode_no,
+      tanggal_mulai: periode.tanggal_mulai, tanggal_akhir: periode.tanggal_akhir,
+      penerima: periode.penerima, saldoVA: periode.saldoVA, saldoPettyAwal: periode.saldoPettyAwal });
+    setPrefill(pre || null);
+    setOpenForm(true);
+  }
 
   async function doClose() {
     const res = await api('closePeriode', { role: session.user.role, user_id: session.user.id, id: confirmClose.id });
@@ -565,12 +710,7 @@ function SetupPeriode({ session, toast }) {
 
             {session.user.role === 'akuntan' && (
               <div className="flex flex-wrap gap-2 mt-3">
-                <Btn kind="ghost" onClick={function(){
-                  setEditPeriode({ id: periode.id, periode_no: periode.periode_no,
-                    tanggal_mulai: periode.tanggal_mulai, tanggal_akhir: periode.tanggal_akhir,
-                    penerima: periode.penerima, saldoVA: periode.saldoVA, saldoPettyAwal: periode.saldoPettyAwal });
-                  setOpenForm(true);
-                }}>{I.edit} Edit Periode</Btn>
+                <Btn kind="ghost" onClick={function(){ openEdit(null); }}>{I.edit} Edit Periode</Btn>
                 <Btn kind="danger" onClick={function(){setConfirmClose(periode);}}>{I.lock} Tutup Periode</Btn>
               </div>
             )}
@@ -582,15 +722,14 @@ function SetupPeriode({ session, toast }) {
         <div className="grid lg:grid-cols-2 gap-3 mb-3">
           <SaldoCard tipe="VA" periode={periode} topups={aktifVATopups}
             onTopup={function(){setOpenTopup('VA');}} color={COLORS.blue}
-            onEditAwal={session.user.role === 'akuntan' ? function(){
-              setEditPeriode({ id: periode.id, periode_no: periode.periode_no,
-                tanggal_mulai: periode.tanggal_mulai, tanggal_akhir: periode.tanggal_akhir,
-                penerima: periode.penerima, saldoVA: periode.saldoVA, saldoPettyAwal: periode.saldoPettyAwal });
-              setOpenForm(true); } : null}/>
+            onEditAwal={session.user.role === 'akuntan' ? function(){ openEdit(null); } : null}/>
           <SaldoCard tipe="Petty" periode={periode} topups={aktifPettyTopups}
             onTopup={function(){setOpenTopup('Petty');}} color={COLORS.amber}/>
         </div>
       )}
+
+      {periode && session.user.role === 'akuntan' && <SaldoSyncCard sync={sync} onSamakan={function(){
+        openEdit({ saldoVA: Math.max(0, sync.akhir.va), saldoPettyAwal: Math.max(0, sync.akhir.petty) }); }}/>}
 
       {closed.length > 0 && (
         <Card className="mb-3">
@@ -610,7 +749,7 @@ function SetupPeriode({ session, toast }) {
       )}
 
       {openForm && (
-        <PeriodeForm initial={editPeriode} onClose={function(){setOpenForm(false); setEditPeriode(null);}}
+        <PeriodeForm initial={editPeriode} carry={carry} prefill={prefill} onClose={function(){setOpenForm(false); setEditPeriode(null); setPrefill(null);}}
           onSaved={load} session={session} toast={toast}/>
       )}
       {openTopup && periode && (
@@ -642,7 +781,7 @@ function KPICard(p) {
   </Card>;
 }
 
-function Dashboard({ session, scope, toast }) {
+function Dashboard({ session, scope, toast, onGoSetup }) {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [periodeList, setPeriodeList] = useState([]);
@@ -675,6 +814,7 @@ function Dashboard({ session, scope, toast }) {
 
   return (
     <div>
+      {session.user.role === 'akuntan' && onGoSetup && <SaldoSyncBanner session={session} onGoSetup={onGoSetup}/>}
       <Card className="mb-3">
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
           <div>
@@ -836,7 +976,7 @@ function Dashboard({ session, scope, toast }) {
 // ============================================================
 function TransaksiForm({ mode, initial, jenis, kategoriMap, periode, session, toast, onSubmit, submitting }) {
   // mode: 'add' or 'edit'. initial used for edit.
-  const today = new Date().toISOString().substring(0,10);
+  const today = todayISO();
   const defaultTgl = periode ? (today >= periode.tanggal_mulai && today <= periode.tanggal_akhir ? today : periode.tanggal_mulai) : today;
   const [form, setForm] = useState(initial || {
     tanggal: defaultTgl, no_bukti: '', sumber: 'VA', uraian: '', kategori: '', riil: '', unriil: '',
@@ -1952,7 +2092,7 @@ function Profil({ session, toast, onUpdated }) {
     setSaving(true);
     const payload = { user_id: session.user.id, nama: f.nama, username: f.username };
     if (f.password_baru) { payload.password_lama = f.password_lama; payload.password_baru = f.password_baru; }
-    const res = await api('updateMyProfile', payload);
+    const res = await apiSecure('updateMyProfile', payload);
     setSaving(false);
     if (res.ok) {
       toast('Profil tersimpan');
@@ -2000,13 +2140,14 @@ function Pengguna({ session, toast }) {
   const [openAdd, setOpenAdd] = useState(false);
   const [editUser, setEditUser] = useState(null);
   const [confirmDel, setConfirmDel] = useState(null);
-  const [revealPw, setRevealPw] = useState({});
 
   function load() {
     setLoading(true);
     Promise.all([api('getUsers', { role: session.user.role }), api('getDapur')]).then(function(arr){
       setLoading(false);
-      if (arr[0].ok) setRows(arr[0].data); if (arr[1].ok) setDapur(arr[1].data);
+      // Password tidak pernah ditampilkan / disimpan di state. (Backend juga harus berhenti mengirimnya.)
+      if (arr[0].ok) setRows(arr[0].data.map(function(u){ const c = Object.assign({}, u); delete c.password; return c; }));
+      if (arr[1].ok) setDapur(arr[1].data);
     });
   }
   useEffect(load, []);
@@ -2031,7 +2172,6 @@ function Pengguna({ session, toast }) {
         <thead><tr style={{ color: COLORS.muted, background: COLORS.paper }} className="text-left text-xs uppercase">
           <th className="px-4 py-2.5 font-semibold">Nama</th>
           <th className="px-4 py-2.5 font-semibold">Username</th>
-          <th className="px-4 py-2.5 font-semibold">Password</th>
           <th className="px-4 py-2.5 font-semibold">Peran</th>
           <th className="px-4 py-2.5 font-semibold">Dapur</th>
           <th className="px-4 py-2.5 font-semibold">Status</th>
@@ -2041,14 +2181,6 @@ function Pengguna({ session, toast }) {
           return <tr key={u.id} style={{ borderTop: '1px solid ' + COLORS.line }}>
             <td className="px-4 py-2.5 font-medium" style={{ color: COLORS.ink }}>{u.nama}</td>
             <td className="px-4 py-2.5" style={{ color: COLORS.muted }}>{u.username}</td>
-            <td className="px-4 py-2.5 text-xs">
-              {revealPw[u.id] ? (
-                <code style={{ color: COLORS.ink }}>{u.password}</code>
-              ) : (
-                <button onClick={function(){setRevealPw(Object.assign({}, revealPw, { [u.id]: true }));}}
-                  className="text-xs underline" style={{ color: COLORS.muted }}>tampilkan</button>
-              )}
-            </td>
             <td className="px-4 py-2.5"><span className="text-xs rounded px-2 py-0.5" style={{ background: COLORS.paper, color: COLORS.green }}>{u.role}</span></td>
             <td className="px-4 py-2.5" style={{ color: COLORS.muted }}>{u.dapur ? (dapurMap[u.dapur] || u.dapur) : '—'}</td>
             <td className="px-4 py-2.5"><span className="text-xs rounded px-2 py-0.5" style={{ background: u.aktif==='YA'?'#E8F1EC':'#FAE5DF', color: u.aktif==='YA'?COLORS.green:COLORS.danger }}>{u.aktif}</span></td>
@@ -2094,7 +2226,7 @@ function UserForm({ mode, initial, dapur, session, toast, onClose, onSaved }) {
     const payload = Object.assign({ role: session.user.role, user_id: session.user.id, target_role: f.target_role }, f);
     if (f.target_role !== 'akuntan' && f.target_role !== 'pic') payload.dapur = '';
     if (mode === 'edit') { payload.id = initial.id; if (!f.password) delete payload.password; }
-    const res = await api(action, payload);
+    const res = await apiSecure(action, payload);
     setSaving(false);
     if (res.ok) { toast(mode==='edit'?'User diupdate':'User ditambahkan'); onSaved(); onClose(); }
     else toast(res.error, 'error');
@@ -2103,8 +2235,8 @@ function UserForm({ mode, initial, dapur, session, toast, onClose, onSaved }) {
   return <Modal title={mode === 'edit' ? 'Edit pengguna' : 'Tambah pengguna'} onClose={onClose}>
     <Field label="Nama lengkap"><input value={f.nama} onChange={function(e){setF(Object.assign({}, f, {nama:e.target.value}));}} style={inputStyle}/></Field>
     <Field label="Username"><input value={f.username} onChange={function(e){setF(Object.assign({}, f, {username:e.target.value}));}} style={inputStyle} autoCapitalize="off"/></Field>
-    <Field label={mode === 'edit' ? 'Password baru (kosongkan kalau tidak ganti)' : 'Password awal'}>
-      <input value={f.password} onChange={function(e){setF(Object.assign({}, f, {password:e.target.value}));}} style={inputStyle}/>
+    <Field label={mode === 'edit' ? 'Password baru (kosongkan kalau tidak ganti)' : 'Password awal'} hint="Password tidak bisa dilihat lagi setelah disimpan. Catat dan sampaikan ke pengguna; pengguna bisa menggantinya di menu Profil.">
+      <input value={f.password} onChange={function(e){setF(Object.assign({}, f, {password:e.target.value}));}} style={inputStyle} autoComplete="new-password"/>
     </Field>
     <Field label="Peran">
       <select value={f.target_role} onChange={function(e){setF(Object.assign({}, f, {target_role:e.target.value}));}} style={inputStyle}>
@@ -2392,6 +2524,20 @@ function ItemFields({ row, onChange, kategoriMap, penerima, upsertPenerima, toas
   </div>;
 }
 
+// Cegah pengajuan ganda: cari pengajuan dengan isi identik (dapur + hari H + semua baris yang masih hidup).
+// Dipanggil sebelum kirim, sehingga kirim ulang setelah "Koneksi gagal" (padahal server sempat menyimpan) tertangkap.
+async function cariDuplikatPengajuan(items, dapur, tanggal) {
+  const res = await api('getPengajuan', { scope: dapur || 'ALL' });
+  if (!res.ok || !res.data || !res.data.pengajuan) return null;
+  const sig = function(it) { return [it.jenis, it.kategori, String(it.uraian || '').trim().toLowerCase(), Number(it.nominal), it.penerima_id].join('|'); };
+  const mine = items.map(sig).sort().join('\n');
+  return res.data.pengajuan.find(function(h) {
+    if (h.tanggal !== tanggal || (dapur && h.dapur !== dapur)) return false;
+    const hidup = (h.items || []).filter(function(i){ return i.status !== 'DITOLAK' && i.status !== 'DIBATALKAN'; });
+    return hidup.length === items.length && hidup.map(sig).sort().join('\n') === mine;
+  }) || null;
+}
+
 function PengajuanForm({ kategoriMap, penerima, upsertPenerima, toast, onCreated, onCancel, dapurOptions, periodeRange, ownDapur }) {
   const [tanggal, setTanggal] = useState(todayISO());
   const onlyJenis = Object.keys(kategoriMap).length === 1 ? Object.keys(kategoriMap)[0] : '';
@@ -2403,22 +2549,33 @@ function PengajuanForm({ kategoriMap, penerima, upsertPenerima, toast, onCreated
   const tglErr = !tanggal ? 'Tanggal wajib diisi' : (rng && (tanggal < rng.mulai || tanggal > rng.akhir)) ? 'Di luar periode aktif (' + fmtDDMMYYYY(rng.mulai) + ' – ' + fmtDDMMYYYY(rng.akhir) + ')' : null;
   const [saving, setSaving] = useState(false);
   const [confirm, setConfirm] = useState(false);
+  const [dup, setDup] = useState(null);
+  const lockRef = useRef(false);   // kunci sinkron: klik ganda / ketuk ulang tidak bisa lolos sebelum render ulang
+  const reqId = useRef('rq-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 10));   // satu ID per form; dikirim agar backend bisa menolak kiriman ulang
   const total = rows.reduce(function(s, r){ return s + (Number(r.nominal) || 0); }, 0);
   const firstErr = rows.map(rowError).findIndex(function(e){ return !!e; });
   function update(i, n) { setRows(rows.map(function(r, j){ return j === i ? n : r; })); }
-  async function submit() {
-    setSaving(true);
-    const items = rows.map(function(r){ return { jenis: r.jenis, kategori: r.kategori, uraian: r.uraian.trim(), nominal: Number(r.nominal), penerima_id: r.penerima_id, susulan: !!r.susulan }; });
-    const res = await apiPost('createPengajuan', { items: items, dapur: dapur, tanggal: tanggal });
-    setSaving(false); setConfirm(false);
-    if (res.ok) {
-      toast('Pengajuan ' + res.data.nomor + ' terkirim ke Yayasan');
-      const pmap = {}; (penerima || []).forEach(function(x){ pmap[x.id] = x; });
-      onCreated({ nomor: res.data.nomor, tanggal: tanggal, dapur: dapur, items: items.map(function(it){
-        const pn = pmap[it.penerima_id] || {};
-        return Object.assign({}, it, { penerima_nama: pn.nama || '', bank: pn.bank || '', no_rek: pn.no_rek || '' }); }) });
-    }
-    else toast(res.error || 'Gagal mengirim', 'error');
+  async function submit(force) {
+    if (lockRef.current) return;
+    lockRef.current = true; setSaving(true);
+    try {
+      const items = rows.map(function(r){ return { jenis: r.jenis, kategori: r.kategori, uraian: r.uraian.trim(), nominal: Number(r.nominal), penerima_id: r.penerima_id, susulan: !!r.susulan }; });
+      if (!force) {
+        const d = await cariDuplikatPengajuan(items, needDapur ? dapur : ownDapur, tanggal);
+        if (d) { setConfirm(false); setDup(d); return; }
+      }
+      const res = await apiPost('createPengajuan', { items: items, dapur: dapur, tanggal: tanggal, request_id: reqId.current });
+      setConfirm(false);
+      if (res.ok) {
+        toast('Pengajuan ' + res.data.nomor + ' terkirim ke Yayasan');
+        const pmap = {}; (penerima || []).forEach(function(x){ pmap[x.id] = x; });
+        onCreated({ nomor: res.data.nomor, tanggal: tanggal, dapur: dapur, items: items.map(function(it){
+          const pn = pmap[it.penerima_id] || {};
+          return Object.assign({}, it, { penerima_nama: pn.nama || '', bank: pn.bank || '', no_rek: pn.no_rek || '' }); }) });
+      }
+      else if (/^Koneksi gagal/.test(res.error || '')) toast('Koneksi terputus — pengajuan MUNGKIN sudah terkirim. Cek daftar pengajuan dulu sebelum kirim ulang.', 'error');
+      else toast(res.error || 'Gagal mengirim', 'error');
+    } finally { lockRef.current = false; setSaving(false); }
   }
   return <Card className="mb-3">
     <div className="flex items-start justify-between gap-2 mb-3">
@@ -2462,7 +2619,10 @@ function PengajuanForm({ kategoriMap, penerima, upsertPenerima, toast, onCreated
     <div className="mt-3"><Btn full disabled={firstErr >= 0 || saving || (needDapur && !dapur) || !!tglErr} onClick={function(){ setConfirm(true); }}>{I.arrowR} Kirim ke Yayasan</Btn></div>
     {confirm && <ConfirmModal title="Kirim pengajuan?" confirmLabel={saving ? 'Mengirim…' : 'Kirim'}
       message={'Pengajuan tanggal ' + fmtDDMMYYYY(tanggal) + ': ' + rows.length + ' baris senilai ' + fmt(total) + (needDapur ? ' untuk ' + ((dapurOptions.find(function(d){ return d.id === dapur; }) || {}).nama || '') : '') + ' ke Yayasan. Setelah dikirim, baris hanya bisa diedit sampai Yayasan memutuskan.'}
-      onConfirm={function(){ if (!saving) submit(); }} onClose={function(){ setConfirm(false); }}/>}
+      onConfirm={function(){ submit(false); }} onClose={function(){ setConfirm(false); }}/>}
+    {dup && <ConfirmModal title="Kemungkinan pengajuan ganda" danger confirmLabel="Tetap kirim"
+      message={'Sudah ada pengajuan ' + dup.nomor + ' (hari H ' + fmtDDMMYYYY(dup.tanggal) + ') dengan isi yang sama persis. Jika tadi koneksi sempat terputus, kemungkinan pengajuan itu sudah terkirim. Kirim lagi sebagai pengajuan baru?'}
+      onConfirm={function(){ setDup(null); submit(true); }} onClose={function(){ setDup(null); }}/>}
   </Card>;
 }
 
@@ -3529,7 +3689,7 @@ function PerubahanAdminPage({ session, dapurList, toast }) {
         return <button key={t[0]} onClick={function(){ setTab(t[0]); }} className="flex-1 sm:flex-none rounded-lg px-4 py-2 text-sm font-semibold"
           style={{ background: on ? COLORS.green : '#fff', color: on ? '#fff' : COLORS.ink, border: '1px solid ' + (on ? COLORS.green : COLORS.line) }}>{t[1]}</button>; })}
     </div>
-    <Card className="mb-3"><div className="text-sm" style={{ color: COLORS.muted }}>Perubahan transaksi di <b>periode yang sudah ditutup</b>. Menyetujui akan mengubah laporan periode itu; saldo awal periode berikutnya <b>tidak</b> ikut berubah otomatis.</div></Card>
+    <Card className="mb-3"><div className="text-sm" style={{ color: COLORS.muted }}>Perubahan transaksi di <b>periode yang sudah ditutup</b>. Menyetujui akan mengubah laporan periode itu. Saldo awal periode berikutnya tidak diubah diam-diam: selisihnya ditandai untuk akuntan di Setup dan disamakan dengan alasan tercatat (bisa jadi ada penambahan kas di pergantian periode).</div></Card>
     {!rows ? <Card>{I.spinner}</Card> : rows.length === 0 ? <Card><div className="text-sm text-center py-6" style={{ color: COLORS.muted }}>Tidak ada pengajuan perubahan.</div></Card> :
       rows.map(function(c){
         return <Card key={c.id} className="mb-3">
@@ -3551,7 +3711,7 @@ function PerubahanAdminPage({ session, dapurList, toast }) {
       })}
     {act && <Modal title={act.status === 'DISETUJUI' ? 'Setujui perubahan?' : 'Tolak perubahan?'} onClose={function(){ setAct(null); }}>
       {act.status === 'DISETUJUI' && <p className="text-sm mb-3" style={{ color: COLORS.ink }}>
-        {act.c.aksi === 'HAPUS' ? 'Transaksi akan dihapus permanen dari Periode ' + act.c.periode_no + '.' : 'Transaksi di Periode ' + act.c.periode_no + ' akan diubah.'} Saldo awal periode berikutnya perlu Anda periksa manual di Setup.</p>}
+        {act.c.aksi === 'HAPUS' ? 'Transaksi akan dihapus permanen dari Periode ' + act.c.periode_no + '.' : 'Transaksi di Periode ' + act.c.periode_no + ' akan diubah.'} Akuntan akan melihat selisih saldo awal periode berikutnya di menu Setup (Sinkron saldo) dan dapat menyamakannya, lengkap dengan alasan.</p>}
       <Field label={act.status === 'DITOLAK' ? 'Alasan penolakan *' : 'Catatan (opsional)'}><input value={catatan} onChange={function(e){ setCatatan(e.target.value); }} style={inputStyle}/></Field>
       <div className="flex gap-2 justify-end"><Btn kind="ghost" onClick={function(){ setAct(null); }}>Batal</Btn>
         <Btn kind={act.status === 'DITOLAK' ? 'danger' : 'solid'} disabled={saving || (act.status === 'DITOLAK' && !catatan.trim())} onClick={decide}>{saving ? I.spinner : I.check} {act.status === 'DISETUJUI' ? 'Setujui' : 'Tolak'}</Btn></div>
@@ -3686,7 +3846,7 @@ function App() {
 
         <main className="flex-1 p-4 sm:p-6 overflow-x-hidden md:!pb-6" style={{ paddingBottom: 'calc(env(safe-area-inset-bottom, 0px) + 88px)' }}>
           {view === 'setup'   && <SetupPeriode session={session} toast={toast}/>}
-          {view === 'dash'    && <Dashboard key={'d'+refreshKey} session={session} scope={effScope} toast={toast}/>}
+          {view === 'dash'    && <Dashboard key={'d'+refreshKey} session={session} scope={effScope} toast={toast} onGoSetup={function(){ setView('setup'); }}/>}
           {view === 'pengajuan' && <PengajuanPage session={session} scope={effScope} dapurList={dapurList} toast={toast}/>}
           {view === 'beritaacara' && <BeritaAcaraPage session={session} scope={effScope} dapurList={dapurList} toast={toast}/>}
           {view === 'realisasi' && <RealisasiPage session={session} toast={toast}
@@ -3716,7 +3876,7 @@ function App() {
               style={{ color: active?COLORS.green:COLORS.muted, flex: navItems.length > 5 ? '0 0 auto' : '1 1 0',
                        width: navItems.length > 5 ? 68 : 'auto', minWidth: navItems.length > 5 ? 68 : 0,
                        borderTop: active ? '2px solid ' + COLORS.green : '2px solid transparent' }}>
-              {icon}<span className="text-[10px] font-medium whitespace-nowrap leading-none mt-0.5">{label}</span>
+              {icon}<span className="text-[11px] font-medium whitespace-nowrap leading-none mt-0.5">{label}</span>
             </button>;
           })}
         </div>
