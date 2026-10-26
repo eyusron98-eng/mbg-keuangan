@@ -2372,6 +2372,8 @@ const STATUS_STYLE = {
   MENUNGGU:    { bg: '#FBF3E2', fg: '#9A6A0B', label: 'Menunggu keputusan' },
   SELESAI:     { bg: '#E8F1EC', fg: '#15663E', label: 'Sudah diputuskan' },
 };
+const ROLE_LABEL = { yayasan: 'Yayasan', pic: 'PIC Dapur', admin: 'Admin' };
+function oleh(nama, role) { return nama ? nama + (ROLE_LABEL[role] ? ' (' + ROLE_LABEL[role] + ')' : '') : ''; }
 function StatusBadge({ status }) {
   const st = STATUS_STYLE[status] || { bg: COLORS.paper, fg: COLORS.muted, label: status };
   return <span className="inline-block rounded px-1.5 py-0.5 text-[11px] font-semibold whitespace-nowrap" style={{ background: st.bg, color: st.fg }}>{st.label}</span>;
@@ -2567,7 +2569,7 @@ function PengajuanForm({ kategoriMap, penerima, upsertPenerima, toast, onCreated
       const res = await apiPost('createPengajuan', { items: items, dapur: dapur, tanggal: tanggal, request_id: reqId.current });
       setConfirm(false);
       if (res.ok) {
-        toast('Pengajuan ' + res.data.nomor + ' terkirim ke Yayasan');
+        toast('Pengajuan ' + res.data.nomor + ' terkirim untuk persetujuan');
         const pmap = {}; (penerima || []).forEach(function(x){ pmap[x.id] = x; });
         onCreated({ nomor: res.data.nomor, tanggal: tanggal, dapur: dapur, items: items.map(function(it){
           const pn = pmap[it.penerima_id] || {};
@@ -2616,9 +2618,9 @@ function PengajuanForm({ kategoriMap, penerima, upsertPenerima, toast, onCreated
     </div>
     {needDapur && !dapur && <div className="text-xs mt-2" style={{ color: COLORS.danger }}>• Dapur tujuan belum dipilih</div>}
     {firstErr >= 0 && <div className="text-xs mt-2" style={{ color: COLORS.danger }}>• Baris {firstErr + 1}: {rowError(rows[firstErr])} belum diisi</div>}
-    <div className="mt-3"><Btn full disabled={firstErr >= 0 || saving || (needDapur && !dapur) || !!tglErr} onClick={function(){ setConfirm(true); }}>{I.arrowR} Kirim ke Yayasan</Btn></div>
+    <div className="mt-3"><Btn full disabled={firstErr >= 0 || saving || (needDapur && !dapur) || !!tglErr} onClick={function(){ setConfirm(true); }}>{I.arrowR} Kirim untuk persetujuan</Btn></div>
     {confirm && <ConfirmModal title="Kirim pengajuan?" confirmLabel={saving ? 'Mengirim…' : 'Kirim'}
-      message={'Pengajuan tanggal ' + fmtDDMMYYYY(tanggal) + ': ' + rows.length + ' baris senilai ' + fmt(total) + (needDapur ? ' untuk ' + ((dapurOptions.find(function(d){ return d.id === dapur; }) || {}).nama || '') : '') + ' ke Yayasan. Setelah dikirim, baris hanya bisa diedit sampai Yayasan memutuskan.'}
+      message={'Pengajuan tanggal ' + fmtDDMMYYYY(tanggal) + ': ' + rows.length + ' baris senilai ' + fmt(total) + (needDapur ? ' untuk ' + ((dapurOptions.find(function(d){ return d.id === dapur; }) || {}).nama || '') : '') + ' untuk persetujuan. Setelah dikirim, baris hanya bisa diedit sampai diputuskan.'}
       onConfirm={function(){ submit(false); }} onClose={function(){ setConfirm(false); }}/>}
     {dup && <ConfirmModal title="Kemungkinan pengajuan ganda" danger confirmLabel="Tetap kirim"
       message={'Sudah ada pengajuan ' + dup.nomor + ' (hari H ' + fmtDDMMYYYY(dup.tanggal) + ') dengan isi yang sama persis. Jika tadi koneksi sempat terputus, kemungkinan pengajuan itu sudah terkirim. Kirim lagi sebagai pengajuan baru?'}
@@ -2783,7 +2785,7 @@ function PengajuanPage({ session, scope, dapurList, toast }) {
             <div className="font-mono text-xs font-semibold break-all" style={{ color: COLORS.ink }}>{h.nomor}</div>
             <div className="text-xs mt-0.5" style={{ color: COLORS.muted }}>
               Hari H {fmtDDMMYYYY(h.tanggal)} · oleh {h.created_by_nama}{showDapur && dapurMap[h.dapur] ? ' · ' + dapurMap[h.dapur] : ''}
-              {h.decided_by_nama ? ' · diputuskan ' + h.decided_by_nama : ''}
+              {h.decided_by_nama ? ' · diputuskan ' + oleh(h.decided_by_nama, h.decided_by_role) : ''}
             </div>
             <div className="mt-1"><TimingBadge h={h}/></div>
           </div>
@@ -3304,7 +3306,7 @@ function TtdCard({ toast }) {
   </Card>;
 }
 
-// ---------- Persetujuan (Yayasan) ----------
+// ---------- Persetujuan (Yayasan, PIC Dapur untuk dapurnya, Admin) ----------
 function DecisionButtons({ value, onChange }) {
   const opts = [['DISETUJUI','Setuju',COLORS.green],['REVISI','Revisi',COLORS.blue],['DITOLAK','Tolak',COLORS.danger]];
   return <div className="grid grid-cols-3 gap-1.5">
@@ -3402,7 +3404,7 @@ function PersetujuanPage({ session, scope, dapurList, toast }) {
           <div className="p-3 sm:p-4 flex justify-between gap-2" style={{ background: COLORS.paper, borderRadius: '12px 12px 0 0' }}>
             <div className="min-w-0"><div className="text-sm font-bold" style={{ color: COLORS.ink }}>{dapurMap[h.dapur] || h.dapur}</div>
               <div className="font-mono text-xs break-all">{h.nomor}</div>
-              <div className="text-xs" style={{ color: COLORS.muted }}>{fmtDDMMYYYY(h.tanggal)} · disetujui {fmt(h.total_disetujui)}</div></div>
+              <div className="text-xs" style={{ color: COLORS.muted }}>{fmtDDMMYYYY(h.tanggal)} · disetujui {fmt(h.total_disetujui)}{h.decided_by_nama ? ' · oleh ' + oleh(h.decided_by_nama, h.decided_by_role) : ''}</div></div>
             <StatusBadge status={h.status}/>
           </div>
           {h.items.map(function(it){ return <ItemRow key={it.id} it={it}/>; })}
@@ -3767,6 +3769,7 @@ function App() {
     pic: [
       ['dash','Dashboard',I.dash],
       ['pengajuan','Pengajuan',I.file],
+      ['persetujuan','Persetujuan',I.check],
       ['beritaacara','Berita Acara',I.download],
       ['laporan','Laporan',I.report],
       ['riwayat','Riwayat',I.list],
@@ -3785,6 +3788,7 @@ function App() {
     admin: [
       ['dash','Dashboard',I.dash],
       ['pengajuan','Pengajuan',I.file],
+      ['persetujuan','Persetujuan',I.check],
       ['beritaacara','Berita Acara',I.download],
       ['laporan','Laporan',I.report],
       ['riwayat','Riwayat',I.list],
