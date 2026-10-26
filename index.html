@@ -23,6 +23,14 @@
   main > div { animation: fadeUp .22s ease both; }
   .sheet { animation: sheetUp .2s ease both; }
   @media (pointer: coarse) { button { min-height: 40px; } }
+  /* main tidak boleh jadi scroll-container, kalau tidak position:sticky di dalamnya tidak berfungsi */
+  .app-main { min-width: 0; overflow-x: hidden; }
+  @supports (overflow: clip) { .app-main { overflow-x: clip; } }
+  /* Bar aksi yang selalu terlihat di bawah layar (di atas navigasi bawah pada HP) */
+  .sticky-bar { position: sticky; bottom: calc(env(safe-area-inset-bottom, 0px) + 66px); z-index: 20; background: #fff;
+    margin: 14px -16px -16px; padding: 12px 16px; border-top: 1px solid #E3E0D6; border-radius: 0 0 16px 16px; box-shadow: 0 -8px 14px rgba(23,42,31,0.07); }
+  @media (min-width: 640px) { .sticky-bar { margin: 14px -20px -20px; padding: 12px 20px; } }
+  @media (min-width: 768px) { .sticky-bar { bottom: 0; } }
   /* 16px mencegah iOS memperbesar layar sendiri saat mengetik */
   @media (max-width: 640px) {
     input:not([type=checkbox]):not([type=file]), select, textarea { font-size: 16px !important; }
@@ -2609,16 +2617,22 @@ function PengajuanForm({ kategoriMap, penerima, upsertPenerima, toast, onCreated
         <ItemFields row={r} onChange={function(n){ update(i, n); }} kategoriMap={kategoriMap} penerima={penerima} upsertPenerima={upsertPenerima} toast={toast}/>
       </div>;
     })}
-    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+    <div>
       <Btn kind="ghost" onClick={function(){ setRows(rows.concat([newRow()])); }}>{I.plusSm} Tambah baris</Btn>
-      <div className="text-right">
-        <div className="text-xs" style={{ color: COLORS.muted }}>Total {rows.length} baris</div>
-        <div className="text-lg font-bold num" style={{ color: COLORS.ink }}>{fmt(total)}</div>
-      </div>
     </div>
-    {needDapur && !dapur && <div className="text-xs mt-2" style={{ color: COLORS.danger }}>• Dapur tujuan belum dipilih</div>}
-    {firstErr >= 0 && <div className="text-xs mt-2" style={{ color: COLORS.danger }}>• Baris {firstErr + 1}: {rowError(rows[firstErr])} belum diisi</div>}
-    <div className="mt-3"><Btn full disabled={firstErr >= 0 || saving || (needDapur && !dapur) || !!tglErr} onClick={function(){ setConfirm(true); }}>{I.arrowR} Kirim untuk persetujuan</Btn></div>
+    <div className="sticky-bar">
+      <div className="flex items-end justify-between gap-3">
+        <div>
+          <div className="text-xs" style={{ color: COLORS.muted }}>Total {rows.length} baris</div>
+          <div className="text-lg font-bold num leading-tight" style={{ color: COLORS.ink }}>{fmt(total)}</div>
+        </div>
+        <div className="text-[11px] text-right" style={{ color: COLORS.amber }}>Belum terkirim sebelum<br/>tombol Kirim ditekan</div>
+      </div>
+      {(needDapur && !dapur) ? <div className="text-xs mt-1.5" style={{ color: COLORS.danger }}>• Dapur tujuan belum dipilih</div>
+        : tglErr ? <div className="text-xs mt-1.5" style={{ color: COLORS.danger }}>• {tglErr}</div>
+        : firstErr >= 0 ? <div className="text-xs mt-1.5" style={{ color: COLORS.danger }}>• Baris {firstErr + 1}: {rowError(rows[firstErr])} belum diisi</div> : null}
+      <div className="mt-2"><Btn full disabled={firstErr >= 0 || saving || (needDapur && !dapur) || !!tglErr} onClick={function(){ setConfirm(true); }}>{saving ? I.spinner : I.arrowR} Kirim untuk persetujuan</Btn></div>
+    </div>
     {confirm && <ConfirmModal title="Kirim pengajuan?" confirmLabel={saving ? 'Mengirim…' : 'Kirim'}
       message={'Pengajuan tanggal ' + fmtDDMMYYYY(tanggal) + ': ' + rows.length + ' baris senilai ' + fmt(total) + (needDapur ? ' untuk ' + ((dapurOptions.find(function(d){ return d.id === dapur; }) || {}).nama || '') : '') + ' untuk persetujuan. Setelah dikirim, baris hanya bisa diedit sampai diputuskan.'}
       onConfirm={function(){ submit(false); }} onClose={function(){ setConfirm(false); }}/>}
@@ -2725,7 +2739,9 @@ function PengajuanPage({ session, scope, dapurList, toast }) {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [kategoriMap, setKategoriMap] = useState({});
-  const [showForm, setShowForm] = useState(false);
+  const [tab, setTab] = useState(isAsisten ? 'buat' : 'daftar');   // 'buat' = formulir, 'daftar' = sudah diajukan
+  const [formKey, setFormKey] = useState(0);        // naik setelah kirim/batal → formulir kosong lagi
+  const [baru, setBaru] = useState(null);           // nomor pengajuan yang baru saja terkirim (banner sukses)
   const [editItem, setEditItem] = useState(null);
   const [batalItem, setBatalItem] = useState(null);
   const [penerima, upsertPenerima] = usePenerimaList();
@@ -2762,14 +2778,29 @@ function PengajuanPage({ session, scope, dapurList, toast }) {
     {noPeriode && <Card className="mb-3"><div className="text-sm" style={{ color: COLORS.danger }}>Belum ada periode aktif. {isAkuntan ? 'Buat periode di menu Setup dulu.' : isAsisten ? 'Akuntan dapur perlu membuat periode dulu.' : ''}</div></Card>}
     {isAsisten && <Card className="mb-3"><div className="text-sm" style={{ color: COLORS.muted }}>Akun asisten: mengajukan <b>Bahan Baku</b> untuk semua dapur. Realisasi (transfer & bukti) dilakukan oleh akuntan masing-masing dapur.</div></Card>}
 
-    {canCreate && !noPeriode && (showForm
-      ? <PengajuanForm kategoriMap={kategoriMap} penerima={penerima} upsertPenerima={upsertPenerima} toast={toast} dapurOptions={dapurOptions}
-          periodeRange={data.periodeRange || {}} ownDapur={session.user.dapur}
-          onCreated={function(d){ setShowForm(false); load();
-            if (d) setWaText(buildWAPesan({ nomor: d.nomor, tanggal: d.tanggal, dapurNama: dapurMap[d.dapur || session.user.dapur] || '', oleh: session.user.nama, items: d.items })); }}
-          onCancel={function(){ setShowForm(false); }}/>
-      : <div className="mb-3"><Btn full onClick={function(){ setShowForm(true); }}>{I.plusSm} Buat pengajuan hari ini</Btn></div>)}
+    {canCreate && !noPeriode && <div className="grid grid-cols-2 gap-2 mb-3">
+      {[['buat', 'Buat pengajuan', null], ['daftar', 'Sudah diajukan', data.pengajuan.length]].map(function(t){
+        const on = tab === t[0];
+        return <button key={t[0]} onClick={function(){ setTab(t[0]); }} className="rounded-xl px-3 py-3 text-sm font-semibold"
+          style={{ background: on ? COLORS.green : '#fff', color: on ? '#fff' : COLORS.ink, border: '1px solid ' + (on ? COLORS.green : COLORS.line) }}>
+          {t[1]}{t[2] !== null && <span className="ml-1.5 rounded-full px-1.5 py-0.5 text-[11px]" style={{ background: on ? 'rgba(255,255,255,0.22)' : COLORS.paper, color: on ? '#fff' : COLORS.muted }}>{t[2]}</span>}
+        </button>; })}
+    </div>}
 
+    {canCreate && !noPeriode && <div style={{ display: tab === 'buat' ? 'block' : 'none' }}>
+      <PengajuanForm key={formKey} kategoriMap={kategoriMap} penerima={penerima} upsertPenerima={upsertPenerima} toast={toast} dapurOptions={dapurOptions}
+        periodeRange={data.periodeRange || {}} ownDapur={session.user.dapur}
+        onCreated={function(d){ setFormKey(function(k){ return k + 1; }); setTab('daftar'); setBaru(d ? d.nomor : null); load();
+          if (d) setWaText(buildWAPesan({ nomor: d.nomor, tanggal: d.tanggal, dapurNama: dapurMap[d.dapur || session.user.dapur] || '', oleh: session.user.nama, items: d.items })); }}
+        onCancel={function(){ setFormKey(function(k){ return k + 1; }); setTab('daftar'); }}/>
+    </div>}
+
+    {(tab === 'daftar' || !canCreate || noPeriode) && <>
+    {baru && <Card className="mb-3"><div className="flex items-start gap-2.5">
+      <span style={{ color: COLORS.green }}>{I.check}</span>
+      <div className="flex-1 min-w-0 text-sm" style={{ color: COLORS.ink }}><b>Pengajuan terkirim.</b> <span className="font-mono text-xs break-all">{baru}</span> sekarang menunggu keputusan; terlihat di daftar di bawah.</div>
+      <button onClick={function(){ setBaru(null); }} aria-label="Tutup" style={{ color: COLORS.muted }}>{I.x}</button>
+    </div></Card>}
     {data.pengajuan.length === 0 ? (
       <Card><div className="text-sm text-center py-4" style={{ color: COLORS.muted }}>Belum ada pengajuan di periode aktif.</div></Card>
     ) : listUrut.map(function(h, idx){
@@ -2813,6 +2844,8 @@ function PengajuanPage({ session, scope, dapurList, toast }) {
       </Card>
       </React.Fragment>;
     })}
+
+    </>}
 
     {editItem && <ItemEditModal item={editItem} kategoriMap={kategoriMap} penerima={penerima} upsertPenerima={upsertPenerima}
       toast={toast} onClose={function(){ setEditItem(null); }} onSaved={load}/>}
@@ -3848,7 +3881,7 @@ function App() {
           })}
         </nav>
 
-        <main className="flex-1 p-4 sm:p-6 overflow-x-hidden md:!pb-6" style={{ paddingBottom: 'calc(env(safe-area-inset-bottom, 0px) + 88px)' }}>
+        <main className="app-main flex-1 p-4 sm:p-6 md:!pb-6" style={{ paddingBottom: 'calc(env(safe-area-inset-bottom, 0px) + 88px)' }}>
           {view === 'setup'   && <SetupPeriode session={session} toast={toast}/>}
           {view === 'dash'    && <Dashboard key={'d'+refreshKey} session={session} scope={effScope} toast={toast} onGoSetup={function(){ setView('setup'); }}/>}
           {view === 'pengajuan' && <PengajuanPage session={session} scope={effScope} dapurList={dapurList} toast={toast}/>}
