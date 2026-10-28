@@ -3,10 +3,19 @@
   "private": true,
   "description": "Keuangan MBG — build src/index.html (JSX + Tailwind) menjadi index.html siap pakai",
   "scripts": {
-    "build": "node build.js"
+    "build": "node build.js",
+    "test": "npm run test:backend && npm run test:e2e",
+    "test:backend": "node tests/backend.test.js",
+    "test:e2e": "node tests/e2e.test.js"
   },
   "devDependencies": {
     "@babel/standalone": "7.24.0",
-    "tailwindcss": "3.4.17"
+    "playwright-core": "1.64.1",
+    "prop-types": "15.8.1",
+    "react": "18.2.0",
+    "react-dom": "18.2.0",
+    "recharts": "2.12.7",
+    "tailwindcss": "3.4.17",
+    "xlsx": "0.18.5"
   }
 }
