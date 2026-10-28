@@ -2754,7 +2754,7 @@ function PengajuanPage({ session, scope, dapurList, toast }) {
     const res = await api('getPengajuan', { scope: scope || 'ALL' });
     setLoading(false);
     if (res.ok) setData(res.data); else toast(res.error || 'Gagal memuat pengajuan', 'error');
-    if (!isAsisten) { const b = await api('getBADaftar', {}); if (b.ok) setBaList(b.data); }
+    if (!isAsisten) { const b = await api('getBADaftar', { mode: 'aktif' }); if (b.ok) setBaList(b.data.filter(function(g){ return g.periode_status === 'AKTIF'; })); }
   }, [scope]);
   useEffect(function(){ load(); api('getKategori').then(function(r){
     if (r.ok) setKategoriMap(isAsisten ? { 'Bahan Baku': r.data['Bahan Baku'] || ['Semua Kategori'] } : r.data);
@@ -2854,29 +2854,75 @@ function PengajuanPage({ session, scope, dapurList, toast }) {
   </div>;
 }
 
-// ---------- Riwayat Berita Acara (semua periode, termasuk yang sudah ditutup) ----------
+// ---------- Halaman Berita Acara ----------
+// Default hanya Berita Acara hari ini agar ringan. Periode aktif / periode ditutup dimuat hanya bila dipilih.
 function BeritaAcaraPage({ session, scope, dapurList, toast }) {
+  const role = session.user.role;
+  const multi = role === 'admin' || role === 'yayasan' || role === 'asisten';
+  const [mode, setMode] = useState('hari');      // 'hari' | 'aktif' | 'lalu'
   const [list, setList] = useState(null);
+  const [periodes, setPeriodes] = useState(null); // periode ditutup (untuk mode 'lalu')
   const [per, setPer] = useState('');
-  const multi = session.user.role === 'admin' || session.user.role === 'yayasan';
+  const hariIni = todayISO();
+  const scopeDapur = multi && scope && scope !== 'ALL' ? scope : '';
   const dapurMap = useMemo(function(){ const m = {}; (dapurList || []).forEach(function(d){ m[d.id] = d.nama; }); return m; }, [dapurList]);
-  useEffect(function(){ api('getBADaftar', {}).then(function(r){ if (r.ok) setList(r.data); else { setList([]); toast(r.error || 'Gagal memuat', 'error'); } }); }, []);
-  if (!list) return <Card><div className="flex items-center gap-2 text-sm" style={{ color: COLORS.muted }}>{I.spinner} Memuat…</div></Card>;
-  const inScope = list.filter(function(g){ return !multi || !scope || scope === 'ALL' || g.dapur === scope; });
-  const periodes = [];
-  inScope.forEach(function(g){ if (!periodes.some(function(x){ return x.id === g.periode_id; })) periodes.push({ id: g.periode_id, no: g.periode_no, dapur: g.dapur, status: g.periode_status, mulai: g.periode_mulai, akhir: g.periode_akhir }); });
-  const rows = inScope.filter(function(g){ return !per || g.periode_id === per; });
+
+  useEffect(function() {
+    if (mode !== 'lalu') return;
+    let live = true;
+    setPeriodes(null); setPer('');
+    api('getPeriodeList', { role: role, dapur: session.user.dapur || '', scope: scopeDapur || 'ALL' }).then(function(r){
+      if (!live) return;
+      setPeriodes(r.ok ? r.data.filter(function(p){ return p.status !== 'AKTIF'; }).sort(function(x, y){ return x.tanggal_mulai < y.tanggal_mulai ? 1 : -1; }) : []);
+    });
+    return function(){ live = false; };
+  }, [mode, scopeDapur]);
+
+  useEffect(function() {
+    if (mode === 'lalu' && !per) { setList([]); return; }
+    let live = true;
+    setList(null);
+    const prm = mode === 'hari' ? { mode: 'hari', tanggal: hariIni } : mode === 'aktif' ? { mode: 'aktif' } : { mode: 'periode', periode_id: per };
+    if (scopeDapur) prm.scope = scopeDapur;
+    api('getBADaftar', prm).then(function(r){
+      if (!live) return;
+      if (!r.ok) { setList([]); toast(r.error || 'Gagal memuat', 'error'); return; }
+      // saring juga di sini, berjaga bila backend belum diperbarui (masih mengirim semua)
+      setList(r.data.filter(function(g){
+        if (scopeDapur && g.dapur !== scopeDapur) return false;
+        if (mode === 'hari') return g.tanggal === hariIni;
+        if (mode === 'aktif') return g.periode_status === 'AKTIF';
+        return g.periode_id === per;
+      }));
+    });
+    return function(){ live = false; };
+  }, [mode, per, scopeDapur]);
+
+  const MODES = [['hari', 'Hari ini'], ['aktif', 'Periode aktif'], ['lalu', 'Periode ditutup']];
+  const kosong = mode === 'hari' ? 'Belum ada Berita Acara untuk hari H ' + fmtDDMMYYYY(hariIni) + '.'
+    : mode === 'aktif' ? 'Belum ada Berita Acara di periode aktif.'
+    : !per ? 'Pilih periode yang sudah ditutup untuk menampilkan Berita Acara-nya.' : 'Tidak ada Berita Acara di periode ini.';
   return <div>
     <Card className="mb-3">
-      <Eyebrow>Riwayat Berita Acara</Eyebrow>
-      <p className="text-xs mt-1 mb-3" style={{ color: COLORS.muted }}>Satu Berita Acara per dapur per hari H, semua periode termasuk yang sudah ditutup. PDF dibuat ulang dari data saat diunduh; kode verifikasi di kaki halaman berubah bila isinya berubah.</p>
-      <select value={per} onChange={function(e){ setPer(e.target.value); }} style={inputStyle}>
-        <option value="">Semua periode ({inScope.length} berita acara)</option>
-        {periodes.map(function(x){ return <option key={x.id} value={x.id}>{(multi && dapurMap[x.dapur] ? dapurMap[x.dapur] + ' · ' : '') + 'Periode ' + x.no + ' · ' + fmtDateRange(x.mulai, x.akhir) + ' · ' + x.status}</option>; })}
-      </select>
+      <Eyebrow>Berita Acara</Eyebrow>
+      <p className="text-xs mt-1 mb-3" style={{ color: COLORS.muted }}>Satu Berita Acara per dapur per hari H. Yang ditampilkan: hari ini. Berita Acara lain dimuat hanya bila dipilih agar halaman tetap ringan. PDF dibuat ulang dari data saat diunduh; kode verifikasi di kaki halaman berubah bila isinya berubah.</p>
+      <div className="grid grid-cols-3 gap-2">
+        {MODES.map(function(m){ const on = mode === m[0];
+          return <button key={m[0]} onClick={function(){ setMode(m[0]); }} className="rounded-xl px-2 py-2.5 text-sm font-semibold"
+            style={{ background: on ? COLORS.green : '#fff', color: on ? '#fff' : COLORS.ink, border: '1px solid ' + (on ? COLORS.green : COLORS.line) }}>{m[1]}</button>; })}
+      </div>
+      {mode === 'lalu' && <div className="mt-3">
+        {!periodes ? <div className="text-sm flex items-center gap-2" style={{ color: COLORS.muted }}>{I.spinner} Memuat daftar periode…</div>
+          : periodes.length === 0 ? <div className="text-sm" style={{ color: COLORS.muted }}>Belum ada periode yang ditutup.</div>
+          : <select value={per} onChange={function(e){ setPer(e.target.value); }} style={inputStyle}>
+              <option value="">Pilih periode yang sudah ditutup…</option>
+              {periodes.map(function(x){ return <option key={x.id} value={x.id}>{(multi && dapurMap[x.dapur] ? dapurMap[x.dapur] + ' · ' : '') + 'Periode ' + x.periode_no + ' · ' + fmtDateRange(x.tanggal_mulai, x.tanggal_akhir)}</option>; })}
+            </select>}
+      </div>}
     </Card>
-    {rows.length === 0 ? <Card><div className="text-sm text-center py-4" style={{ color: COLORS.muted }}>Belum ada Berita Acara.</div></Card>
-    : <Card pad={false}>{rows.map(function(g, k){
+    {!list ? <Card><div className="flex items-center gap-2 text-sm" style={{ color: COLORS.muted }}>{I.spinner} Memuat…</div></Card>
+    : list.length === 0 ? <Card><div className="text-sm text-center py-4" style={{ color: COLORS.muted }}>{kosong}</div></Card>
+    : <Card pad={false}>{list.map(function(g, k){
       const ready = g.menunggu === 0 && g.disetujui > 0;
       return <div key={g.dapur + g.tanggal} className="p-3 sm:p-4 flex items-center justify-between gap-3" style={{ borderTop: k ? '1px solid ' + COLORS.line : 'none' }}>
         <div className="min-w-0">
@@ -3797,6 +3843,7 @@ function App() {
     ],
     asisten: [
       ['pengajuan','Pengajuan',I.file],
+      ['beritaacara','Berita Acara',I.download],
       ['profil','Profil',I.user],
     ],
     pic: [
@@ -3857,7 +3904,7 @@ function App() {
           </div>
         </div>
         <div className="flex items-center gap-2 shrink-0">
-          {canPickScope && (view==='dash'||view==='riwayat'||view==='laporan'||view==='bukubesar'||view==='pengajuan'||view==='persetujuan') && (
+          {canPickScope && (view==='dash'||view==='riwayat'||view==='laporan'||view==='bukubesar'||view==='pengajuan'||view==='persetujuan'||view==='beritaacara') && (
             <select value={scope} onChange={function(e){setScope(e.target.value);}}
               style={Object.assign({}, inputStyle, { width: 'auto', maxWidth: 120, padding: '6px 8px', fontSize: 12 })}>
               <option value="ALL">Semua dapur</option>
