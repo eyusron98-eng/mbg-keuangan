@@ -18,10 +18,13 @@
   button { transition: transform .08s ease, opacity .15s ease, background-color .15s ease; }
   button:not(:disabled):active { transform: scale(0.97); }
   button:disabled { cursor: not-allowed; }
-  @keyframes fadeUp { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+  /* PENTING: jangan animasikan transform pada pembungkus halaman. Di Chrome, elemen dengan animasi transform
+     (apalagi fill-mode both) menjadi containing block bagi position:fixed, sehingga modal/overlay ikut kotak halaman
+     (modal muncul jauh di bawah atau terpotong di atas layar). Halaman cukup memudar (opacity). */
+  @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
   @keyframes sheetUp { from { transform: translateY(24px); opacity: 0; } to { transform: none; opacity: 1; } }
-  main > div { animation: fadeUp .22s ease both; }
-  .sheet { animation: sheetUp .2s ease both; }
+  main > div { animation: fadeIn .2s ease; }
+  .sheet { animation: sheetUp .2s ease; }   /* tanpa fill-mode: setelah selesai tidak ada transform yang tertinggal (modal bertumpuk tetap benar) */
   @media (pointer: coarse) { button { min-height: 40px; } }
   /* main tidak boleh jadi scroll-container, kalau tidak position:sticky di dalamnya tidak berfungsi */
   .app-main { min-width: 0; overflow-x: hidden; }
@@ -992,11 +995,17 @@ function TransaksiForm({ mode, initial, jenis, kategoriMap, periode, session, to
   const [bukti, setBukti] = useState(null);
 
   function set(k, v) { setForm(function(f){ const n = Object.assign({}, f); n[k] = v; return n; }); }
+  const kategoriJenis = kategoriMap[jenis] || [];
+  const kategoriCocok = kategoriJenis.indexOf(form.kategori) >= 0;
+  // Ganti jenis (mis. di Edit Transaksi): kategori lama yang bukan milik jenis baru dikosongkan agar harus dipilih ulang
+  useEffect(function() {
+    if (form.kategori && kategoriJenis.length && !kategoriCocok) set('kategori', '');
+  }, [jenis]);
   const isBahanBaku = jenis === 'Bahan Baku';
   const dateOutOfRange = form.tanggal && periode && (form.tanggal < periode.tanggal_mulai || form.tanggal > periode.tanggal_akhir);
   // Semua field WAJIB. Bukti wajib di mode 'add' (di 'edit' boleh kosong = pakai yang lama).
   const valid = form.tanggal && !dateOutOfRange && form.no_bukti && form.sumber &&
-    form.kategori && form.uraian && form.riil &&
+    form.kategori && kategoriCocok && form.uraian && form.riil &&
     (isBahanBaku || form.unriil) &&
     (mode === 'edit' || bukti) &&
     periode;
@@ -1088,7 +1097,7 @@ function TransaksiForm({ mode, initial, jenis, kategoriMap, periode, session, to
         <div className="text-xs mb-3" style={{ color: COLORS.danger }}>
           {!form.tanggal ? '• Tanggal wajib diisi' : dateOutOfRange ? '• Tanggal di luar periode aktif' :
            !form.no_bukti ? '• No Bukti wajib diisi' :
-           !form.kategori ? '• Kategori wajib dipilih' :
+           (!form.kategori || !kategoriCocok) ? '• Kategori wajib dipilih (sesuai jenis ' + jenis + ')' :
            !form.uraian ? '• Uraian wajib diisi' :
            !form.riil ? '• Nominal wajib diisi' :
            (!isBahanBaku && !form.unriil) ? '• Realisasi Anggaran wajib diisi' :
@@ -1579,9 +1588,13 @@ function Riwayat({ session, scope, toast, refreshKey }) {
     if (pl.ok) {
       setPeriodeList(pl.data);
       const aktif = pl.data.find(function(p){return p.status === 'AKTIF';});
-      if (aktif && !selPeriode) setSelPeriode(aktif.id);
-      else if (pl.data[0] && !selPeriode) setSelPeriode(pl.data[0].id);
-      else if (pl.data.length === 0) { setSelPeriode(''); setLoading(false); }
+      // Pertahankan pilihan hanya bila periodenya ada di daftar dapur yang baru; kalau tidak (mis. admin ganti dapur),
+      // pindah ke periode aktif dapur baru. (Sebelumnya: periode dapur lama tetap terpilih → data kosong/salah.)
+      setSelPeriode(function(prev){
+        if (prev && pl.data.some(function(p){ return p.id === prev; })) return prev;
+        return aktif ? aktif.id : (pl.data[0] ? pl.data[0].id : '');
+      });
+      if (pl.data.length === 0) setLoading(false);
     } else { setLoading(false); }
     if (dp.ok) setDapur(dp.data);
     if (kat.ok) setKategoriMap(kat.data);
