@@ -1354,6 +1354,19 @@ function Laporan({ session, scope, toast }) {
     if (main && txToLampiranNo[main.id]) txToLampiranNo[t.id] = txToLampiranNo[main.id];
   });
 
+  // Penanda tangan "Dibuat oleh": akuntan dapur pemilik laporan, bukan siapa pun yang sedang login
+  const [akuntanDapur, setAkuntanDapur] = useState(null);
+  const dapurLaporan = periode ? periode.dapur : '';
+  useEffect(function() {
+    if (!dapurLaporan) return;
+    let live = true;
+    setAkuntanDapur(null);
+    api('getPenandatangan', { dapur: dapurLaporan }).then(function(r){ if (live) setAkuntanDapur(r.ok && r.data && r.data.akuntan ? r.data.akuntan : ''); });
+    return function(){ live = false; };
+  }, [dapurLaporan]);
+  // Cadangan bila backend belum diperbarui: pakai nama sendiri hanya kalau yang login memang akuntan dapur ini; selain itu dikosongkan untuk ditulis tangan
+  const namaAkuntan = akuntanDapur || (session.user.role === 'akuntan' && session.user.dapur === dapurLaporan ? session.user.nama : '');
+
   function doPrint() { window.print(); }
   if (loading) return <Card>{I.spinner}</Card>;
 
@@ -1458,7 +1471,7 @@ function Laporan({ session, scope, toast }) {
               <div style={{ textAlign: 'center' }}>
                 <div style={{ color: COLORS.muted }}>Dibuat oleh,</div>
                 <div style={{ marginTop: 60, paddingTop: 4, color: COLORS.ink }}>
-                  <div style={{ fontWeight: 700, borderTop: '1px solid ' + COLORS.ink, paddingTop: 4 }}>({session.user.nama})</div>
+                  <div style={{ fontWeight: 700, borderTop: '1px solid ' + COLORS.ink, paddingTop: 4 }}>({namaAkuntan || '.................................'})</div>
                   <div style={{ color: COLORS.muted, fontSize: 10 }}>Akuntan</div>
                 </div>
               </div>
