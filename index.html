@@ -2730,18 +2730,77 @@ function VACard({ va }) {
   </Card>;
 }
 
+// ---------- Filter tampilan bersama: Hari ini / Periode aktif / Periode ditutup ----------
+// Periode ditutup tidak dimuat sampai dipilih, agar halaman tetap ringan.
+const MODE_PERIODE = [['hari', 'Hari ini'], ['aktif', 'Periode aktif'], ['lalu', 'Periode ditutup']];
+function usePeriodeTutup(session, aktif, scopeDapur, setPer) {
+  const [periodes, setPeriodes] = useState(null);
+  useEffect(function() {
+    if (!aktif) return;
+    let live = true;
+    setPeriodes(null); setPer('');
+    api('getPeriodeList', { role: session.user.role, dapur: session.user.dapur || '', scope: scopeDapur || 'ALL' }).then(function(r){
+      if (!live) return;
+      setPeriodes(r.ok ? r.data.filter(function(p){ return p.status !== 'AKTIF'; }).sort(function(x, y){ return x.tanggal_mulai < y.tanggal_mulai ? 1 : -1; }) : []);
+    });
+    return function(){ live = false; };
+  }, [aktif, scopeDapur]);
+  return periodes;
+}
+function ModePeriodeBar({ modes, mode, setMode, counts, periodes, per, setPer, multi, dapurMap }) {
+  counts = counts || {};
+  return <div>
+    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(' + modes.length + ', minmax(0, 1fr))', gap: 8 }}>
+      {modes.map(function(m){ const on = mode === m[0]; const c = counts[m[0]];
+        return <button key={m[0]} onClick={function(){ setMode(m[0]); }} className="rounded-xl px-1.5 py-2.5 text-xs sm:text-sm font-semibold leading-tight"
+          style={{ background: on ? COLORS.green : '#fff', color: on ? '#fff' : COLORS.ink, border: '1px solid ' + (on ? COLORS.green : COLORS.line) }}>
+          {m[1]}{c != null && ' '}{c != null && <span className="inline-block rounded-full px-1.5 py-0.5 text-[11px]" style={{ background: on ? 'rgba(255,255,255,0.22)' : COLORS.paper, color: on ? '#fff' : COLORS.muted }}>{c}</span>}
+        </button>; })}
+    </div>
+    {mode === 'lalu' && <div className="mt-3">
+      {!periodes ? <div className="text-sm flex items-center gap-2" style={{ color: COLORS.muted }}>{I.spinner} Memuat daftar periode…</div>
+        : periodes.length === 0 ? <div className="text-sm" style={{ color: COLORS.muted }}>Belum ada periode yang ditutup.</div>
+        : <select value={per} onChange={function(e){ setPer(e.target.value); }} style={inputStyle}>
+            <option value="">Pilih periode yang sudah ditutup…</option>
+            {periodes.map(function(x){ return <option key={x.id} value={x.id}>{(multi && dapurMap[x.dapur] ? dapurMap[x.dapur] + ' · ' : '') + 'Periode ' + x.periode_no + ' · ' + fmtDateRange(x.tanggal_mulai, x.tanggal_akhir)}</option>; })}
+          </select>}
+    </div>}
+  </div>;
+}
+// Kelompokkan per dapur (urut nama dapur), isi tetap urut seperti asalnya
+function kelompokDapur(list, dapurMap) {
+  const m = {}, order = [];
+  list.forEach(function(h){ if (!m[h.dapur]) { m[h.dapur] = []; order.push(h.dapur); } m[h.dapur].push(h); });
+  return order.sort(function(a, b){ return String(dapurMap[a] || a).localeCompare(String(dapurMap[b] || b)); })
+    .map(function(d){ return { dapur: d, list: m[d] }; });
+}
+function DapurHeader({ nama, info, jumlah }) {
+  return <div className="flex items-end justify-between gap-2 mt-4 mb-2 px-1">
+    <div className="min-w-0">
+      <div className="text-sm font-bold" style={{ color: COLORS.ink }}>{nama}</div>
+      {info && <div className="text-[11px]" style={{ color: COLORS.muted }}>{info}</div>}
+    </div>
+    <span className="text-[11px] rounded-full px-2 py-0.5 shrink-0" style={{ background: '#fff', border: '1px solid ' + COLORS.line, color: COLORS.muted }}>{jumlah} pengajuan</span>
+  </div>;
+}
+
 function PengajuanPage({ session, scope, dapurList, toast }) {
   const role = session.user.role;
   const isAkuntan = role === 'akuntan';
   const isAsisten = role === 'asisten';
   const canCreate = isAkuntan || isAsisten;
-  const showDapur = scope === 'ALL' || isAsisten;
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [kategoriMap, setKategoriMap] = useState({});
   const [tab, setTab] = useState(isAsisten ? 'buat' : 'daftar');   // 'buat' = formulir, 'daftar' = sudah diajukan
   const [formKey, setFormKey] = useState(0);        // naik setelah kirim/batal → formulir kosong lagi
   const [baru, setBaru] = useState(null);           // nomor pengajuan yang baru saja terkirim (banner sukses)
+  const [mode, setMode] = useState('hari');         // daftar: 'hari' | 'aktif' | 'lalu'
+  const [per, setPer] = useState('');
+  const [dataLalu, setDataLalu] = useState(null);
+  const multiDapur = scope === 'ALL' || !scope || isAsisten;
+  const scopeDapur = role === 'admin' || role === 'yayasan' ? (scope && scope !== 'ALL' ? scope : '') : '';
+  const periodesTutup = usePeriodeTutup(session, mode === 'lalu', scopeDapur, setPer);
   const [editItem, setEditItem] = useState(null);
   const [batalItem, setBatalItem] = useState(null);
   const [penerima, upsertPenerima] = usePenerimaList();
@@ -2756,6 +2815,16 @@ function PengajuanPage({ session, scope, dapurList, toast }) {
     if (res.ok) setData(res.data); else toast(res.error || 'Gagal memuat pengajuan', 'error');
     if (!isAsisten) { const b = await api('getBADaftar', { mode: 'aktif' }); if (b.ok) setBaList(b.data.filter(function(g){ return g.periode_status === 'AKTIF'; })); }
   }, [scope]);
+  useEffect(function() {
+    setDataLalu(null);
+    if (mode !== 'lalu' || !per) return;
+    let live = true;
+    api('getPengajuan', { scope: scope || 'ALL', periode_id: per }).then(function(r){
+      if (!live) return;
+      if (r.ok) setDataLalu(r.data); else { setDataLalu({ pengajuan: [] }); toast(r.error || 'Gagal memuat', 'error'); }
+    });
+    return function(){ live = false; };
+  }, [mode, per, scope]);
   useEffect(function(){ load(); api('getKategori').then(function(r){
     if (r.ok) setKategoriMap(isAsisten ? { 'Bahan Baku': r.data['Bahan Baku'] || ['Semua Kategori'] } : r.data);
   }); }, [load]);
@@ -2765,12 +2834,23 @@ function PengajuanPage({ session, scope, dapurList, toast }) {
   const vaKeys = Object.keys(data.va || {});
   const aktifKeys = Object.keys(data.periodeAktif || {});
   const noPeriode = aktifKeys.length === 0;
-  // Kelompokkan per hari H lalu per dapur agar 1 bar Berita Acara per dapur per hari
-  const listUrut = data.pengajuan.map(function(h, i){ return [h, i]; }).sort(function(a, b){
-    if (a[0].tanggal !== b[0].tanggal) return a[0].tanggal < b[0].tanggal ? 1 : -1;
-    if (a[0].dapur !== b[0].dapur) return a[0].dapur < b[0].dapur ? -1 : 1;
-    return a[1] - b[1];
-  }).map(function(x){ return x[0]; });
+  // Urut per hari H (terbaru dulu) lalu per dapur agar 1 bar Berita Acara per dapur per hari
+  function urutPengajuan(list) {
+    return list.map(function(h, i){ return [h, i]; }).sort(function(a, b){
+      if (a[0].tanggal !== b[0].tanggal) return a[0].tanggal < b[0].tanggal ? 1 : -1;
+      if (a[0].dapur !== b[0].dapur) return a[0].dapur < b[0].dapur ? -1 : 1;
+      return a[1] - b[1];
+    }).map(function(x){ return x[0]; });
+  }
+  const hariIni = todayISO();
+  const perObj = (periodesTutup || []).find(function(x){ return x.id === per; });
+  const tampil = mode === 'hari' ? data.pengajuan.filter(function(h){ return h.tanggal === hariIni; })
+    : mode === 'aktif' ? data.pengajuan
+    : (!per ? [] : dataLalu ? dataLalu.pengajuan : null);
+  const perluTindakan = data.pengajuan.filter(function(h){ return h.tanggal !== hariIni && (h.status === 'MENUNGGU' || h.status === 'REVISI'); });
+  const kosong = mode === 'hari' ? 'Belum ada pengajuan dengan hari H ' + fmtDDMMYYYY(hariIni) + '.'
+    : mode === 'aktif' ? 'Belum ada pengajuan di periode aktif.'
+    : !per ? 'Pilih periode yang sudah ditutup untuk melihat pengajuannya.' : 'Tidak ada pengajuan di periode ini.';
   const dapurOptions = isAsisten ? (dapurList || []).map(function(d){ return { id: d.id, nama: d.nama, aktif: aktifKeys.indexOf(d.id) >= 0 }; }) : null;
 
   return <div>
@@ -2801,21 +2881,35 @@ function PengajuanPage({ session, scope, dapurList, toast }) {
       <div className="flex-1 min-w-0 text-sm" style={{ color: COLORS.ink }}><b>Pengajuan terkirim.</b> <span className="font-mono text-xs break-all">{baru}</span> sekarang menunggu keputusan; terlihat di daftar di bawah.</div>
       <button onClick={function(){ setBaru(null); }} aria-label="Tutup" style={{ color: COLORS.muted }}>{I.x}</button>
     </div></Card>}
-    {data.pengajuan.length === 0 ? (
-      <Card><div className="text-sm text-center py-4" style={{ color: COLORS.muted }}>Belum ada pengajuan di periode aktif.</div></Card>
-    ) : listUrut.map(function(h, idx){
+    <Card className="mb-3">
+      <ModePeriodeBar modes={MODE_PERIODE} mode={mode} setMode={setMode} periodes={periodesTutup} per={per} setPer={setPer} multi={multiDapur} dapurMap={dapurMap}
+        counts={{ hari: data.pengajuan.filter(function(h){ return h.tanggal === hariIni; }).length, aktif: data.pengajuan.length }}/>
+    </Card>
+    {mode === 'hari' && perluTindakan.length > 0 && <Card className="mb-3"><div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+      <div className="text-sm" style={{ color: COLORS.ink }}><b style={{ color: COLORS.amber }}>{perluTindakan.length} pengajuan</b> dari hari lain di periode aktif masih menunggu keputusan / perlu revisi.</div>
+      <Btn size="sm" kind="ghost" onClick={function(){ setMode('aktif'); }}>Lihat di Periode aktif</Btn>
+    </div></Card>}
+    {!tampil ? <Card><div className="flex items-center gap-2 text-sm" style={{ color: COLORS.muted }}>{I.spinner} Memuat…</div></Card>
+    : tampil.length === 0 ? <Card><div className="text-sm text-center py-4" style={{ color: COLORS.muted }}>{kosong}</div></Card>
+    : (multiDapur ? kelompokDapur(tampil, dapurMap) : [{ dapur: '', list: tampil }]).map(function(grp){
+      const urut = urutPengajuan(grp.list);
+      const rng = mode === 'lalu' ? perObj : (data.periodeRange || {})[grp.dapur];
+      return <React.Fragment key={grp.dapur || 'satu'}>
+      {multiDapur && <DapurHeader nama={dapurMap[grp.dapur] || grp.dapur} jumlah={grp.list.length}
+        info={rng ? (mode === 'lalu' ? 'Periode ' + rng.periode_no + ' (ditutup) · ' + fmtDateRange(rng.tanggal_mulai, rng.tanggal_akhir) : 'Periode aktif · ' + fmtDateRange(rng.mulai, rng.akhir)) : ''}/>}
+      {urut.map(function(h, idx){
       const gKey = h.dapur + '|' + h.tanggal;
-      const prev = listUrut[idx - 1];
+      const prev = urut[idx - 1];
       const firstOfGroup = !prev || (prev.dapur + '|' + prev.tanggal) !== gKey;
-      const g = firstOfGroup && !isAsisten ? baList.find(function(b){ return b.dapur + '|' + b.tanggal === gKey; }) : null;
+      const g = firstOfGroup && !isAsisten && mode !== 'lalu' ? baList.find(function(b){ return b.dapur + '|' + b.tanggal === gKey; }) : null;
       return <React.Fragment key={h.id}>
-      {g && <BAGroupBar g={g} dapurNama={showDapur ? dapurMap[h.dapur] : ''} toast={toast}/>}
+      {g && <BAGroupBar g={g} dapurNama="" toast={toast}/>}
       <Card pad={false} className="mb-3">
         <div className="p-3 sm:p-4 flex flex-col sm:flex-row sm:items-start justify-between gap-2" style={{ background: COLORS.paper, borderRadius: '12px 12px 0 0' }}>
           <div className="min-w-0">
             <div className="font-mono text-xs font-semibold break-all" style={{ color: COLORS.ink }}>{h.nomor}</div>
             <div className="text-xs mt-0.5" style={{ color: COLORS.muted }}>
-              Hari H {fmtDDMMYYYY(h.tanggal)} · oleh {h.created_by_nama}{showDapur && dapurMap[h.dapur] ? ' · ' + dapurMap[h.dapur] : ''}
+              Hari H {fmtDDMMYYYY(h.tanggal)} · oleh {h.created_by_nama}
               {h.decided_by_nama ? ' · diputuskan ' + oleh(h.decided_by_nama, h.decided_by_role) : ''}
             </div>
             <div className="mt-1"><TimingBadge h={h}/></div>
@@ -2823,7 +2917,7 @@ function PengajuanPage({ session, scope, dapurList, toast }) {
           <div className="sm:text-right shrink-0">
             <StatusBadge status={h.status}/>
             <div className="text-xs mt-1 num" style={{ color: COLORS.muted }}>Diajukan {fmt(h.total_diajukan)} · <span style={{ color: COLORS.green }}>Disetujui {fmt(h.total_disetujui)}</span></div>
-            {canCreate && h.items.some(function(i){ return i.status === 'DIAJUKAN'; }) && <div className="mt-1.5">
+            {canCreate && mode !== 'lalu' && h.items.some(function(i){ return i.status === 'DIAJUKAN'; }) && <div className="mt-1.5">
               <button onClick={function(){ setWaText(buildWAPesan({ nomor: h.nomor, tanggal: h.tanggal, dapurNama: dapurMap[h.dapur] || '', oleh: h.created_by_nama,
                 items: h.items.filter(function(i){ return i.status === 'DIAJUKAN'; }) })); }}
                 className="text-[11px] font-semibold rounded px-2 py-1" style={{ color: COLORS.green, border: '1px solid ' + COLORS.line }}>Salin pesan WA</button></div>}
@@ -2831,7 +2925,7 @@ function PengajuanPage({ session, scope, dapurList, toast }) {
         </div>
         {h.items.map(function(it){
           let actions = null;
-          if (canCreate) {
+          if (canCreate && mode !== 'lalu') {
             const btn = function(label, color, onClick) { return <button key={label} onClick={onClick} className="text-[11px] font-semibold rounded px-2 py-1" style={{ color: color, border: '1px solid ' + COLORS.line }}>{label}</button>; };
             const a = [];
             if (it.status === 'REVISI') a.push(btn('Perbaiki', COLORS.blue, function(){ setEditItem(it); }));
@@ -2842,6 +2936,8 @@ function PengajuanPage({ session, scope, dapurList, toast }) {
           return <ItemRow key={it.id} it={it} actions={actions}/>;
         })}
       </Card>
+      </React.Fragment>;
+      })}
       </React.Fragment>;
     })}
 
@@ -2861,22 +2957,12 @@ function BeritaAcaraPage({ session, scope, dapurList, toast }) {
   const multi = role === 'admin' || role === 'yayasan' || role === 'asisten';
   const [mode, setMode] = useState('hari');      // 'hari' | 'aktif' | 'lalu'
   const [list, setList] = useState(null);
-  const [periodes, setPeriodes] = useState(null); // periode ditutup (untuk mode 'lalu')
   const [per, setPer] = useState('');
   const hariIni = todayISO();
   const scopeDapur = multi && scope && scope !== 'ALL' ? scope : '';
   const dapurMap = useMemo(function(){ const m = {}; (dapurList || []).forEach(function(d){ m[d.id] = d.nama; }); return m; }, [dapurList]);
 
-  useEffect(function() {
-    if (mode !== 'lalu') return;
-    let live = true;
-    setPeriodes(null); setPer('');
-    api('getPeriodeList', { role: role, dapur: session.user.dapur || '', scope: scopeDapur || 'ALL' }).then(function(r){
-      if (!live) return;
-      setPeriodes(r.ok ? r.data.filter(function(p){ return p.status !== 'AKTIF'; }).sort(function(x, y){ return x.tanggal_mulai < y.tanggal_mulai ? 1 : -1; }) : []);
-    });
-    return function(){ live = false; };
-  }, [mode, scopeDapur]);
+  const periodes = usePeriodeTutup(session, mode === 'lalu', scopeDapur, setPer);
 
   useEffect(function() {
     if (mode === 'lalu' && !per) { setList([]); return; }
@@ -2898,7 +2984,6 @@ function BeritaAcaraPage({ session, scope, dapurList, toast }) {
     return function(){ live = false; };
   }, [mode, per, scopeDapur]);
 
-  const MODES = [['hari', 'Hari ini'], ['aktif', 'Periode aktif'], ['lalu', 'Periode ditutup']];
   const kosong = mode === 'hari' ? 'Belum ada Berita Acara untuk hari H ' + fmtDDMMYYYY(hariIni) + '.'
     : mode === 'aktif' ? 'Belum ada Berita Acara di periode aktif.'
     : !per ? 'Pilih periode yang sudah ditutup untuk menampilkan Berita Acara-nya.' : 'Tidak ada Berita Acara di periode ini.';
@@ -2906,19 +2991,7 @@ function BeritaAcaraPage({ session, scope, dapurList, toast }) {
     <Card className="mb-3">
       <Eyebrow>Berita Acara</Eyebrow>
       <p className="text-xs mt-1 mb-3" style={{ color: COLORS.muted }}>Satu Berita Acara per dapur per hari H. Yang ditampilkan: hari ini. Berita Acara lain dimuat hanya bila dipilih agar halaman tetap ringan. PDF dibuat ulang dari data saat diunduh; kode verifikasi di kaki halaman berubah bila isinya berubah.</p>
-      <div className="grid grid-cols-3 gap-2">
-        {MODES.map(function(m){ const on = mode === m[0];
-          return <button key={m[0]} onClick={function(){ setMode(m[0]); }} className="rounded-xl px-2 py-2.5 text-sm font-semibold"
-            style={{ background: on ? COLORS.green : '#fff', color: on ? '#fff' : COLORS.ink, border: '1px solid ' + (on ? COLORS.green : COLORS.line) }}>{m[1]}</button>; })}
-      </div>
-      {mode === 'lalu' && <div className="mt-3">
-        {!periodes ? <div className="text-sm flex items-center gap-2" style={{ color: COLORS.muted }}>{I.spinner} Memuat daftar periode…</div>
-          : periodes.length === 0 ? <div className="text-sm" style={{ color: COLORS.muted }}>Belum ada periode yang ditutup.</div>
-          : <select value={per} onChange={function(e){ setPer(e.target.value); }} style={inputStyle}>
-              <option value="">Pilih periode yang sudah ditutup…</option>
-              {periodes.map(function(x){ return <option key={x.id} value={x.id}>{(multi && dapurMap[x.dapur] ? dapurMap[x.dapur] + ' · ' : '') + 'Periode ' + x.periode_no + ' · ' + fmtDateRange(x.tanggal_mulai, x.tanggal_akhir)}</option>; })}
-            </select>}
-      </div>}
+      <ModePeriodeBar modes={MODE_PERIODE} mode={mode} setMode={setMode} periodes={periodes} per={per} setPer={setPer} multi={multi} dapurMap={dapurMap}/>
     </Card>
     {!list ? <Card><div className="flex items-center gap-2 text-sm" style={{ color: COLORS.muted }}>{I.spinner} Memuat…</div></Card>
     : list.length === 0 ? <Card><div className="text-sm text-center py-4" style={{ color: COLORS.muted }}>{kosong}</div></Card>
@@ -3455,40 +3528,62 @@ function PersetujuanCard({ h, va, dapurNama, toast, onDone }) {
 function PersetujuanPage({ session, scope, dapurList, toast }) {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
-  const [tab, setTab] = useState('menunggu');
+  const [mode, setMode] = useState('menunggu');   // 'menunggu' | 'hari' | 'aktif' | 'lalu'
+  const [per, setPer] = useState('');
+  const [nMenunggu, setNMenunggu] = useState(null);
+  const multi = session.user.role !== 'pic' && (!scope || scope === 'ALL');
+  const scopeDapur = session.user.role === 'pic' ? '' : (scope && scope !== 'ALL' ? scope : '');
+  const periodesTutup = usePeriodeTutup(session, mode === 'lalu', scopeDapur, setPer);
   const dapurMap = useMemo(function(){ const m = {}; (dapurList || []).forEach(function(d){ m[d.id] = d.nama; }); return m; }, [dapurList]);
   const load = useCallback(async function() {
+    if (mode === 'lalu' && !per) { setData({ pengajuan: [], va: {} }); setLoading(false); return; }
     setLoading(true);
-    const res = await api('getPengajuan', { scope: scope || 'ALL', filter: tab === 'menunggu' ? 'menunggu' : '' });
+    const prm = { scope: scope || 'ALL', filter: mode === 'menunggu' ? 'menunggu' : '' };
+    if (mode === 'lalu') prm.periode_id = per;
+    const res = await api('getPengajuan', prm);
     setLoading(false);
-    if (res.ok) setData(res.data); else toast(res.error || 'Gagal memuat', 'error');
-  }, [scope, tab]);
-  useEffect(function(){ load(); }, [load]);
+    if (res.ok) { setData(res.data); if (mode === 'menunggu') setNMenunggu(res.data.pengajuan.length); }
+    else toast(res.error || 'Gagal memuat', 'error');
+  }, [scope, mode, per]);
+  useEffect(function(){ setData(null); load(); }, [load]);
+
+  const hariIni = todayISO();
+  const list = !data ? null : mode === 'hari' ? data.pengajuan.filter(function(h){ return h.tanggal === hariIni; }) : data.pengajuan;
+  const perObj = (periodesTutup || []).find(function(x){ return x.id === per; });
+  const kosong = mode === 'menunggu' ? 'Tidak ada pengajuan yang menunggu keputusan.'
+    : mode === 'hari' ? 'Belum ada pengajuan dengan hari H ' + fmtDDMMYYYY(hariIni) + '.'
+    : mode === 'aktif' ? 'Belum ada pengajuan di periode aktif.'
+    : !per ? 'Pilih periode yang sudah ditutup untuk melihat pengajuannya.' : 'Tidak ada pengajuan di periode ini.';
+  function kartu(h) {
+    // Periode ditutup: hanya lihat, tidak bisa memutuskan
+    if (h.status === 'MENUNGGU' && mode !== 'lalu') return <PersetujuanCard key={h.id + '-' + h.items.length} h={h} va={data.va[h.dapur]} dapurNama={dapurMap[h.dapur] || h.dapur} toast={toast} onDone={load}/>;
+    return <Card key={h.id} pad={false} className="mb-3">
+      <div className="p-3 sm:p-4 flex justify-between gap-2" style={{ background: COLORS.paper, borderRadius: '12px 12px 0 0' }}>
+        <div className="min-w-0"><div className="text-sm font-bold" style={{ color: COLORS.ink }}>{dapurMap[h.dapur] || h.dapur}</div>
+          <div className="font-mono text-xs break-all">{h.nomor}</div>
+          <div className="text-xs" style={{ color: COLORS.muted }}>{fmtDDMMYYYY(h.tanggal)} · disetujui {fmt(h.total_disetujui)}{h.decided_by_nama ? ' · oleh ' + oleh(h.decided_by_nama, h.decided_by_role) : ''}</div></div>
+        <StatusBadge status={h.status}/>
+      </div>
+      {h.items.map(function(it){ return <ItemRow key={it.id} it={it}/>; })}
+    </Card>;
+  }
 
   return <div>
-    <div className="flex gap-2 mb-3">
-      {[['menunggu','Menunggu keputusan'],['semua','Semua pengajuan']].map(function(t){
-        const on = tab === t[0];
-        return <button key={t[0]} onClick={function(){ setTab(t[0]); }} className="flex-1 sm:flex-none rounded-lg px-4 py-2 text-sm font-semibold"
-          style={{ background: on ? COLORS.green : '#fff', color: on ? '#fff' : COLORS.ink, border: '1px solid ' + (on ? COLORS.green : COLORS.line) }}>{t[1]}</button>;
-      })}
-      <Btn kind="ghost" onClick={load}>{loading ? I.spinner : 'Muat ulang'}</Btn>
-    </div>
-    {loading && !data ? <Card>{I.spinner}</Card> : !data ? <Card>Tidak ada data.</Card> :
-      data.pengajuan.length === 0 ? <Card><div className="text-sm text-center py-6" style={{ color: COLORS.muted }}>
-        {tab === 'menunggu' ? 'Tidak ada pengajuan yang menunggu keputusan.' : 'Belum ada pengajuan di periode aktif.'}</div></Card> :
-      data.pengajuan.map(function(h){
-        if (h.status === 'MENUNGGU') return <PersetujuanCard key={h.id + '-' + h.items.length} h={h} va={data.va[h.dapur]} dapurNama={dapurMap[h.dapur] || h.dapur} toast={toast} onDone={load}/>;
-        return <Card key={h.id} pad={false} className="mb-3">
-          <div className="p-3 sm:p-4 flex justify-between gap-2" style={{ background: COLORS.paper, borderRadius: '12px 12px 0 0' }}>
-            <div className="min-w-0"><div className="text-sm font-bold" style={{ color: COLORS.ink }}>{dapurMap[h.dapur] || h.dapur}</div>
-              <div className="font-mono text-xs break-all">{h.nomor}</div>
-              <div className="text-xs" style={{ color: COLORS.muted }}>{fmtDDMMYYYY(h.tanggal)} · disetujui {fmt(h.total_disetujui)}{h.decided_by_nama ? ' · oleh ' + oleh(h.decided_by_nama, h.decided_by_role) : ''}</div></div>
-            <StatusBadge status={h.status}/>
-          </div>
-          {h.items.map(function(it){ return <ItemRow key={it.id} it={it}/>; })}
-        </Card>;
-      })}
+    <Card className="mb-3">
+      <ModePeriodeBar modes={[['menunggu', 'Menunggu']].concat(MODE_PERIODE)} mode={mode} setMode={setMode} counts={{ menunggu: nMenunggu }}
+        periodes={periodesTutup} per={per} setPer={setPer} multi={session.user.role !== 'pic'} dapurMap={dapurMap}/>
+      <div className="flex justify-end mt-2"><Btn size="sm" kind="ghost" onClick={load}>{loading ? I.spinner : 'Muat ulang'}</Btn></div>
+    </Card>
+    {!list ? <Card><div className="flex items-center gap-2 text-sm" style={{ color: COLORS.muted }}>{I.spinner} Memuat…</div></Card>
+    : list.length === 0 ? <Card><div className="text-sm text-center py-6" style={{ color: COLORS.muted }}>{kosong}</div></Card>
+    : multi ? kelompokDapur(list, dapurMap).map(function(grp){
+        const rng = mode === 'lalu' ? perObj : (data.periodeRange || {})[grp.dapur];
+        return <React.Fragment key={grp.dapur}>
+          <DapurHeader nama={dapurMap[grp.dapur] || grp.dapur} jumlah={grp.list.length}
+            info={rng ? (mode === 'lalu' ? 'Periode ' + rng.periode_no + ' (ditutup) · ' + fmtDateRange(rng.tanggal_mulai, rng.tanggal_akhir) : 'Periode aktif · ' + fmtDateRange(rng.mulai, rng.akhir)) : ''}/>
+          {grp.list.map(kartu)}
+        </React.Fragment>; })
+    : list.map(kartu)}
   </div>;
 }
 
