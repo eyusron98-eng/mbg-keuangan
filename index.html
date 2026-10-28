@@ -1622,10 +1622,20 @@ function Riwayat({ session, scope, toast, refreshKey }) {
     return t;
   }, [transaksi, q, filterJenis]);
 
-  const ledger = useMemo(function() {
+  // Saldo berjalan selalu dihitung dari SELURUH transaksi; filter hanya menyembunyikan baris.
+  // (Sebelumnya dihitung ulang dari baris yang lolos filter → saldo tampak lebih besar dari kenyataan.)
+  const ledgerPenuh = useMemo(function() {
     if (!periode) return [];
-    return buildLedger(periode.saldoVA, periode.saldoPettyAwal, vaTopups, filteredTx, 'anggaran');
-  }, [periode, vaTopups, filteredTx]);
+    return buildLedger(periode.saldoVA, periode.saldoPettyAwal, vaTopups, transaksi, 'anggaran');
+  }, [periode, vaTopups, transaksi]);
+  const filterAktif = filterJenis !== 'ALL' || !!q.trim();
+  const ledger = useMemo(function() {
+    if (!filterAktif) return ledgerPenuh;
+    const lolos = {};
+    filteredTx.forEach(function(t){ lolos[t.id] = true; });
+    return ledgerPenuh.filter(function(r){ return r.kind === 'awal' || (r.kind === 'tx' && lolos[r.tx.id]); });
+  }, [ledgerPenuh, filteredTx, filterAktif]);
+  const totalKreditTersaring = filterAktif ? ledger.reduce(function(s, r){ return s + (r.kredit || 0); }, 0) : 0;
 
   async function doDelete() {
     const res = await api('deleteTransaksi', { role: session.user.role, user_id: session.user.id, dapur: session.user.dapur, id: confirmDel.id });
@@ -1669,9 +1679,13 @@ function Riwayat({ session, scope, toast, refreshKey }) {
             </div>
           </div>
           <Btn kind="ghost" onClick={function(){
-            exportRiwayatExcel(ledger, dapurMap, 'riwayat-mbg-' + (selPeriode || 'all') + '.xlsx');
+            exportRiwayatExcel(ledger, dapurMap, 'riwayat-mbg-' + (selPeriode || 'all') + (filterAktif ? '-tersaring' : '') + '.xlsx');
           }} disabled={ledger.length === 0}>{I.download} Excel</Btn>
         </div>
+        {filterAktif && !loading && <div className="px-4 py-2.5 text-xs" style={{ background: '#FBF3E2', color: '#9A6A0B', borderBottom: '1px solid ' + COLORS.line }}>
+          Filter aktif: {ledger.filter(function(r){ return r.kind === 'tx'; }).length} dari {transaksi.length} transaksi · total kredit tersaring <b className="num">{fmt(totalKreditTersaring)}</b>.
+          {' '}Kolom <b>Saldo</b> tetap saldo berjalan dari <b>seluruh</b> transaksi (termasuk top-up dan transaksi yang disembunyikan), jadi selisih antarbaris tidak selalu sama dengan kredit baris itu.
+        </div>}
 
         {loading ? <div className="p-6">{I.spinner}</div> : (
           <div className="overflow-x-auto">
