@@ -1,0 +1,230 @@
+// Uji logika backend/Code.gs di Node dengan layanan Apps Script tiruan (Utilities, Cache, Lock, Spreadsheet).
+// Jalankan: npm run test:backend   (tidak butuh internet, Google, atau data asli; semua data di sini tiruan)
+const fs = require('fs');
+const vm = require('vm');
+const crypto = require('crypto');
+const FILE = process.argv[2] || require('path').join(__dirname, '..', 'backend', 'Code.gs');
+
+function makeEnv(usersInit, transform) {
+  const book = {
+    Users: [['id','username','password','nama','role','dapur_id','aktif'], ...usersInit],
+    Sesi: [['token','user_id','at']],
+    Log: [['t','u','a','r']],
+    Dapur: [['id','nama','alamat','kode'], ['D001','SPPG Satu','','S1']],
+    Setup: [['id','dapur','no','mulai','akhir','penerima','va','petty','status'], ['P1','D001',1,'2026-10-01','2026-10-31',100,5000000,0,'AKTIF']],
+    Penerima: [['id','nama','bank','no_rek','aktif'], ['pn1','Toko A','BCA','123','YA']],
+    Pengajuan: [['id','nomor','dapur','periode','tgl','status','at','by','dat','dby']],
+    PengajuanItem: [['h']], VATopup: [['h']], PettyTopup: [['h']], Transaksi: [['h']],
+  };
+  const sheet = name => ({
+    getDataRange: () => ({ getValues: () => book[name].map(r => r.slice()) }),
+    getRange: (r, c, nr, nc) => ({
+      setValue: v => { book[name][r - 1][c - 1] = v; },
+      setValues: vals => { vals.forEach((row, i) => { book[name][r - 1 + i] = book[name][r - 1 + i] || []; row.forEach((v, j) => { book[name][r - 1 + i][c - 1 + j] = v; }); }); },
+    }),
+    appendRow: row => { book[name].push(row); },
+    deleteRow: n => { book[name].splice(n - 1, 1); },
+    getLastRow: () => book[name].length,
+  });
+  const cacheStore = {};
+  const sandbox = {
+    console, Logger: { log: m => (sandbox.__logs.push(m)) }, __logs: [],
+    SpreadsheetApp: { openById: () => ({ getSheetByName: n => (book[n] ? sheet(n) : null) }) },
+    CacheService: { getScriptCache: () => ({
+      get: k => (k in cacheStore ? cacheStore[k] : null), put: (k, v) => { cacheStore[k] = v; },
+      remove: k => { delete cacheStore[k]; }, removeAll: ks => ks.forEach(k => delete cacheStore[k]) }) },
+    LockService: { getScriptLock: () => ({ waitLock() {}, releaseLock() {} }) },
+    ContentService: { createTextOutput: s => ({ s, setMimeType() { return this; } }), MimeType: { JSON: 'json' } },
+    Utilities: {
+      DigestAlgorithm: { SHA_256: 'sha256' },
+      computeDigest: (alg, bytes) => Array.from(crypto.createHash('sha256').update(Buffer.from(bytes.map(b => b & 255))).digest()).map(b => (b > 127 ? b - 256 : b)),
+      newBlob: s => ({ getBytes: () => Array.from(Buffer.from(s, 'utf8')).map(b => (b > 127 ? b - 256 : b)) }),
+      base64EncodeWebSafe: bytes => Buffer.from(bytes.map(b => b & 255)).toString('base64').replace(/\+/g, '-').replace(/\//g, '_'),
+      getUuid: () => crypto.randomUUID(),
+      formatDate: (d, tz, f) => { const x = new Date(d); const p = n => String(n).padStart(2, '0');
+        return f.replace('yyyy', x.getFullYear()).replace('MM', p(x.getMonth() + 1)).replace('dd', p(x.getDate())).replace('HH', p(x.getHours())).replace('mm', p(x.getMinutes())).replace('ss', p(x.getSeconds())); },
+    },
+    Date, JSON, Math, Number, String, parseInt, Intl, Array, Object, Error,
+  };
+  vm.createContext(sandbox);
+  vm.runInContext(transform ? transform(fs.readFileSync(FILE, 'utf8')) : fs.readFileSync(FILE, 'utf8'), sandbox, { filename: 'Code.gs' });
+  sandbox.__book = book; sandbox.__cache = cacheStore;
+  return sandbox;
+}
+const call = (env, method, params) => JSON.parse(env.handleRequest({ parameter: method === 'GET' ? params : {}, postData: method === 'POST' ? { contents: JSON.stringify(params) } : null }, method).s);
+let fails = 0;
+const ok = (c, m) => { console.log((c ? 'PASS ' : 'FAIL ') + m); if (!c) fails++; };
+
+(function main() {
+  // pengguna lama: password teks biasa
+  const env = makeEnv([
+    ['U1', 'admin', 'admin123', 'Super', 'admin', '', 'YA'],
+    ['U2', 'akun1', 'RahasiaKu9', 'Akuntan', 'akuntan', 'D001', 'YA'],
+    ['U3', 'off', 'xxxxxxx', 'Nonaktif', 'pic', 'D001', 'TIDAK'],
+  ]);
+  const B = env.__book;
+  ok(call(env, 'GET', { action: 'ping' }).version === 'v6-ba-sec4', 'ping menampilkan versi baru');
+
+  // 1. login lama (teks biasa) berhasil via POST dan password otomatis di-hash
+  let r = call(env, 'POST', { action: 'login', username: 'AKUN1', password: 'RahasiaKu9' });
+  ok(r.ok && r.data.token, 'login POST dengan password lama berhasil');
+  ok(B.Users[2][2].startsWith('h1$') && !B.Users[2][2].includes('RahasiaKu9'), 'password otomatis di-hash di sheet, tidak mengandung teks asli');
+  r = call(env, 'POST', { action: 'login', username: 'akun1', password: 'RahasiaKu9' });
+  ok(r.ok, 'login kedua (sudah hash) tetap berhasil');
+  ok(!call(env, 'POST', { action: 'login', username: 'akun1', password: 'salah' }).ok, 'password salah ditolak');
+  ok(!call(env, 'POST', { action: 'login', username: 'off', password: 'xxxxxxx' }).ok, 'akun nonaktif ditolak');
+
+  // 2. throttling
+  const e2 = makeEnv([['U1', 'adm', 'benar12', 'A', 'admin', '', 'YA']]);
+  for (let i = 0; i < 5; i++) call(e2, 'POST', { action: 'login', username: 'adm', password: 'x' + i });
+  r = call(e2, 'POST', { action: 'login', username: 'adm', password: 'benar12' });
+  ok(!r.ok && /Terlalu banyak/.test(r.error), 'setelah 5x salah, login (walau benar) ditahan');
+
+  // 3. getUsers tidak membocorkan password
+  const tokAdmin = call(env, 'POST', { action: 'login', username: 'admin', password: 'admin123' }).data.token;
+  r = call(env, 'POST', { action: 'getUsers', token: tokAdmin });
+  ok(r.ok && r.data.length === 3 && r.data.every(u => !('password' in u)), 'getUsers tidak mengirim kolom password');
+  ok(!JSON.stringify(r).includes('h1$') && !JSON.stringify(r).includes('admin123'), 'respons getUsers tidak memuat hash/teks password');
+
+  // 4. addUser / updateUser menyimpan hash, validasi minimal
+  r = call(env, 'POST', { action: 'addUser', token: tokAdmin, username: 'baru', password: 'abc', nama: 'B', target_role: 'pic', dapur: 'D001' });
+  ok(!r.ok && /minimal/.test(r.error), 'password pendek ditolak saat tambah user');
+  r = call(env, 'POST', { action: 'addUser', token: tokAdmin, username: 'baru', password: 'abcdef1', nama: 'B', target_role: 'pic', dapur: 'D001' });
+  ok(r.ok && B.Users[B.Users.length - 1][2].startsWith('h1$'), 'user baru tersimpan dengan password ter-hash');
+  ok(call(env, 'POST', { action: 'login', username: 'baru', password: 'abcdef1' }).ok, 'user baru bisa login');
+
+  // 5. reset password oleh admin mencabut sesi lama user itu
+  const tokU2 = call(env, 'POST', { action: 'login', username: 'akun1', password: 'RahasiaKu9' }).data.token;
+  ok(call(env, 'POST', { action: 'getMyProfile', token: tokU2 }).ok, 'sesi akun1 valid sebelum reset');
+  r = call(env, 'POST', { action: 'updateUser', token: tokAdmin, id: 'U2', password: 'PasswordBaru1' });
+  ok(r.ok, 'admin reset password akun1');
+  ok(!call(env, 'POST', { action: 'getMyProfile', token: tokU2 }).ok, 'sesi lama akun1 dicabut setelah reset');
+  ok(call(env, 'POST', { action: 'login', username: 'akun1', password: 'PasswordBaru1' }).ok, 'login dengan password baru berhasil');
+  ok(!call(env, 'POST', { action: 'login', username: 'akun1', password: 'RahasiaKu9' }).ok, 'password lama tidak berlaku lagi');
+
+  // 6. ganti password sendiri: sesi ini tetap, sesi lain dicabut
+  const tA = call(env, 'POST', { action: 'login', username: 'akun1', password: 'PasswordBaru1' }).data.token;
+  const tB = call(env, 'POST', { action: 'login', username: 'akun1', password: 'PasswordBaru1' }).data.token;
+  r = call(env, 'POST', { action: 'updateMyProfile', token: tA, nama: 'Akuntan', username: 'akun1', password_lama: 'salah!', password_baru: 'GantiLagi1' });
+  ok(!r.ok && /lama salah/.test(r.error), 'ganti password dengan password lama salah ditolak');
+  r = call(env, 'POST', { action: 'updateMyProfile', token: tA, nama: 'Akuntan', username: 'akun1', password_lama: 'PasswordBaru1', password_baru: 'GantiLagi1' });
+  ok(r.ok, 'ganti password sendiri berhasil');
+  ok(call(env, 'POST', { action: 'getMyProfile', token: tA }).ok, 'sesi yang dipakai tetap hidup');
+  ok(!call(env, 'POST', { action: 'getMyProfile', token: tB }).ok, 'sesi perangkat lain dicabut');
+
+  // 7. migrasi massal
+  const e3 = makeEnv([['U1', 'a', 'admin123', 'A', 'admin', '', 'YA'], ['U2', 'b', 'Kuat-Sekali-77', 'B', 'pic', 'D001', 'YA'], ['U3', 'c', '123', 'C', 'pic', 'D001', 'YA']]);
+  e3.migrasiHashPassword();
+  ok(e3.__book.Users.slice(1).every(u => u[2].startsWith('h1$')), 'migrasi: semua password ter-hash');
+  ok(e3.__logs.join(' ').includes('Di-hash: 3') && /a, c/.test(e3.__logs.join(' ')), 'migrasi: melaporkan akun bawaan/lemah (a, c) tanpa menampilkan passwordnya');
+  e3.migrasiHashPassword();
+  ok(e3.__logs.join(' ').includes('Sudah ter-hash sebelumnya: 3'), 'migrasi aman diulang');
+  ok(call(e3, 'POST', { action: 'login', username: 'b', password: 'Kuat-Sekali-77' }).ok, 'login setelah migrasi massal berhasil');
+
+  // 8. blokir aksi berpassword via GET (saat dimatikan)
+  const e4 = makeEnv([['U1', 'a', 'pass123', 'A', 'admin', '', 'YA']], src => src.replace('const LOGIN_VIA_GET_DIBOLEH = false;', 'const LOGIN_VIA_GET_DIBOLEH = true;'));
+  ok(call(e4, 'GET', { action: 'login', username: 'a', password: 'pass123' }).ok, 'GET login masih boleh bila LOGIN_VIA_GET_DIBOLEH = true');
+  ok(/const LOGIN_VIA_GET_DIBOLEH = false;/.test(fs.readFileSync(FILE, 'utf8')), 'sec4: LOGIN_VIA_GET_DIBOLEH = false di kode yang akan dipasang');
+  const e5 = makeEnv([['U1', 'a', 'pass123', 'A', 'admin', '', 'YA']]);
+  r = call(e5, 'GET', { action: 'login', username: 'a', password: 'pass123' });
+  ok(!r.ok && /Muat ulang/.test(r.error), 'GET login ditolak saat LOGIN_VIA_GET_DIBOLEH = false');
+  ok(call(e5, 'POST', { action: 'login', username: 'a', password: 'pass123' }).ok, 'POST login tetap jalan saat GET dimatikan');
+
+  // 9. createPengajuan idempoten
+  const tk = call(env, 'POST', { action: 'login', username: 'akun1', password: 'GantiLagi1' }).data.token;
+  const items = [{ jenis: 'Bahan Baku', kategori: 'Beras', uraian: 'Beras 50kg', nominal: 600000, penerima_id: 'pn1' }];
+  const JK = vm.runInContext('JENIS_KATEGORI', env);
+  const jenis = Object.keys(JK)[0]; items[0].jenis = jenis; items[0].kategori = JK[jenis][0];
+  const a = call(env, 'POST', { action: 'createPengajuan', token: tk, tanggal: '2026-10-15', items, request_id: 'rq-abc' });
+  ok(a.ok && a.data.nomor, 'createPengajuan pertama berhasil: ' + (a.error || a.data.nomor));
+  const n1 = B.Pengajuan.length;
+  const b = call(env, 'POST', { action: 'createPengajuan', token: tk, tanggal: '2026-10-15', items, request_id: 'rq-abc' });
+  ok(b.ok && b.data.id === a.data.id && b.data.nomor === a.data.nomor, 'kirim ulang dengan request_id sama → hasil identik');
+  ok(B.Pengajuan.length === n1, 'kirim ulang TIDAK menambah baris pengajuan');
+  const c = call(env, 'POST', { action: 'createPengajuan', token: tk, tanggal: '2026-10-15', items, request_id: 'rq-lain' });
+  ok(c.ok && c.data.id !== a.data.id && B.Pengajuan.length === n1 + 1, 'request_id berbeda → pengajuan baru dibuat');
+  const d = call(env, 'POST', { action: 'createPengajuan', token: tk, tanggal: '2026-10-15', items });
+  ok(d.ok && d.data.id !== a.data.id, 'tanpa request_id perilaku lama tetap jalan');
+
+  // 10. hak persetujuan: yayasan, pic (dapur sendiri), admin; akuntan ditolak
+  const e6 = makeEnv([
+    ['U1', 'adm', 'passwd1', 'Admin', 'admin', '', 'YA'], ['U2', 'yay', 'passwd2', 'Yayasan', 'yayasan', '', 'YA'],
+    ['U3', 'akn', 'passwd3', 'Akuntan', 'akuntan', 'D001', 'YA'], ['U4', 'pic1', 'passwd4', 'PIC Satu', 'pic', 'D001', 'YA'],
+    ['U5', 'pic2', 'passwd5', 'PIC Dua', 'pic', 'D002', 'YA'],
+  ]);
+  e6.__book.Dapur.push(['D002', 'SPPG Dua', '', 'S2']);
+  const tok = u => call(e6, 'POST', { action: 'login', username: u, password: { adm: 'passwd1', yay: 'passwd2', akn: 'passwd3', pic1: 'passwd4', pic2: 'passwd5' }[u] }).data.token;
+  const JK2 = vm.runInContext('JENIS_KATEGORI', e6); const j2 = Object.keys(JK2)[0];
+  const it2 = [{ jenis: j2, kategori: JK2[j2][0], uraian: 'Beras', nominal: 100000, penerima_id: 'pn1' }];
+  function baru(n) {
+    const r = call(e6, 'POST', { action: 'createPengajuan', token: tok('akn'), tanggal: '2026-10-15', items: it2.map(x => Object.assign({}, x, { uraian: 'Beras ' + n })), request_id: 'k' + n });
+    const itemId = e6.__book.PengajuanItem[e6.__book.PengajuanItem.length - 1][0];
+    return { id: r.data.id, item: itemId };
+  }
+  const dec = (u, g) => call(e6, 'POST', { action: 'decidePengajuan', token: tok(u), pengajuan_id: g.id, keputusan: [{ item_id: g.item, status: 'DISETUJUI' }] });
+  let g = baru(1);
+  ok(!dec('akn', g).ok, 'akuntan TIDAK boleh memutuskan');
+  r = dec('pic2', g);
+  ok(!r.ok && /dapurnya sendiri/.test(r.error), 'PIC dapur lain ditolak: ' + r.error);
+  r = dec('pic1', g);
+  ok(r.ok, 'PIC dapur yang sama boleh menyetujui: ' + (r.error || 'ok'));
+  g = baru(2); r = dec('yay', g); ok(r.ok, 'Yayasan tetap boleh menyetujui');
+  g = baru(3); r = dec('adm', g); ok(r.ok, 'Admin boleh menyetujui');
+  r = call(e6, 'POST', { action: 'getPengajuan', token: tok('adm'), scope: 'ALL' }); if (!r.ok) console.log('getPengajuan error:', r.error);
+  const roles = r.data.pengajuan.map(h => h.decided_by_nama + ':' + h.decided_by_role).sort();
+  ok(roles.join('|') === 'Admin:admin|PIC Satu:pic|Yayasan:yayasan', 'tercatat siapa & perannya yang memutuskan: ' + roles.join(', '));
+  ok(call(e6, 'POST', { action: 'getPengajuan', token: tok('pic1'), scope: 'ALL' }).data.pengajuan.length === 3, 'PIC melihat pengajuan dapurnya');
+  ok(call(e6, 'POST', { action: 'getPengajuan', token: tok('pic2'), scope: 'ALL' }).data.pengajuan.length === 0, 'PIC dapur lain tidak melihat pengajuan dapur ini');
+
+  // 11. getBADaftar: mode hari / aktif / periode + akses asisten
+  e6.__book.Users.push(['U6', 'ast', 'passwd6', 'Asisten', 'asisten', '', 'YA']);
+  const pwd6 = { adm: 'passwd1', yay: 'passwd2', akn: 'passwd3', pic1: 'passwd4', pic2: 'passwd5', ast: 'passwd6' };
+  const tok6 = u => call(e6, 'POST', { action: 'login', username: u, password: pwd6[u] }).data.token;
+  // periode lama yang sudah ditutup + 1 pengajuan di dalamnya (disisipkan langsung)
+  e6.__book.Setup.push(['P0', 'D001', 0, '2026-09-01', '2026-09-30', 100, 1000000, 0, 'DITUTUP']);
+  e6.__book.Pengajuan.push(['PAOLD', 'BA-PA/S1/2026/09/001', 'D001', 'P0', '2026-09-10', 'SELESAI', new Date(), 'U3', new Date(), 'U2']);
+  e6.__book.PengajuanItem.push(['PAOLD-1', 'PAOLD', 'D001', 'P0', 1, 'Bahan Baku', 'x', 'Lama', 50000, 'pn1', 'Toko A', 'BCA', '123', 'TIDAK', 'DISETUJUI', '', 1, new Date(), 'U2', '', new Date(), new Date()]);
+  const ba = (u, prm) => call(e6, 'POST', Object.assign({ action: 'getBADaftar', token: tok6(u) }, prm));
+  r = ba('ast', {});
+  ok(r.ok && r.data.length === 2, 'asisten kini bisa melihat Berita Acara (semua: ' + (r.data || []).length + ' grup)');
+  r = ba('ast', { mode: 'hari', tanggal: '2026-10-15' });
+  ok(r.ok && r.data.length === 1 && r.data[0].tanggal === '2026-10-15' && r.data[0].disetujui === 3, 'mode hari: hanya hari H itu, 3 baris disetujui terhitung');
+  r = ba('ast', { mode: 'hari', tanggal: '2026-10-16' });
+  ok(r.ok && r.data.length === 0, 'mode hari: tanggal tanpa pengajuan → kosong');
+  r = ba('adm', { mode: 'aktif' });
+  ok(r.ok && r.data.length === 1 && r.data[0].periode_status === 'AKTIF', 'mode aktif: periode ditutup tidak ikut');
+  r = ba('adm', { mode: 'periode', periode_id: 'P0' });
+  ok(r.ok && r.data.length === 1 && r.data[0].tanggal === '2026-09-10' && r.data[0].total === 50000, 'mode periode: Berita Acara periode ditutup tetap bisa diambil');
+  r = ba('adm', { mode: 'periode' });
+  ok(!r.ok, 'mode periode tanpa periode_id ditolak');
+  r = ba('adm', { scope: 'D002' });
+  ok(r.ok && r.data.length === 0, 'scope dapur lain → kosong');
+  r = ba('pic2', {});
+  ok(r.ok && r.data.length === 0, 'PIC dapur lain tetap tidak melihat Berita Acara dapur ini');
+  r = ba('akn', { mode: 'aktif' });
+  ok(r.ok && r.data.length === 1, 'akuntan dapurnya sendiri tetap bisa');
+  r = call(e6, 'POST', { action: 'getBeritaAcara', token: tok6('ast'), dapur: 'D001', tanggal: '2026-10-15' });
+  ok(!/Tidak berwenang/.test(r.error || ''), 'asisten tidak ditolak saat mencetak (' + (r.ok ? 'ok' : r.error) + ')');
+
+  // 12. getPenandatangan: nama akuntan dapur, akses dibatasi
+  const pt = (u, d) => call(e6, 'POST', { action: 'getPenandatangan', token: tok6(u), dapur: d });
+  r = pt('adm', 'D001'); ok(r.ok && r.data.akuntan === 'Akuntan', 'admin mendapat nama akuntan D001: ' + JSON.stringify(r.data));
+  ok(Object.keys(r.data).join(',') === 'akuntan', 'hanya nama yang dikirim (tanpa data lain)');
+  r = pt('yay', 'D001'); ok(r.ok && r.data.akuntan === 'Akuntan', 'yayasan mendapat nama akuntan');
+  r = pt('pic1', 'D001'); ok(r.ok && r.data.akuntan === 'Akuntan', 'PIC dapur sendiri mendapat nama akuntan');
+  r = pt('pic2', 'D001'); ok(r.ok && r.data.akuntan === '', 'PIC dapur lain: dapur dipaksa ke dapurnya sendiri (D002, tanpa akuntan) → kosong, bukan nama akuntan D001');
+  r = pt('adm', 'D002'); ok(r.ok && r.data.akuntan === '', 'dapur tanpa akuntan aktif → kosong');
+  r = pt('adm', ''); ok(!r.ok, 'dapur kosong ditolak');
+  e6.__book.Users.forEach(u => { if (u[0] === 'U3') u[6] = 'TIDAK'; });
+  r = pt('adm', 'D001'); ok(r.ok && r.data.akuntan === '', 'akuntan nonaktif tidak dipakai');
+
+  // 13. sec4: aksi berpassword lain lewat GET juga ditolak, aksi biasa lewat GET tetap jalan
+  const tk5 = call(e5, 'POST', { action: 'login', username: 'a', password: 'pass123' }).data.token;
+  r = call(e5, 'GET', { action: 'updateMyProfile', token: tk5, nama: 'A', username: 'a', password_lama: 'pass123', password_baru: 'baru1234' });
+  ok(!r.ok && /Muat ulang/.test(r.error), 'GET updateMyProfile ditolak');
+  r = call(e5, 'GET', { action: 'getUsers', token: tk5 });
+  ok(r.ok, 'aksi tanpa password (getUsers) lewat GET tetap jalan');
+
+  console.log(fails ? '\n' + fails + ' GAGAL' : '\nSEMUA LULUS');
+  process.exit(fails ? 1 : 0);
+})();
