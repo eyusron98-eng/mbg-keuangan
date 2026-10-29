@@ -252,7 +252,7 @@ const ok = (c, m) => { console.log((c ? 'PASS ' : 'FAIL ') + m); if (!c) fails++
   ok(!/Sesi tidak valid/.test(r.error || ''), 'gangguan sesaat saat memakai aplikasi tidak dianggap sesi habis');
   e7.__openGagal = 99;
   r = call(e7, 'POST', { action: 'getUsers', token: 'x' + t7 });
-  ok(!r.ok && /gangguan sesaat/.test(r.error) && !/izin/.test(r.error), 'galat "izin" Google diganti pesan jelas: ' + r.error);
+  ok(!r.ok && /gangguan sesaat/.test(r.error) && /penyimpanan/.test(r.error) && !/izin/.test(r.error), 'galat "izin" Google diganti pesan jelas: ' + r.error);
   e7.__openGagal = 99; e7.__aktifBisa = true;
   for (const k in e7.__cache) delete e7.__cache[k];
   r = call(e7, 'POST', { action: 'getUsers', token: t7 });

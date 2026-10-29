@@ -1880,7 +1880,7 @@ function logActivity(userId, action, ref) {
 // Gangguan sesaat dari Google (bukan salah pengguna) → pesan yang jelas & aman diulang
 function pesanGangguan(msg) {
   return /tidak memiliki izin untuk mengakses dokumen|do not have permission to access the requested document|Layanan Spreadsheet gagal|Service Spreadsheets failed|Kesalahan layanan|Service error|timed out|waktu habis/i.test(String(msg || ''))
-    ? 'Server Google sedang gangguan sesaat. Tunggu beberapa detik, cek daftar, lalu coba lagi bila belum masuk.' : String(msg || '');
+    ? 'Google menolak akses ke data (gangguan sesaat, atau penyimpanan Google Drive pemilik penuh). Cek daftar dulu, lalu coba lagi. Bila terus terjadi, hubungi admin.' : String(msg || '');
 }
 function logError(err) {
   try { getSheet(SHEETS.LOG).appendRow([new Date(), 'SYSTEM', 'ERROR', String(err.message || err)]); }
