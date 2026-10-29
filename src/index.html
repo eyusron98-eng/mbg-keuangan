@@ -150,39 +150,59 @@ const driveThumb = url => {
 // Token sesi dikirim otomatis; kalau server bilang sesi tidak valid → paksa login ulang
 let AUTH_TOKEN = null;
 let ON_SESSION_INVALID = null;
-function checkSession(j) {
-  if (j && j.ok === false && /Sesi tidak valid/.test(j.error || '') && ON_SESSION_INVALID) ON_SESSION_INVALID(j.error);
+const isSesiErr = j => !!(j && j.ok === false && /Sesi tidak valid/.test(j.error || ''));
+function checkSession(j, tokenDipakai) {
+  // Hanya keluarkan pengguna bila token yang ditolak = token yang sedang dipakai
+  // (balasan telat dari sesi lama tidak boleh menendang sesi baru).
+  if (isSesiErr(j) && tokenDipakai === AUTH_TOKEN && ON_SESSION_INVALID) ON_SESSION_INVALID(j.error);
   return j;
+}
+// Server kadang belum "melihat" sesi yang baru dibuat → coba sekali lagi sebelum menyerah.
+// Aman diulang: permintaan yang ditolak karena sesi tidak diproses sama sekali oleh server.
+async function kirimDenganSesi(kirim) {
+  const tok = AUTH_TOKEN;
+  let j = await kirim(tok);
+  if (isSesiErr(j) && tok && tok === AUTH_TOKEN) {
+    await new Promise(function(r){ setTimeout(r, 1500); });
+    if (tok === AUTH_TOKEN) j = await kirim(tok);
+  }
+  return checkSession(j, tok);
 }
 async function api(action, params) {
   params = params || {};
-  const url = new URL(API_URL);
-  url.searchParams.set('action', action);
-  if (AUTH_TOKEN && !params.token) url.searchParams.set('token', AUTH_TOKEN);
-  Object.keys(params).forEach(function(k) {
-    if (params[k] !== undefined && params[k] !== null) {
-      url.searchParams.set(k, typeof params[k] === 'object' ? JSON.stringify(params[k]) : String(params[k]));
-    }
+  return kirimDenganSesi(async function(tok) {
+    const url = new URL(API_URL);
+    url.searchParams.set('action', action);
+    if (tok && !params.token) url.searchParams.set('token', tok);
+    Object.keys(params).forEach(function(k) {
+      if (params[k] !== undefined && params[k] !== null) {
+        url.searchParams.set(k, typeof params[k] === 'object' ? JSON.stringify(params[k]) : String(params[k]));
+      }
+    });
+    try { const res = await fetch(url.toString(), { method: 'GET', redirect: 'follow' }); return await res.json(); }
+    catch (e) { return { ok: false, error: 'Koneksi gagal: ' + e.message }; }
   });
-  try { const res = await fetch(url.toString(), { method: 'GET', redirect: 'follow' }); return checkSession(await res.json()); }
-  catch (e) { return { ok: false, error: 'Koneksi gagal: ' + e.message }; }
 }
 // POST untuk payload besar (tabel pengajuan, keputusan)
 async function apiPost(action, params) {
-  try {
-    const res = await fetch(API_URL, { method: 'POST', redirect: 'follow',
-      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-      body: JSON.stringify(Object.assign({ action: action, token: AUTH_TOKEN }, params)) });
-    return checkSession(await res.json());
-  } catch (e) { return { ok: false, error: 'Koneksi gagal: ' + e.message }; }
+  return kirimDenganSesi(async function(tok) {
+    try {
+      const res = await fetch(API_URL, { method: 'POST', redirect: 'follow',
+        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+        body: JSON.stringify(Object.assign({ action: action, token: tok }, params)) });
+      return await res.json();
+    } catch (e) { return { ok: false, error: 'Koneksi gagal: ' + e.message }; }
+  });
 }
 async function apiUpload(action, params) {
-  try {
-    const res = await fetch(API_URL, { method: 'POST', redirect: 'follow',
-      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-      body: JSON.stringify(Object.assign({ action: action, token: AUTH_TOKEN }, params)) });
-    return checkSession(await res.json());
-  } catch (e) { return { ok: false, error: 'Upload gagal: ' + e.message }; }
+  return kirimDenganSesi(async function(tok) {
+    try {
+      const res = await fetch(API_URL, { method: 'POST', redirect: 'follow',
+        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+        body: JSON.stringify(Object.assign({ action: action, token: tok }, params)) });
+      return await res.json();
+    } catch (e) { return { ok: false, error: 'Upload gagal: ' + e.message }; }
+  });
 }
 
 // Kredensial (password) jangan lewat query string GET: URL tercatat di log proxy/Google & riwayat browser.

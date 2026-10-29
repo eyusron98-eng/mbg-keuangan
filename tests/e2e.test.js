@@ -129,6 +129,23 @@ function assert(c, m) { if (!c) throw new Error(m); }
     assert(!srv.log.urls.some(u => u.includes('action=login')), 'salah password malah dikirim ulang via GET');
   });
 
+  let sesiTolak = 0;
+  all &= await run('Sesi: penolakan sesaat setelah login tidak menendang pengguna (dicoba ulang sekali)', { role: 'asisten',
+    override: (a) => (a !== 'login' && sesiTolak++ < 1) ? { ok: false, error: 'Sesi tidak valid atau kedaluwarsa. Silakan keluar lalu masuk lagi.' } : null }, async (page) => {
+    await login(page, 'siti');
+    await page.waitForSelector('header');
+    await page.waitForTimeout(3000);
+    assert(await page.isVisible('header'), 'pengguna terpental ke layar login');
+    assert(!(await page.isVisible('input[type=password]')), 'form login muncul lagi');
+  });
+
+  all &= await run('Sesi: bila server tetap menolak, pengguna dikeluarkan dengan pesan', { role: 'asisten',
+    override: (a) => a !== 'login' ? { ok: false, error: 'Sesi tidak valid atau kedaluwarsa. Silakan keluar lalu masuk lagi.' } : null }, async (page) => {
+    await login(page, 'siti');
+    await page.waitForSelector('input[type=password]', { timeout: 10000 });
+    await page.waitForSelector('text=Sesi tidak valid');
+  });
+
   all &= await run('Setup: kartu sinkron saldo + form periode', { role: 'akuntan' }, async (page) => {
     await login(page, 'siti');
     await page.waitForSelector('header');

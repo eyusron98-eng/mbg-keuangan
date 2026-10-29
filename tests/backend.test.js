@@ -17,19 +17,31 @@ function makeEnv(usersInit, transform) {
     PengajuanItem: [['h']], VATopup: [['h']], PettyTopup: [['h']], Transaksi: [['h']],
   };
   const sheet = name => ({
-    getDataRange: () => ({ getValues: () => book[name].map(r => r.slice()) }),
+    getDataRange: () => ({ getValues: () => {
+      const rows = book[name].map(r => r.slice());
+      // tiru Google yang belum "melihat" baris terbaru Sesi (baca basi)
+      if (name === 'Sesi' && sandbox.__sesiBasi > 0) { sandbox.__sesiBasi--; rows.pop(); }
+      return rows;
+    } }),
     getRange: (r, c, nr, nc) => ({
       setValue: v => { book[name][r - 1][c - 1] = v; },
       setValues: vals => { vals.forEach((row, i) => { book[name][r - 1 + i] = book[name][r - 1 + i] || []; row.forEach((v, j) => { book[name][r - 1 + i][c - 1 + j] = v; }); }); },
     }),
-    appendRow: row => { book[name].push(row); },
+    appendRow: row => { if (name === 'Sesi' && sandbox.__appendGagal > 0) { sandbox.__appendGagal--; throw new Error('Layanan Spreadsheet gagal'); } book[name].push(row); },
     deleteRow: n => { book[name].splice(n - 1, 1); },
     getLastRow: () => book[name].length,
   });
   const cacheStore = {};
   const sandbox = {
     console, Logger: { log: m => (sandbox.__logs.push(m)) }, __logs: [],
-    SpreadsheetApp: { openById: () => ({ getSheetByName: n => (book[n] ? sheet(n) : null) }) },
+    __openGagal: 0, __sesiBasi: 0, __appendGagal: 0, __aktifBisa: false,
+    SpreadsheetApp: {
+      // tiru gangguan sesaat Google: openById melempar galat "izin" sebanyak __openGagal kali
+      openById: () => { if (sandbox.__openGagal > 0) { sandbox.__openGagal--; throw new Error('Anda tidak memiliki izin untuk mengakses dokumen yang diminta.'); }
+        return { getSheetByName: n => (book[n] ? sheet(n) : null) }; },
+      getActiveSpreadsheet: () => (sandbox.__aktifBisa ? { getId: () => sandbox.SPREADSHEET_ID_TES, getSheetByName: n => (book[n] ? sheet(n) : null) } : null),
+      flush() {},
+    },
     CacheService: { getScriptCache: () => ({
       get: k => (k in cacheStore ? cacheStore[k] : null), put: (k, v) => { cacheStore[k] = v; },
       remove: k => { delete cacheStore[k]; }, removeAll: ks => ks.forEach(k => delete cacheStore[k]) }) },
@@ -41,6 +53,7 @@ function makeEnv(usersInit, transform) {
       newBlob: s => ({ getBytes: () => Array.from(Buffer.from(s, 'utf8')).map(b => (b > 127 ? b - 256 : b)) }),
       base64EncodeWebSafe: bytes => Buffer.from(bytes.map(b => b & 255)).toString('base64').replace(/\+/g, '-').replace(/\//g, '_'),
       getUuid: () => crypto.randomUUID(),
+      sleep() {},
       formatDate: (d, tz, f) => { const x = new Date(d); const p = n => String(n).padStart(2, '0');
         return f.replace('yyyy', x.getFullYear()).replace('MM', p(x.getMonth() + 1)).replace('dd', p(x.getDate())).replace('HH', p(x.getHours())).replace('mm', p(x.getMinutes())).replace('ss', p(x.getSeconds())); },
     },
@@ -51,7 +64,8 @@ function makeEnv(usersInit, transform) {
   sandbox.__book = book; sandbox.__cache = cacheStore;
   return sandbox;
 }
-const call = (env, method, params) => JSON.parse(env.handleRequest({ parameter: method === 'GET' ? params : {}, postData: method === 'POST' ? { contents: JSON.stringify(params) } : null }, method).s);
+// Tiap permintaan di Apps Script = eksekusi baru → buang handle spreadsheet yang disimpan kode
+const call = (env, method, params) => (vm.runInContext('if (typeof _SS !== "undefined") _SS = null; SPREADSHEET_ID_TES = SPREADSHEET_ID;', env), JSON.parse(env.handleRequest({ parameter: method === 'GET' ? params : {}, postData: method === 'POST' ? { contents: JSON.stringify(params) } : null }, method).s));
 let fails = 0;
 const ok = (c, m) => { console.log((c ? 'PASS ' : 'FAIL ') + m); if (!c) fails++; };
 
@@ -63,7 +77,7 @@ const ok = (c, m) => { console.log((c ? 'PASS ' : 'FAIL ') + m); if (!c) fails++
     ['U3', 'off', 'xxxxxxx', 'Nonaktif', 'pic', 'D001', 'TIDAK'],
   ]);
   const B = env.__book;
-  ok(call(env, 'GET', { action: 'ping' }).version === 'v6-ba-sec4', 'ping menampilkan versi baru');
+  ok(call(env, 'GET', { action: 'ping' }).version === 'v6-ba-sec5', 'ping menampilkan versi baru');
 
   // 1. login lama (teks biasa) berhasil via POST dan password otomatis di-hash
   let r = call(env, 'POST', { action: 'login', username: 'AKUN1', password: 'RahasiaKu9' });
@@ -224,6 +238,41 @@ const ok = (c, m) => { console.log((c ? 'PASS ' : 'FAIL ') + m); if (!c) fails++
   ok(!r.ok && /Muat ulang/.test(r.error), 'GET updateMyProfile ditolak');
   r = call(e5, 'GET', { action: 'getUsers', token: tk5 });
   ok(r.ok, 'aksi tanpa password (getUsers) lewat GET tetap jalan');
+
+  // 14. sec5: gangguan sesaat Google tidak boleh menendang pengguna
+  const e7 = makeEnv([['U9', 'ast', 'asisten1', 'Asisten', 'asisten', '', 'YA']]);
+  const login7 = () => call(e7, 'POST', { action: 'login', username: 'ast', password: 'asisten1' });
+  e7.__openGagal = 2;
+  r = login7();
+  ok(r.ok && r.data.token, 'login tetap berhasil walau Google 2x gagal membuka spreadsheet');
+  const t7 = (r.data && r.data.token) || 'tidak-ada';
+  ok(e7.__book.Sesi.some(x => x[0] === t7), 'sesi benar-benar tercatat di sheet Sesi');
+  e7.__openGagal = 2;
+  r = call(e7, 'POST', { action: 'getUsers', token: t7 });
+  ok(!/Sesi tidak valid/.test(r.error || ''), 'gangguan sesaat saat memakai aplikasi tidak dianggap sesi habis');
+  e7.__openGagal = 99;
+  r = call(e7, 'POST', { action: 'getUsers', token: 'x' + t7 });
+  ok(!r.ok && /gangguan sesaat/.test(r.error) && !/izin/.test(r.error), 'galat "izin" Google diganti pesan jelas: ' + r.error);
+  e7.__openGagal = 99; e7.__aktifBisa = true;
+  for (const k in e7.__cache) delete e7.__cache[k];
+  r = call(e7, 'POST', { action: 'getUsers', token: t7 });
+  ok(!/gangguan|izin/.test(r.error || ''), 'openById terus gagal → jalur cadangan (Sheet tempat skrip menempel) dipakai');
+  e7.__openGagal = 0; e7.__aktifBisa = false;
+  e7.__appendGagal = 99;
+  r = login7();
+  ok(!r.ok && !(r.data && r.data.token), 'sesi gagal dicatat → login GAGAL dengan pesan, bukan token palsu yang nanti ditolak');
+  e7.__appendGagal = 0;
+  // sesi baru belum terbaca oleh permintaan berikutnya
+  const t8 = ((login7().data) || {}).token || 'tidak-ada';
+  e7.__sesiBasi = 1;
+  r = call(e7, 'POST', { action: 'getUsers', token: t8 });
+  ok(!/Sesi tidak valid/.test(r.error || ''), 'permintaan pertama setelah login tidak ditolak walau Sheet belum terbaca terbaru');
+  for (const k in e7.__cache) delete e7.__cache[k];
+  e7.__sesiBasi = 1;
+  r = call(e7, 'POST', { action: 'getUsers', token: t8 });
+  ok(!/Sesi tidak valid/.test(r.error || ''), 'tanpa cache pun, server membaca ulang sekali sebelum menolak sesi');
+  r = call(e7, 'POST', { action: 'getUsers', token: 'palsu' });
+  ok(/Sesi tidak valid/.test(r.error || ''), 'token palsu tetap ditolak');
 
   console.log(fails ? '\n' + fails + ' GAGAL' : '\nSEMUA LULUS');
   process.exit(fails ? 1 : 0);

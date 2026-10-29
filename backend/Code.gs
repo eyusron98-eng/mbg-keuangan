@@ -126,7 +126,7 @@ function handleRequest(e, method) {
     }
     let result;
     switch (action) {
-      case 'ping':              result = { ok: true, time: new Date().toISOString(), version: 'v6-ba-sec4' }; break;
+      case 'ping':              result = { ok: true, time: new Date().toISOString(), version: 'v6-ba-sec5' }; break;
       case 'login':             result = login(params); break;
       case 'getPeriodeList':    result = getPeriodeList(params); break;
       case 'getActivePeriode':  result = getActivePeriode(params); break;
@@ -184,7 +184,7 @@ function handleRequest(e, method) {
     return jsonResponse(result);
   } catch (err) {
     logError(err);
-    return jsonResponse({ ok: false, error: err.message });
+    return jsonResponse({ ok: false, error: pesanGangguan(err && err.message) });
   }
 }
 
@@ -287,7 +287,16 @@ function login(p) {
       }
       logActivity(row[0], 'login', '');
       const token = Utilities.getUuid();
-      try { getSheet(SHEETS.SESI).appendRow([token, row[0], new Date()]); } catch (e) { /* sheet Sesi belum dibuat */ }
+      let tercatat = false;
+      for (let k = 0; k < 3 && !tercatat; k++) {
+        try { getSheet(SHEETS.SESI).appendRow([token, row[0], new Date()]); SpreadsheetApp.flush(); tercatat = true; }
+        catch (e) { if (k === 2) logError(e); else Utilities.sleep(500 * (k + 1)); }
+      }
+      if (!tercatat) return { ok: false, error: 'Server Google sedang sibuk, sesi belum tercatat. Coba masuk lagi.' };
+      try {
+        CacheService.getScriptCache().put('sesi_' + token, JSON.stringify({ id: row[0], username: row[1], nama: row[3],
+          role: String(row[4]).toLowerCase(), dapur: row[5] || '' }), 600);
+      } catch (e) {}
       return { ok: true, data: { token: token,
         user: { id: row[0], username: row[1], nama: row[3], role: String(row[4]).toLowerCase(), dapur: row[5] || null } } };
     }
@@ -444,7 +453,7 @@ function closePeriode(p) {
 function deletePeriode(p) {
   if (String(p.role || '').toLowerCase() !== 'admin') return { ok: false, error: 'Hanya admin' };
   if (!p.id) return { ok: false, error: 'id wajib' };
-  const ss = SpreadsheetApp.openById(SPREADSHEET_ID);
+  const ss = getSS();
 
   // 1. Cek periode ada & hitung jumlah data terkait (untuk laporan)
   const setupSheet = ss.getSheetByName(SHEETS.SETUP);
@@ -1106,9 +1115,12 @@ function authUser(p) {
   if (cached) { try { return JSON.parse(cached); } catch (e) {} }
 
   let userId = null, createdAt = null;
-  const sesi = getSheet(SHEETS.SESI).getDataRange().getValues();
-  for (let i = sesi.length - 1; i >= 1; i--) {
-    if (String(sesi[i][0]) === token) { userId = sesi[i][1]; createdAt = sesi[i][2]; break; }
+  for (let coba = 0; coba < 2 && !userId; coba++) {
+    if (coba) Utilities.sleep(1000);   // sesi yang baru dibuat kadang belum terbaca → baca ulang sekali
+    const sesi = getSheet(SHEETS.SESI).getDataRange().getValues();
+    for (let i = sesi.length - 1; i >= 1; i--) {
+      if (String(sesi[i][0]) === token) { userId = sesi[i][1]; createdAt = sesi[i][2]; break; }
+    }
   }
   if (!userId) return null;
   if (createdAt instanceof Date && (new Date() - createdAt) > SESI_MAX_HARI * 86400000) return null;
@@ -1786,7 +1798,7 @@ function decideTxChange(p) {
 // ============================================================
 
 function migrateV6() {
-  const ss = SpreadsheetApp.openById(SPREADSHEET_ID);
+  const ss = getSS();
   function ensureHeaders(name, headers) {
     let s = ss.getSheetByName(name);
     if (!s) { s = ss.insertSheet(name); }
@@ -1823,8 +1835,25 @@ function migrateV6() {
 //  HELPERS
 // ============================================================
 
+// Buka spreadsheet SEKALI per permintaan (dulu dibuka ulang di tiap getSheet) dan coba ulang
+// bila Google gagal sesaat ("Anda tidak memiliki izin…" / "Layanan Spreadsheet gagal…").
+let _SS = null;
+function getSS() {
+  if (_SS) return _SS;
+  let lastErr = null;
+  for (let i = 0; i < 3; i++) {
+    try { _SS = SpreadsheetApp.openById(SPREADSHEET_ID); return _SS; }
+    catch (e) { lastErr = e; Utilities.sleep(400 * (i + 1)); }
+  }
+  try {   // skrip menempel di Sheet ini → jalur cadangan
+    const a = SpreadsheetApp.getActiveSpreadsheet();
+    if (a && a.getId() === SPREADSHEET_ID) { _SS = a; return _SS; }
+  } catch (e) {}
+  throw lastErr;
+}
+
 function getSheet(name) {
-  const ss = SpreadsheetApp.openById(SPREADSHEET_ID);
+  const ss = getSS();
   let s = ss.getSheetByName(name);
   if (!s) throw new Error('Sheet "' + name + '" tidak ditemukan. Jalankan setupSheets() atau migrateV4() dulu.');
   return s;
@@ -1848,6 +1877,11 @@ function logActivity(userId, action, ref) {
   catch (e) { /* ignore */ }
 }
 
+// Gangguan sesaat dari Google (bukan salah pengguna) → pesan yang jelas & aman diulang
+function pesanGangguan(msg) {
+  return /tidak memiliki izin untuk mengakses dokumen|do not have permission to access the requested document|Layanan Spreadsheet gagal|Service Spreadsheets failed|Kesalahan layanan|Service error|timed out|waktu habis/i.test(String(msg || ''))
+    ? 'Server Google sedang gangguan sesaat. Tunggu beberapa detik, cek daftar, lalu coba lagi bila belum masuk.' : String(msg || '');
+}
 function logError(err) {
   try { getSheet(SHEETS.LOG).appendRow([new Date(), 'SYSTEM', 'ERROR', String(err.message || err)]); }
   catch (e) { /* ignore */ }
@@ -1860,7 +1894,7 @@ function logError(err) {
 // ============================================================
 
 function migrateV4() {
-  const ss = SpreadsheetApp.openById(SPREADSHEET_ID);
+  const ss = getSS();
   const d = ss.getSheetByName(SHEETS.DAPUR);
   if (d) {
     const data = d.getDataRange().getValues();
@@ -1903,7 +1937,7 @@ function migrateV4() {
 // ============================================================
 
 function setupSheets() {
-  const ss = SpreadsheetApp.openById(SPREADSHEET_ID);
+  const ss = getSS();
   function ensureSheet(name, headers) {
     let s = ss.getSheetByName(name);
     if (!s) s = ss.insertSheet(name);
