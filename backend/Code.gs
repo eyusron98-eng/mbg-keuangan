@@ -57,7 +57,7 @@ const SHEETS = {
   TRANSAKSI: 'Transaksi', LOG: 'Log',
   SESI: 'Sesi', PENERIMA: 'Penerima',
   PENGAJUAN: 'Pengajuan', PITEM: 'PengajuanItem',
-  PERUBAHAN: 'PerubahanTx', LPDH: 'IdentitasLPDH',
+  PERUBAHAN: 'PerubahanTx', LPDH: 'IdentitasLPDH', LPDH_HARIAN: 'LPDHHarian', RELAWAN: 'RelawanBayar',
 };
 
 const JENIS_KATEGORI = {
@@ -126,7 +126,7 @@ function handleRequest(e, method) {
     }
     let result;
     switch (action) {
-      case 'ping':              result = { ok: true, time: new Date().toISOString(), version: 'v6-ba-sec6' }; break;
+      case 'ping':              result = { ok: true, time: new Date().toISOString(), version: 'v6-ba-sec7' }; break;
       case 'login':             result = login(params); break;
       case 'getPeriodeList':    result = getPeriodeList(params); break;
       case 'getActivePeriode':  result = getActivePeriode(params); break;
@@ -179,6 +179,10 @@ function handleRequest(e, method) {
       case 'getIdentitasLPDH':  result = getIdentitasLPDH(params); break;
       case 'saveIdentitasLPDH': result = saveIdentitasLPDH(params); break;
       case 'getDataLPDH':       result = getDataLPDH(params); break;
+      case 'getHarianLPDH':     result = getHarianLPDH(params); break;
+      case 'saveHarianLPDH':    result = saveHarianLPDH(params); break;
+      case 'getRelawanBayar':   result = getRelawanBayar(params); break;
+      case 'saveRelawanBayar':  result = saveRelawanBayar(params); break;
       case 'getPenandatangan':  result = getPenandatangan(params); break;
       case 'getLogoKop':        result = getLogoKop(params); break;
       case 'saveLogoKop':       result = saveLogoKop(params); break;
@@ -1248,7 +1252,8 @@ function readAllItems() {
       penerima_id: r[9], penerima_nama: r[10], bank: String(r[11] || ''), no_rek: String(r[12] || ''),
       susulan: String(r[13]).toUpperCase() === 'YA', status: String(r[14] || ''), catatan: r[15] || '',
       putaran: Number(r[16]) || 1, decided_at: formatTimestamp(r[17]), decided_by: r[18] || '',
-      transaksi_id: r[19] || '', created_at: formatTimestamp(r[20]) });
+      transaksi_id: r[19] || '', created_at: formatTimestamp(r[20]),
+      rincian: bacaRincian(r[22]), nota_url: String(r[23] || '') });
   }
   return rows;
 }
@@ -1279,6 +1284,31 @@ function computeVA(dapur, periode, allItems) {
     .reduce((s, i) => s + i.nominal, 0);
   return { periode_id: periode.id, sisaVA: sisaVA, komitmen: komitmen, tersedia: sisaVA - komitmen };
 }
+
+// Rincian per bahan (LPDH sheet B): [{ nama, kategori, volume, satuan, harga }]; jumlah = nominal baris.
+const KATEGORI_BAHAN = ['Karbohidrat', 'Protein hewani', 'Protein nabati', 'Sayuran', 'Buah', 'Susu', 'Minyak dan bumbu', 'Lainnya'];
+function bacaRincian(v) { if (!v) return []; try { const a = JSON.parse(v); return Array.isArray(a) ? a : []; } catch (e) { return []; } }
+function cekRincian(raw, nominal) {
+  let a = raw;
+  if (typeof a === 'string') { try { a = JSON.parse(a); } catch (e) { return { error: 'Format rincian bahan tidak valid' }; } }
+  if (!Array.isArray(a) || !a.length) return { error: 'Rincian bahan wajib diisi (nama, kategori, volume, satuan, harga satuan)' };
+  if (a.length > 40) return { error: 'Rincian bahan maksimal 40 baris' };
+  const bersih = [];
+  let total = 0;
+  for (let i = 0; i < a.length; i++) {
+    const x = a[i] || {}, n = i + 1;
+    const r = { nama: String(x.nama || '').trim(), kategori: String(x.kategori || ''), volume: Number(x.volume), satuan: String(x.satuan || '').trim(), harga: Number(x.harga) };
+    if (!r.nama) return { error: 'Rincian ' + n + ': nama bahan wajib' };
+    if (KATEGORI_BAHAN.indexOf(r.kategori) < 0) return { error: 'Rincian ' + n + ': kategori bahan tidak valid' };
+    if (!(r.volume > 0)) return { error: 'Rincian ' + n + ': volume harus lebih dari 0' };
+    if (!r.satuan) return { error: 'Rincian ' + n + ': satuan wajib' };
+    if (!(r.harga > 0)) return { error: 'Rincian ' + n + ': harga satuan harus lebih dari 0' };
+    total += r.volume * r.harga; bersih.push(r);
+  }
+  if (Math.abs(Math.round(total) - Number(nominal)) > 1) return { error: 'Jumlah rincian bahan (' + rupiah(total) + ') harus sama dengan nominal (' + rupiah(nominal) + ')' };
+  return { value: JSON.stringify(bersih) };
+}
+function cekNotaUrl(u) { u = String(u || '').trim(); return !u || /^https:\/\//.test(u) ? u : null; }
 
 function validateItemInput(it, penerimaMap) {
   if (!it.jenis || !JENIS_KATEGORI[it.jenis]) return 'Jenis tidak valid';
@@ -1315,9 +1345,19 @@ function createPengajuan(p) {
 
   const penerimaMap = {};
   readPenerima().forEach(r => { penerimaMap[r.id] = r; });
+  const tambahan = [];
   for (let k = 0; k < items.length; k++) {
     const err = validateItemInput(items[k], penerimaMap);
     if (err) return { ok: false, error: 'Baris ' + (k + 1) + ': ' + err };
+    let rinc = '';
+    if (items[k].jenis === 'Bahan Baku') {
+      const c = cekRincian(items[k].rincian, items[k].nominal);
+      if (c.error) return { ok: false, error: 'Baris ' + (k + 1) + ': ' + c.error };
+      rinc = c.value;
+    }
+    const nota = cekNotaUrl(items[k].nota_url);
+    if (nota === null) return { ok: false, error: 'Baris ' + (k + 1) + ': link nota tidak valid' };
+    tambahan.push([rinc, nota]);
   }
 
   const dapurRow = getDapur().data.find(d => d.id === dapurId);
@@ -1354,9 +1394,10 @@ function createPengajuan(p) {
       const pn = penerimaMap[it.penerima_id];
       return [pid + '-' + (idx + 1), pid, dapurId, periode.id, idx + 1, it.jenis, it.kategori, String(it.uraian).trim(),
         Number(it.nominal), pn.id, pn.nama, pn.bank, "'" + pn.no_rek, it.susulan ? 'YA' : 'TIDAK', 'DIAJUKAN', '', 1,
-        '', '', '', now, now];
+        '', '', '', now, now].concat(tambahan[idx]);
     });
     const sh = getSheet(SHEETS.PITEM);
+    sh.getRange(1, 23, 1, 2).setValues([['rincian_bahan', 'nota_url']]);
     sh.getRange(sh.getLastRow() + 1, 1, rows.length, rows[0].length).setValues(rows);
     logActivity(me.id, 'createPengajuan', nomor + ' (' + rows.length + ' baris)');
     const hasil = { ok: true, data: { id: pid, nomor: nomor } };
@@ -1457,9 +1498,18 @@ function updatePengajuanItem(p) {
     const input = { jenis: p.jenis, kategori: p.kategori, uraian: p.uraian, nominal: p.nominal, penerima_id: p.penerima_id };
     const err = validateItemInput(input, penerimaMap);
     if (err) return { ok: false, error: err };
+    let rinc = '';
+    if (p.jenis === 'Bahan Baku') {
+      const c = cekRincian(p.rincian, p.nominal);
+      if (c.error) return { ok: false, error: c.error };
+      rinc = c.value;
+    }
+    const nota = p.nota_url === undefined ? it.nota_url : cekNotaUrl(p.nota_url);
+    if (nota === null) return { ok: false, error: 'Link nota tidak valid' };
     const pn = penerimaMap[p.penerima_id];
     const sh = getSheet(SHEETS.PITEM);
     const wasRevisi = it.status === 'REVISI';
+    sh.getRange(it._row, 23, 1, 2).setValues([[rinc, nota]]);
     sh.getRange(it._row, 6, 1, 12).setValues([[p.jenis, p.kategori, String(p.uraian).trim(), Number(p.nominal),
       pn.id, pn.nama, pn.bank, "'" + pn.no_rek, String(p.susulan) === 'true' || p.susulan === true ? 'YA' : 'TIDAK',
       'DIAJUKAN', it.catatan, wasRevisi ? it.putaran + 1 : it.putaran]]);
@@ -1993,6 +2043,136 @@ function saveIdentitasLPDH(p) {
   });
 }
 
+// ── Data harian (A_PM porsi POP/Fleet + syarat insentif) diisi PIC; isian hari baru disalin dari hari sebelumnya ──
+//  LPDHHarian: dapur_id | tanggal | data_json | updated_at | updated_by
+const LPDH_KELOMPOK = ['KS-01', 'KS-02', 'KS-03', 'KS-04', 'KS-05', 'KS-06', 'KS-07', 'KS-08', 'KS-09', 'PTK'];
+const LPDH_ALASAN = ['Kualitas tidak layak/tidak standar', 'Kemasan rusak/tumpah', 'PM tidak hadir', 'Libur/kegiatan mendadak',
+  'Keterlambatan pengiriman', 'Kelebihan kirim/dikembalikan', 'Lainnya'];
+const LPDH_SYARAT = ['kontaminasi', 'fatal', 'suspend', 'verifikasi', 'sipgn'];
+function sheetOtomatis(nama, header) {
+  const ss = getSS();
+  let s = ss.getSheetByName(nama);
+  if (!s) { s = ss.insertSheet(nama); s.appendRow(header); }
+  return s;
+}
+function bacaJson(v) { try { return JSON.parse(v); } catch (e) { return null; } }
+function harianSheet() { return sheetOtomatis(SHEETS.LPDH_HARIAN, ['dapur_id', 'tanggal', 'data_json', 'updated_at', 'updated_by']); }
+function bacaHarian(dapurId, tgl) {
+  const d = harianSheet().getDataRange().getValues();
+  let tepat = null, sebelum = null;
+  for (let i = 1; i < d.length; i++) {
+    if (d[i][0] !== dapurId) continue;
+    const t = formatDate(d[i][1]);
+    const rec = { _row: i + 1, tanggal: t, data: bacaJson(d[i][2]) };
+    if (t === tgl) tepat = rec;
+    else if (t < tgl && (!sebelum || t > sebelum.tanggal)) sebelum = rec;
+  }
+  return { tepat: tepat, sebelum: sebelum };
+}
+function bisaIsiLPDH(me) { return ['admin', 'akuntan', 'pic'].indexOf(me.role) >= 0; }
+function getHarianLPDH(p) {
+  const me = authUser(p);
+  if (!me) return { ok: false, error: SESI_ERR };
+  const dapurId = lpdhDapur(me, p.dapur);
+  const tgl = String(p.tanggal || '').substring(0, 10);
+  if (!dapurId || !/^\d{4}-\d{2}-\d{2}$/.test(tgl)) return { ok: false, error: 'Pilih dapur & tanggal' };
+  const h = bacaHarian(dapurId, tgl);
+  if (h.tepat) return { ok: true, data: { data: h.tepat.data, sumber: 'tersimpan' } };
+  if (h.sebelum && h.sebelum.data) {
+    // salin dari hari sebelumnya, KECUALI nomor & link BAST (bukti harian tidak boleh disalin)
+    const salin = JSON.parse(JSON.stringify(h.sebelum.data));
+    (salin.pm || []).forEach(function(r) { r.bast = ''; r.link = ''; });
+    return { ok: true, data: { data: salin, sumber: 'disalin dari ' + h.sebelum.tanggal } };
+  }
+  return { ok: true, data: { data: null, sumber: 'baru' } };
+}
+function cekHarian(raw) {
+  let d = raw;
+  if (typeof d === 'string') { d = bacaJson(d); if (!d) return { error: 'Format data harian tidak valid' }; }
+  const bulat = function(v) { const n = Number(v); return v === '' || v == null ? 0 : (Number.isInteger(n) && n >= 0 ? n : NaN); };
+  const out = { pm: [], produksi: {}, syarat: {} };
+  const pmIn = {}; (d.pm || []).forEach(function(r) { if (r && r.kode) pmIn[r.kode] = r; });
+  for (let i = 0; i < LPDH_KELOMPOK.length; i++) {
+    const k = LPDH_KELOMPOK[i], r = pmIn[k] || {};
+    const o = { kode: k, target: bulat(r.target), distribusi: bulat(r.distribusi), diterima: bulat(r.diterima), tidak: bulat(r.tidak),
+      alasan: String(r.alasan || ''), bnba: r.bnba === 'Ya' ? 'Ya' : r.bnba === 'Tidak' ? 'Tidak' : '', bast: String(r.bast || '').trim(), link: String(r.link || '').trim() };
+    if ([o.target, o.distribusi, o.diterima, o.tidak].some(function(x) { return isNaN(x); })) return { error: k + ': jumlah porsi harus bilangan bulat ≥ 0' };
+    if (o.alasan && LPDH_ALASAN.indexOf(o.alasan) < 0) return { error: k + ': alasan tidak dikenal' };
+    if (o.link && !/^https:\/\//.test(o.link)) return { error: k + ': link BAST harus diawali https://' };
+    out.pm.push(o);
+  }
+  ['total', 'organoleptik', 'sampel', 'tidak_terdistribusi', 'buffer'].forEach(function(k) { out.produksi[k] = bulat((d.produksi || {})[k]); });
+  if (Object.keys(out.produksi).some(function(k) { return isNaN(out.produksi[k]); })) return { error: 'Data produksi harus bilangan bulat ≥ 0' };
+  LPDH_SYARAT.forEach(function(k) { const v = (d.syarat || {})[k]; out.syarat[k] = v === 'Ya' || v === 'Tidak' ? v : ''; });
+  return { value: out };
+}
+function saveHarianLPDH(p) {
+  const me = authUser(p);
+  if (!me) return { ok: false, error: SESI_ERR };
+  if (!bisaIsiLPDH(me)) return { ok: false, error: 'Hanya PIC, akuntan, atau admin' };
+  const dapurId = lpdhDapur(me, p.dapur);
+  const tgl = String(p.tanggal || '').substring(0, 10);
+  if (!dapurId || !/^\d{4}-\d{2}-\d{2}$/.test(tgl)) return { ok: false, error: 'Pilih dapur & tanggal' };
+  const c = cekHarian(p.data);
+  if (c.error) return { ok: false, error: c.error };
+  return withLock(function() {
+    const sh = harianSheet(), h = bacaHarian(dapurId, tgl);
+    const row = [dapurId, tgl, JSON.stringify(c.value), new Date(), me.id];
+    if (h.tepat) sh.getRange(h.tepat._row, 1, 1, row.length).setValues([row]); else sh.appendRow(row);
+    logActivity(me.id, 'saveHarianLPDH', dapurId + ' ' + tgl);
+    return { ok: true };
+  });
+}
+
+// ── Daftar penerima honor relawan per transaksi (LPDH sheet C1). Diisi sekali; pembayaran berikutnya disalin ──
+//  RelawanBayar: transaksi_id | dapur_id | data_json | updated_at | updated_by
+function relawanSheet() { return sheetOtomatis(SHEETS.RELAWAN, ['transaksi_id', 'dapur_id', 'data_json', 'updated_at', 'updated_by']); }
+function bacaRelawanSemua(dapurId) {
+  const d = relawanSheet().getDataRange().getValues(), out = {};
+  for (let i = 1; i < d.length; i++) if (d[i][1] === dapurId) out[d[i][0]] = { _row: i + 1, rows: bacaJson(d[i][2]) || [], seq: i };
+  return out;
+}
+function isHonorRelawan(t) { return t && t.jenis === 'Operasional' && /^gaji\/honor relawan/i.test(String(t.kategori || '')); }
+function getRelawanBayar(p) {
+  const me = authUser(p);
+  if (!me) return { ok: false, error: SESI_ERR };
+  const tx = findTx(p.transaksi_id);
+  if (!tx || !isHonorRelawan(tx)) return { ok: false, error: 'Transaksi honor relawan tidak ditemukan' };
+  if (lpdhDapur(me, tx.dapur) !== tx.dapur) return { ok: false, error: 'Bukan dapur Anda' };
+  const semua = bacaRelawanSemua(tx.dapur);
+  if (semua[tx.id]) return { ok: true, data: { rows: semua[tx.id].rows, sumber: 'tersimpan', total: tx.riil } };
+  // salin dari daftar terakhir dapur ini (nama, tugas, upah, metode, hari kerja)
+  let akhir = null; Object.keys(semua).forEach(function(k) { if (!akhir || semua[k].seq > akhir.seq) akhir = semua[k]; });
+  return { ok: true, data: { rows: akhir ? akhir.rows : [], sumber: akhir ? 'disalin dari daftar terakhir' : 'baru', total: tx.riil } };
+}
+function saveRelawanBayar(p) {
+  const me = authUser(p);
+  if (!me) return { ok: false, error: SESI_ERR };
+  if (!bisaIsiLPDH(me)) return { ok: false, error: 'Hanya PIC, akuntan, atau admin' };
+  const tx = findTx(p.transaksi_id);
+  if (!tx || !isHonorRelawan(tx)) return { ok: false, error: 'Transaksi honor relawan tidak ditemukan' };
+  if (lpdhDapur(me, tx.dapur) !== tx.dapur) return { ok: false, error: 'Bukan dapur Anda' };
+  let a = p.rows;
+  if (typeof a === 'string') a = bacaJson(a);
+  if (!Array.isArray(a) || !a.length) return { ok: false, error: 'Daftar relawan kosong' };
+  if (a.length > 60) return { ok: false, error: 'Maksimal 60 relawan per pembayaran (kapasitas lembar C1 PPK)' };
+  const rows = []; let total = 0;
+  for (let i = 0; i < a.length; i++) {
+    const x = a[i] || {}, r = { nama: String(x.nama || '').trim(), tugas: String(x.tugas || '').trim(), hari: Number(x.hari), upah: Number(x.upah), metode: x.metode === 'Tunai' ? 'Tunai' : 'Transfer' };
+    if (!r.nama) return { ok: false, error: 'Baris ' + (i + 1) + ': nama wajib' };
+    if (!(r.hari > 0) || !(r.upah > 0)) return { ok: false, error: 'Baris ' + (i + 1) + ' (' + r.nama + '): hari kerja & upah harian wajib > 0' };
+    total += r.hari * r.upah; rows.push(r);
+  }
+  if (Math.round(total) !== Math.round(tx.riil)) return { ok: false, error: 'Total daftar ' + rupiah(total) + ' ≠ nilai transaksi ' + rupiah(tx.riil) + ' (selisih ' + rupiah(total - tx.riil) + ')' };
+  return withLock(function() {
+    const sh = relawanSheet(), ada = bacaRelawanSemua(tx.dapur)[tx.id];
+    const row = [tx.id, tx.dapur, JSON.stringify(rows), new Date(), me.id];
+    if (ada) sh.getRange(ada._row, 1, 1, row.length).setValues([row]); else sh.appendRow(row);
+    logActivity(me.id, 'saveRelawanBayar', tx.id + ' (' + rows.length + ' orang)');
+    return { ok: true };
+  });
+}
+
 // ── Saldo per komponen (0 Bahan Baku, 1 Operasional, 2 Insentif) bersambung dari hari ke hari ──
 // Format PPK memisah saldo per komponen walau VA hanya satu rekening. Aturan:
 //  1. Saldo awal tiap periode (ditetapkan akuntan) dibagi menurut pola belanja nyata sejauh ini;
@@ -2105,12 +2285,15 @@ function getDataLPDH(p) {
   // Nomor bukti dibaca persis seperti yang tampil di Sheet (data lama "01-2026" tersimpan sebagai tanggal)
   const txSh = getSheet(SHEETS.TRANSAKSI);
   const tampil = txSh.getRange(1, 4, Math.max(txSh.getLastRow(), 1), 1).getDisplayValues();
+  const relawan = bacaRelawanSemua(dapurId);
   const hari = tx.filter(function(t) { return t.tanggal === tgl; }).map(function(t) {
     const link = String(t.pengajuan_item_id || '');
     const it = items[isFeeLink(link) ? link.substring(BIAYA_ADMIN_PREFIX.length) : link];
     return { id: t.id, tanggal: t.tanggal, no_bukti: String((tampil[t.seq] && tampil[t.seq][0]) || t.no_bukti || ''), jenis: t.jenis, kategori: t.kategori,
       uraian: t.uraian, sumber: t.sumber, riil: t.riil, bukti_url: String(t.bukti_url || ''),
-      pemasok: it ? (isFeeLink(link) ? it.bank : it.penerima_nama) : '', seq: t.seq };
+      pemasok: it ? (isFeeLink(link) ? it.bank : it.penerima_nama) : '', seq: t.seq,
+      rincian: it && !isFeeLink(link) && t.jenis === 'Bahan Baku' ? it.rincian : [], nota_url: it && !isFeeLink(link) ? it.nota_url : '',
+      relawan: isHonorRelawan(t) && relawan[t.id] ? relawan[t.id].rows : null };
   }).sort(function(a, b) { return a.seq - b.seq; });
 
   const ident = readIdentitasLPDH(dapurId) || {};
@@ -2119,6 +2302,7 @@ function getDataLPDH(p) {
     dapur: { id: dapur.id, nama: dapur.nama, kode: dapur.kode }, identitas: ident,
     periode: { id: periode.id, periode_no: periode.periode_no, tanggal_mulai: periode.tanggal_mulai, tanggal_akhir: periode.tanggal_akhir, status: periode.status },
     tanggal: tgl, saldoAwal: saldoAwal, transaksi: hari, komponen: komponenLPDH(dapurId, tgl),
+    harian: (function() { const h = bacaHarian(dapurId, tgl).tepat; return h ? h.data : null; })(),
     topups: topups.filter(function(t) { return t.tanggal === tgl; }).map(function(t) { return { tanggal: t.tanggal, jumlah: t.jumlah, keterangan: t.keterangan }; }),
   } };
 }

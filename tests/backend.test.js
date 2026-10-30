@@ -80,7 +80,7 @@ const ok = (c, m) => { console.log((c ? 'PASS ' : 'FAIL ') + m); if (!c) fails++
     ['U3', 'off', 'xxxxxxx', 'Nonaktif', 'pic', 'D001', 'TIDAK'],
   ]);
   const B = env.__book;
-  ok(call(env, 'GET', { action: 'ping' }).version === 'v6-ba-sec6', 'ping menampilkan versi baru');
+  ok(call(env, 'GET', { action: 'ping' }).version === 'v6-ba-sec7', 'ping menampilkan versi baru');
 
   // 1. login lama (teks biasa) berhasil via POST dan password otomatis di-hash
   let r = call(env, 'POST', { action: 'login', username: 'AKUN1', password: 'RahasiaKu9' });
@@ -152,6 +152,7 @@ const ok = (c, m) => { console.log((c ? 'PASS ' : 'FAIL ') + m); if (!c) fails++
   const items = [{ jenis: 'Bahan Baku', kategori: 'Beras', uraian: 'Beras 50kg', nominal: 600000, penerima_id: 'pn1' }];
   const JK = vm.runInContext('JENIS_KATEGORI', env);
   const jenis = Object.keys(JK)[0]; items[0].jenis = jenis; items[0].kategori = JK[jenis][0];
+  items[0].rincian = [{ nama: 'Beras', kategori: 'Karbohidrat', volume: 50, satuan: 'kg', harga: 12000 }];
   const a = call(env, 'POST', { action: 'createPengajuan', token: tk, tanggal: '2026-10-15', items, request_id: 'rq-abc' });
   ok(a.ok && a.data.nomor, 'createPengajuan pertama berhasil: ' + (a.error || a.data.nomor));
   const n1 = B.Pengajuan.length;
@@ -172,7 +173,7 @@ const ok = (c, m) => { console.log((c ? 'PASS ' : 'FAIL ') + m); if (!c) fails++
   e6.__book.Dapur.push(['D002', 'SPPG Dua', '', 'S2']);
   const tok = u => call(e6, 'POST', { action: 'login', username: u, password: { adm: 'passwd1', yay: 'passwd2', akn: 'passwd3', pic1: 'passwd4', pic2: 'passwd5' }[u] }).data.token;
   const JK2 = vm.runInContext('JENIS_KATEGORI', e6); const j2 = Object.keys(JK2)[0];
-  const it2 = [{ jenis: j2, kategori: JK2[j2][0], uraian: 'Beras', nominal: 100000, penerima_id: 'pn1' }];
+  const it2 = [{ jenis: j2, kategori: JK2[j2][0], uraian: 'Beras', nominal: 100000, penerima_id: 'pn1', rincian: [{ nama: 'Beras', kategori: 'Karbohidrat', volume: 10, satuan: 'kg', harga: 10000 }] }];
   function baru(n) {
     const r = call(e6, 'POST', { action: 'createPengajuan', token: tok('akn'), tanggal: '2026-10-15', items: it2.map(x => Object.assign({}, x, { uraian: 'Beras ' + n })), request_id: 'k' + n });
     const itemId = e6.__book.PengajuanItem[e6.__book.PengajuanItem.length - 1][0];
@@ -355,6 +356,75 @@ const ok = (c, m) => { console.log((c ? 'PASS ' : 'FAIL ') + m); if (!c) fails++
   ok(!r.ok && /sudah dipakai/.test(r.error), 'mengubah nomor ke nomor yang sudah dipakai ditolak');
   r = call(e8, 'POST', { action: 'addTransaksi', token: tk8('adm'), dapur: 'D001', tanggal: '2026-10-14', jenis: 'Operasional', kategori: 'Gas', uraian: 'x', sumber: 'VA', riil: 1, no_bukti: '—', alasan: 'uji' });
   ok(!r.ok && /tidak boleh/.test(r.error), 'input darurat dengan "—" ditolak');
+
+  // ── Tahap 2 ──
+  // rincian per bahan wajib & harus sama dengan nominal
+  const tkAst = tk8('ast');
+  const pa = (items) => call(e8, 'POST', { action: 'createPengajuan', token: tkAst, dapur: 'D001', tanggal: '2026-10-15', items });
+  const bb = (extra) => Object.assign({ jenis: 'Bahan Baku', kategori: 'Semua Kategori', uraian: 'Belanja sayur', nominal: 150000, penerima_id: 'pn1' }, extra);
+  r = pa([bb({})]); ok(!r.ok && /Rincian bahan wajib/.test(r.error), 'Bahan Baku tanpa rincian ditolak');
+  r = pa([bb({ rincian: [{ nama: 'Wortel', kategori: 'Sayuran', volume: 10, satuan: 'kg', harga: 10000 }] })]);
+  ok(!r.ok && /harus sama dengan nominal/.test(r.error), 'jumlah rincian ≠ nominal ditolak');
+  r = pa([bb({ rincian: [{ nama: 'Wortel', kategori: 'Sayur', volume: 10, satuan: 'kg', harga: 15000 }] })]);
+  ok(!r.ok && /kategori bahan/.test(r.error), 'kategori bahan di luar daftar PPK ditolak');
+  r = pa([bb({ nota_url: 'http://x', rincian: [{ nama: 'Wortel', kategori: 'Sayuran', volume: 10, satuan: 'kg', harga: 15000 }] })]);
+  ok(!r.ok && /link nota/.test(r.error), 'link nota bukan https ditolak');
+  r = pa([bb({ nota_url: 'https://drive.google.com/nota1', rincian: [{ nama: 'Wortel', kategori: 'Sayuran', volume: 2.5, satuan: 'kg', harga: 20000 }, { nama: 'Kol', kategori: 'Sayuran', volume: 5, satuan: 'kg', harga: 20000 }] })]);
+  ok(r.ok, 'asisten mengajukan Bahan Baku dengan rincian desimal + nota: ' + (r.error || ''));
+  const itR = B8.PengajuanItem[B8.PengajuanItem.length - 1];
+  ok(JSON.parse(itR[22]).length === 2 && itR[23] === 'https://drive.google.com/nota1', 'rincian & nota tersimpan di baris pengajuan');
+  // realisasi → LPDH membawa rincian & nota
+  call(e8, 'POST', { action: 'decidePengajuan', token: tk8('adm'), pengajuan_id: r.data.id, keputusan: [{ item_id: itR[0], status: 'DISETUJUI' }] });
+  r = call(e8, 'POST', { action: 'realisasiItem', token: tkA, item_id: itR[0], tanggal: '2026-10-15', no_bukti: 'NT-SAYUR', bukti_url: 'https://drive.google.com/tf' });
+  ok(r.ok, 'realisasi item berrincian: ' + (r.error || ''));
+  r = call(e8, 'POST', { action: 'getDataLPDH', token: tk8('adm'), dapur: 'D001', tanggal: '2026-10-15' });
+  const txR = r.data.transaksi.find(t => t.no_bukti === 'NT-SAYUR');
+  ok(txR && txR.rincian.length === 2 && txR.rincian[0].volume === 2.5 && txR.nota_url === 'https://drive.google.com/nota1', 'data LPDH membawa rincian bahan & link nota');
+  // edit item: rincian tetap wajib
+  r = pa([bb({ uraian: 'Belanja buah', rincian: [{ nama: 'Pisang', kategori: 'Buah', volume: 10, satuan: 'sisir', harga: 15000 }] })]);
+  const itE = B8.PengajuanItem[B8.PengajuanItem.length - 1][0];
+  r = call(e8, 'POST', { action: 'updatePengajuanItem', token: tkAst, item_id: itE, jenis: 'Bahan Baku', kategori: 'Semua Kategori', uraian: 'Belanja buah', nominal: 200000, penerima_id: 'pn1',
+    rincian: [{ nama: 'Pisang', kategori: 'Buah', volume: 10, satuan: 'sisir', harga: 20000 }] });
+  ok(r.ok && JSON.parse(B8.PengajuanItem[B8.PengajuanItem.length - 1][22])[0].harga === 20000, 'edit baris memperbarui rincian: ' + (r.error || ''));
+
+  // data harian PIC: simpan, salin ke hari berikut tanpa BAST
+  const harian = { pm: [{ kode: 'KS-02', target: 650, distribusi: 650, diterima: 640, tidak: 10, alasan: 'PM tidak hadir', bnba: 'Ya', bast: 'BAST-01', link: 'https://cloud/bast1' }],
+    produksi: { total: 660, organoleptik: 3, sampel: 3, tidak_terdistribusi: 4, buffer: 0 }, syarat: { kontaminasi: 'Tidak', verifikasi: 'Ya' } };
+  r = call(e8, 'POST', { action: 'saveHarianLPDH', token: tk8('pic'), tanggal: '2026-10-15', data: harian });
+  ok(r.ok, 'PIC menyimpan data harian: ' + (r.error || ''));
+  r = call(e8, 'POST', { action: 'saveHarianLPDH', token: tk8('pic'), tanggal: '2026-10-15', data: Object.assign({}, harian, { pm: [{ kode: 'KS-02', target: -1 }] }) });
+  ok(!r.ok, 'angka negatif ditolak');
+  r = call(e8, 'POST', { action: 'saveHarianLPDH', token: tk8('pic'), tanggal: '2026-10-15', data: Object.assign({}, harian, { pm: [{ kode: 'KS-02', link: 'cloud/x' }] }) });
+  ok(!r.ok && /https/.test(r.error), 'link BAST tanpa https ditolak');
+  ok(!call(e8, 'POST', { action: 'saveHarianLPDH', token: tkAst, dapur: 'D001', tanggal: '2026-10-15', data: harian }).ok, 'asisten tidak bisa mengisi data harian');
+  r = call(e8, 'POST', { action: 'getHarianLPDH', token: tk8('pic'), tanggal: '2026-10-16' });
+  const ks2 = r.data.data.pm.find(x => x.kode === 'KS-02');
+  ok(/disalin dari 2026-10-15/.test(r.data.sumber) && ks2.target === 650 && ks2.diterima === 640 && ks2.bast === '' && ks2.link === '', 'hari berikutnya: angka disalin, nomor & link BAST dikosongkan');
+  r = call(e8, 'POST', { action: 'getHarianLPDH', token: tk8('pic'), tanggal: '2026-10-15' });
+  ok(r.data.sumber === 'tersimpan' && r.data.data.pm.length === 10, 'tanggal yang sudah diisi: data tersimpan (10 kelompok)');
+  call(e8, 'POST', { action: 'saveHarianLPDH', token: tk8('pic'), tanggal: '2026-10-15', data: Object.assign({}, harian, { produksi: { total: 700 } }) });
+  ok(B8.LPDHHarian.length === 2, 'simpan ulang tanggal yang sama tidak menambah baris');
+  r = call(e8, 'POST', { action: 'getDataLPDH', token: tk8('adm'), dapur: 'D001', tanggal: '2026-10-15' });
+  ok(r.data.harian && r.data.harian.produksi.total === 700, 'data LPDH membawa data harian tanggal itu');
+  r = call(e8, 'POST', { action: 'getDataLPDH', token: tk8('adm'), dapur: 'D001', tanggal: '2026-10-16' });
+  ok(r.ok && r.data.harian === null, 'LPDH tanggal tanpa isian harian tidak memakai data hari lain');
+
+  // daftar relawan per transaksi honor
+  B8.Transaksi.push(tx('TH1', '2026-10-16', 'HN-1', 'Operasional', 'Gaji/honor relawan pekerja SPPG', 'Honor relawan 1-10 Okt', 1800000));
+  const rel = [{ nama: 'Ani', tugas: 'Juru masak', hari: 10, upah: 100000 }, { nama: 'Budi', tugas: 'Pengemudi', hari: 10, upah: 80000, metode: 'Tunai' }];
+  r = call(e8, 'POST', { action: 'getRelawanBayar', token: tk8('pic'), transaksi_id: 'TH1' });
+  ok(r.ok && r.data.sumber === 'baru' && r.data.total === 1800000, 'daftar relawan pertama: kosong');
+  r = call(e8, 'POST', { action: 'saveRelawanBayar', token: tk8('pic'), transaksi_id: 'TH1', rows: rel.slice(0, 1) });
+  ok(!r.ok && /≠ nilai transaksi/.test(r.error), 'total daftar ≠ nilai transaksi ditolak');
+  r = call(e8, 'POST', { action: 'saveRelawanBayar', token: tk8('pic'), transaksi_id: 'TH1', rows: rel });
+  ok(r.ok, 'daftar relawan disimpan: ' + (r.error || ''));
+  ok(!call(e8, 'POST', { action: 'saveRelawanBayar', token: tk8('pic'), transaksi_id: 'T5', rows: rel }).ok, 'transaksi bukan honor relawan ditolak');
+  B8.Transaksi.push(tx('TH2', '2026-10-26', 'HN-2', 'Operasional', 'Gaji/honor relawan pekerja SPPG', 'Honor relawan 11-20 Okt', 1800000));
+  r = call(e8, 'POST', { action: 'getRelawanBayar', token: tk8('pic'), transaksi_id: 'TH2' });
+  ok(/disalin/.test(r.data.sumber) && r.data.rows.length === 2 && r.data.rows[1].metode === 'Tunai', 'pembayaran berikutnya: daftar disalin dari yang terakhir');
+  r = call(e8, 'POST', { action: 'getDataLPDH', token: tk8('adm'), dapur: 'D001', tanggal: '2026-10-16' });
+  const th = r.data.transaksi.find(t => t.id === 'TH1');
+  ok(th && th.relawan && th.relawan.length === 2 && th.relawan[0].nama === 'Ani', 'data LPDH membawa daftar relawan transaksi honor');
 
   ok(e8.teksSel('01-2026') === "'01-2026" && e8.teksSel('1/10') === "'1/10" && e8.teksSel('NT-001') === 'NT-001' && e8.teksSel('') === '', 'nomor bukti mirip tanggal/angka disimpan sebagai teks');
 
