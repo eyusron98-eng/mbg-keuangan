@@ -57,7 +57,7 @@ const SHEETS = {
   TRANSAKSI: 'Transaksi', LOG: 'Log',
   SESI: 'Sesi', PENERIMA: 'Penerima',
   PENGAJUAN: 'Pengajuan', PITEM: 'PengajuanItem',
-  PERUBAHAN: 'PerubahanTx', LPDH: 'IdentitasLPDH', LPDH_HARIAN: 'LPDHHarian', RELAWAN: 'RelawanBayar',
+  PERUBAHAN: 'PerubahanTx', LPDH: 'IdentitasLPDH', LPDH_HARIAN: 'LPDHHarian', RELAWAN: 'RelawanBayar', INSENTIF: 'InsentifBayar', LPDH_SALDO: 'LPDHSaldo',
 };
 
 const JENIS_KATEGORI = {
@@ -126,7 +126,7 @@ function handleRequest(e, method) {
     }
     let result;
     switch (action) {
-      case 'ping':              result = { ok: true, time: new Date().toISOString(), version: 'v6-ba-sec7' }; break;
+      case 'ping':              result = { ok: true, time: new Date().toISOString(), version: 'v6-ba-sec8' }; break;
       case 'login':             result = login(params); break;
       case 'getPeriodeList':    result = getPeriodeList(params); break;
       case 'getActivePeriode':  result = getActivePeriode(params); break;
@@ -183,6 +183,9 @@ function handleRequest(e, method) {
       case 'saveHarianLPDH':    result = saveHarianLPDH(params); break;
       case 'getRelawanBayar':   result = getRelawanBayar(params); break;
       case 'saveRelawanBayar':  result = saveRelawanBayar(params); break;
+      case 'saveTopupLPDH':     result = saveTopupLPDH(params); break;
+      case 'saveInsentifLPDH':  result = saveInsentifLPDH(params); break;
+      case 'saveSaldoLPDH':     result = saveSaldoLPDH(params); break;
       case 'getPenandatangan':  result = getPenandatangan(params); break;
       case 'getLogoKop':        result = getLogoKop(params); break;
       case 'saveLogoKop':       result = saveLogoKop(params); break;
@@ -569,6 +572,7 @@ function readVATopups(dapur, periode_id) {
       id: data[i][0], dapur: data[i][1], periode_id: data[i][2],
       tanggal: formatDate(data[i][3]), jumlah: Number(data[i][4]) || 0,
       keterangan: data[i][5] || '', created_at: formatDate(data[i][6]), created_by: data[i][7],
+      no_sp2d: String(data[i][8] || ''), no_kuitansi: String(data[i][9] || ''), bukti_url: String(data[i][10] || ''), _row: i + 1,
     });
   }
   return rows;
@@ -587,8 +591,11 @@ function addVATopup(p) {
   const periode = findPeriodeCoveringDate(p.dapur, p.tanggal);
   if (!periode) return { ok: false, error: 'Tanggal di luar periode aktif' };
   const id = 'VT' + Utilities.formatDate(new Date(), 'GMT+7', 'yyyyMMddHHmmss');
+  const bukti = String(p.bukti_url || '').trim();
+  if (bukti && !/^https:\/\//.test(bukti)) return { ok: false, error: 'Link bukti terima harus diawali https://' };
   getSheet(SHEETS.VA).appendRow([id, p.dapur, periode.id, p.tanggal,
-    Number(p.jumlah) || 0, p.keterangan || '', new Date(), p.user_id || '']);
+    Number(p.jumlah) || 0, p.keterangan || '', new Date(), p.user_id || '',
+    teksSel(p.no_sp2d || ''), teksSel(p.no_kuitansi || ''), bukti]);
   logActivity(p.user_id, 'addVATopup', id);
   return { ok: true, data: { id: id, periode_id: periode.id } };
 }
@@ -2173,6 +2180,76 @@ function saveRelawanBayar(p) {
   });
 }
 
+// ── Kelengkapan LPDH yang berasal dari dokumen luar (diisi sekali di aplikasi, otomatis masuk ke file) ──
+function bisaKelengkapan(me) { return me.role === 'admin' || me.role === 'akuntan'; }
+// Top up VA: nomor SP2D/referensi PPK, nomor kuitansi/bukti terima, link bukti terima
+function saveTopupLPDH(p) {
+  const me = authUser(p);
+  if (!me) return { ok: false, error: SESI_ERR };
+  if (!bisaKelengkapan(me)) return { ok: false, error: 'Hanya akuntan atau admin' };
+  const t = readVATopups(null).find(function(x) { return x.id === p.id; });
+  if (!t) return { ok: false, error: 'Top up tidak ditemukan' };
+  if (me.role === 'akuntan' && t.dapur !== me.dapur) return { ok: false, error: 'Bukan dapur Anda' };
+  const bukti = String(p.bukti_url || '').trim();
+  if (bukti && !/^https:\/\//.test(bukti)) return { ok: false, error: 'Link bukti terima harus diawali https://' };
+  getSheet(SHEETS.VA).getRange(t._row, 9, 1, 3).setValues([[teksSel(p.no_sp2d || ''), teksSel(p.no_kuitansi || ''), bukti]]);
+  logActivity(me.id, 'saveTopupLPDH', t.id);
+  return { ok: true };
+}
+// Pembayaran insentif ke Mitra/Yayasan (transaksi Fasilitas SPPG): pernyataan PPK & kuitansi
+//  InsentifBayar: transaksi_id | dapur_id | data_json | updated_at | updated_by
+function insentifSheet() { return sheetOtomatis(SHEETS.INSENTIF, ['transaksi_id', 'dapur_id', 'data_json', 'updated_at', 'updated_by']); }
+function bacaInsentifSemua(dapurId) {
+  const d = insentifSheet().getDataRange().getValues(), out = {};
+  for (let i = 1; i < d.length; i++) if (d[i][1] === dapurId) out[d[i][0]] = { _row: i + 1, data: bacaJson(d[i][2]) || {} };
+  return out;
+}
+function saveInsentifLPDH(p) {
+  const me = authUser(p);
+  if (!me) return { ok: false, error: SESI_ERR };
+  if (!bisaKelengkapan(me)) return { ok: false, error: 'Hanya akuntan atau admin' };
+  const tx = findTx(p.transaksi_id);
+  if (!tx || tx.jenis !== 'Fasilitas SPPG') return { ok: false, error: 'Transaksi insentif (Fasilitas SPPG) tidak ditemukan' };
+  if (me.role === 'akuntan' && tx.dapur !== me.dapur) return { ok: false, error: 'Bukan dapur Anda' };
+  const nilai = p.nilai_ppk === '' || p.nilai_ppk == null ? '' : Number(p.nilai_ppk);
+  if (nilai !== '' && !(nilai >= 0)) return { ok: false, error: 'Nilai pernyataan PPK tidak valid' };
+  const d = { no_ppk: String(p.no_ppk || '').trim(), nilai_ppk: nilai, no_kuitansi: String(p.no_kuitansi || '').trim(),
+    kuitansi_ttd: p.kuitansi_ttd === 'Ya' ? 'Ya' : p.kuitansi_ttd === 'Tidak' ? 'Tidak' : '', ref_va: String(p.ref_va || '').trim() };
+  return withLock(function() {
+    const sh = insentifSheet(), ada = bacaInsentifSemua(tx.dapur)[tx.id];
+    const row = [tx.id, tx.dapur, JSON.stringify(d), new Date(), me.id];
+    if (ada) sh.getRange(ada._row, 1, 1, row.length).setValues([row]); else sh.appendRow(row);
+    logActivity(me.id, 'saveInsentifLPDH', tx.id);
+    return { ok: true };
+  });
+}
+// Saldo VA menurut mutasi rekening (diketik dari mobile banking/rekening koran) + penjelasan selisih, per dapur per hari
+//  LPDHSaldo: dapur_id | tanggal | saldo_va | penjelasan | updated_at | updated_by
+function saldoSheet() { return sheetOtomatis(SHEETS.LPDH_SALDO, ['dapur_id', 'tanggal', 'saldo_va', 'penjelasan', 'updated_at', 'updated_by']); }
+function bacaSaldoRek(dapurId, tgl) {
+  const d = saldoSheet().getDataRange().getValues();
+  for (let i = 1; i < d.length; i++) if (d[i][0] === dapurId && formatDate(d[i][1]) === tgl)
+    return { _row: i + 1, saldo_va: d[i][2] === '' ? null : Number(d[i][2]), penjelasan: String(d[i][3] || '') };
+  return null;
+}
+function saveSaldoLPDH(p) {
+  const me = authUser(p);
+  if (!me) return { ok: false, error: SESI_ERR };
+  if (!bisaKelengkapan(me)) return { ok: false, error: 'Hanya akuntan atau admin' };
+  const dapurId = lpdhDapur(me, p.dapur);
+  const tgl = String(p.tanggal || '').substring(0, 10);
+  if (!dapurId || !/^\d{4}-\d{2}-\d{2}$/.test(tgl)) return { ok: false, error: 'Pilih dapur & tanggal' };
+  const saldo = Number(p.saldo_va);
+  if (p.saldo_va === '' || p.saldo_va == null || isNaN(saldo)) return { ok: false, error: 'Saldo VA wajib diisi (angka)' };
+  return withLock(function() {
+    const sh = saldoSheet(), ada = bacaSaldoRek(dapurId, tgl);
+    const row = [dapurId, tgl, saldo, String(p.penjelasan || '').trim(), new Date(), me.id];
+    if (ada) sh.getRange(ada._row, 1, 1, row.length).setValues([row]); else sh.appendRow(row);
+    logActivity(me.id, 'saveSaldoLPDH', dapurId + ' ' + tgl);
+    return { ok: true };
+  });
+}
+
 // ── Saldo per komponen (0 Bahan Baku, 1 Operasional, 2 Insentif) bersambung dari hari ke hari ──
 // Format PPK memisah saldo per komponen walau VA hanya satu rekening. Aturan:
 //  1. Saldo awal tiap periode (ditetapkan akuntan) dibagi menurut pola belanja nyata sejauh ini;
@@ -2242,7 +2319,8 @@ function komponenLPDH(dapurId, tgl) {
       const baris = h.tu.map(function(t, i) {
         const b = i === h.tu.length - 1 ? sisaAlok.slice() : bagiRupiah(t.jumlah, alok);
         sisaAlok = sisaAlok.map(function(x, k) { return x - b[k]; });
-        return { tanggal: t.tanggal, jumlah: t.jumlah, keterangan: t.keterangan, bagi: b };
+        return { id: t.id, tanggal: t.tanggal, jumlah: t.jumlah, keterangan: t.keterangan, bagi: b,
+          no_sp2d: t.no_sp2d, no_kuitansi: t.no_kuitansi, bukti_url: t.bukti_url };
       });
       if (d === tgl) {
         // pergeseran dicatat di saldo awal hari itu (jumlah total tidak berubah)
@@ -2286,6 +2364,7 @@ function getDataLPDH(p) {
   const txSh = getSheet(SHEETS.TRANSAKSI);
   const tampil = txSh.getRange(1, 4, Math.max(txSh.getLastRow(), 1), 1).getDisplayValues();
   const relawan = bacaRelawanSemua(dapurId);
+  const insentif = bacaInsentifSemua(dapurId);
   const hari = tx.filter(function(t) { return t.tanggal === tgl; }).map(function(t) {
     const link = String(t.pengajuan_item_id || '');
     const it = items[isFeeLink(link) ? link.substring(BIAYA_ADMIN_PREFIX.length) : link];
@@ -2293,7 +2372,8 @@ function getDataLPDH(p) {
       uraian: t.uraian, sumber: t.sumber, riil: t.riil, bukti_url: String(t.bukti_url || ''),
       pemasok: it ? (isFeeLink(link) ? it.bank : it.penerima_nama) : '', seq: t.seq,
       rincian: it && !isFeeLink(link) && t.jenis === 'Bahan Baku' ? it.rincian : [], nota_url: it && !isFeeLink(link) ? it.nota_url : '',
-      relawan: isHonorRelawan(t) && relawan[t.id] ? relawan[t.id].rows : null };
+      relawan: isHonorRelawan(t) && relawan[t.id] ? relawan[t.id].rows : null,
+      insentif: t.jenis === 'Fasilitas SPPG' ? (insentif[t.id] ? insentif[t.id].data : {}) : null };
   }).sort(function(a, b) { return a.seq - b.seq; });
 
   const ident = readIdentitasLPDH(dapurId) || {};
@@ -2303,7 +2383,9 @@ function getDataLPDH(p) {
     periode: { id: periode.id, periode_no: periode.periode_no, tanggal_mulai: periode.tanggal_mulai, tanggal_akhir: periode.tanggal_akhir, status: periode.status },
     tanggal: tgl, saldoAwal: saldoAwal, transaksi: hari, komponen: komponenLPDH(dapurId, tgl),
     harian: (function() { const h = bacaHarian(dapurId, tgl).tepat; return h ? h.data : null; })(),
-    topups: topups.filter(function(t) { return t.tanggal === tgl; }).map(function(t) { return { tanggal: t.tanggal, jumlah: t.jumlah, keterangan: t.keterangan }; }),
+    topups: topups.filter(function(t) { return t.tanggal === tgl; }).map(function(t) { return { id: t.id, tanggal: t.tanggal, jumlah: t.jumlah, keterangan: t.keterangan,
+      no_sp2d: t.no_sp2d, no_kuitansi: t.no_kuitansi, bukti_url: t.bukti_url }; }),
+    saldoRekening: (function() { const x = bacaSaldoRek(dapurId, tgl); return x ? { saldo_va: x.saldo_va, penjelasan: x.penjelasan } : null; })(),
   } };
 }
 

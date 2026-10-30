@@ -1429,7 +1429,10 @@ try {
     const [f, setF] = useState({
       tanggal: todayISO(),
       jumlah: '',
-      keterangan: ''
+      keterangan: '',
+      no_sp2d: '',
+      no_kuitansi: '',
+      bukti_url: ''
     });
     const [saving, setSaving] = useState(false);
     function set(k, v) {
@@ -1456,7 +1459,10 @@ try {
         dapur: session.user.dapur,
         tanggal: f.tanggal,
         jumlah: f.jumlah,
-        keterangan: f.keterangan
+        keterangan: f.keterangan,
+        no_sp2d: f.no_sp2d,
+        no_kuitansi: f.no_kuitansi,
+        bukti_url: f.bukti_url.trim()
       });
       setSaving(false);
       if (res.ok) {
@@ -1512,7 +1518,40 @@ try {
         set('keterangan', e.target.value);
       },
       style: inputStyle
-    })), React.createElement("div", {
+    })), !isPetty && React.createElement(React.Fragment, null, React.createElement("div", {
+      className: "text-xs mb-2",
+      style: {
+        color: COLORS.muted
+      }
+    }, "Untuk LPDH (boleh dilengkapi nanti di menu LPDH Harian):"), React.createElement("div", {
+      className: "grid grid-cols-2 gap-x-2"
+    }, React.createElement(Field, {
+      label: "No. SP2D / referensi PPK"
+    }, React.createElement("input", {
+      value: f.no_sp2d,
+      onChange: function (e) {
+        set('no_sp2d', e.target.value);
+      },
+      style: inputStyle
+    })), React.createElement(Field, {
+      label: "No. kuitansi / bukti terima"
+    }, React.createElement("input", {
+      value: f.no_kuitansi,
+      onChange: function (e) {
+        set('no_kuitansi', e.target.value);
+      },
+      style: inputStyle
+    }))), React.createElement(Field, {
+      label: "Link bukti terima (Cloud SIPGN)"
+    }, React.createElement("input", {
+      value: f.bukti_url,
+      inputMode: "url",
+      placeholder: "https://\u2026",
+      onChange: function (e) {
+        set('bukti_url', e.target.value);
+      },
+      style: inputStyle
+    }))), React.createElement("div", {
       className: "flex gap-2"
     }, React.createElement(Btn, {
       kind: "ghost",
@@ -3163,14 +3202,37 @@ try {
     }
     const ins = grup.ins;
     if (ins.length) {
+      const ki = ins.map(function (t) {
+        return t.insentif || {};
+      });
+      set(D, 'C19', lpdhGabung(ki.map(function (x) {
+        return x.no_ppk;
+      }), '; '));
+      const adaNilai = ki.every(function (x) {
+        return x.nilai_ppk !== '' && x.nilai_ppk != null;
+      });
+      set(D, 'C20', adaNilai ? ki.reduce(function (s2, x) {
+        return s2 + Number(x.nilai_ppk);
+      }, 0) : null);
       set(D, 'C21', jml(ins));
       set(D, 'C22', tgl);
       set(D, 'C23', lpdhGabung(ins.map(function (t) {
         return t.no_bukti;
       }), '; '));
+      set(D, 'C24', lpdhGabung(ki.map(function (x) {
+        return x.no_kuitansi;
+      }), '; '));
+      set(D, 'C25', ki.every(function (x) {
+        return x.kuitansi_ttd === 'Ya';
+      }) ? 'Ya' : ki.some(function (x) {
+        return x.kuitansi_ttd === 'Tidak';
+      }) ? 'Tidak' : null);
       set(D, 'C26', ins.map(function (t) {
         return t.bukti_url;
       }).filter(Boolean).join(' | '));
+      set(D, 'C27', lpdhGabung(ki.map(function (x) {
+        return x.ref_va;
+      }), '; '));
     }
     const E = S('E_Saldo'),
       kp = data.komponen || {
@@ -3203,11 +3265,22 @@ try {
     tu.forEach(function (t, i) {
       const r = 19 + i;
       set(E, 'C' + r, lpdhTgl(t.tanggal));
-      set(E, 'D' + r, t.keterangan || 'Top up VA');
+      set(E, 'D' + r, t.no_sp2d || t.keterangan || 'Top up VA');
       set(E, 'E' + r, t.bagi[0]);
       set(E, 'F' + r, t.bagi[1]);
       set(E, 'G' + r, t.bagi[2]);
+      set(E, 'I' + r, t.no_kuitansi);
+      set(E, 'J' + r, t.bukti_url);
     });
+    if (data.saldoRekening) {
+      set(E, 'E10', data.saldoRekening.saldo_va);
+      set(E, 'E12', data.saldoRekening.penjelasan);
+    }
+    if (opsi.waktu) {
+      const w = opsi.waktu;
+      set(I, 'B25', new Date(Date.UTC(w.getFullYear(), w.getMonth(), w.getDate())));
+      set(I, 'B26', (w.getHours() * 60 + w.getMinutes()) / 1440);
+    }
     wb.eachSheet(function (ws) {
       ws.eachRow({
         includeEmpty: false
@@ -3281,6 +3354,14 @@ try {
     const [editIdent, setEditIdent] = useState(false);
     const [editHarian, setEditHarian] = useState(false);
     const [editRelawan, setEditRelawan] = useState(null);
+    const [editTopup, setEditTopup] = useState(null);
+    const [editInsentif, setEditInsentif] = useState(null);
+    const [saldoRek, setSaldoRek] = useState({
+      saldo_va: '',
+      penjelasan: ''
+    });
+    const [simpanSaldo, setSimpanSaldo] = useState(false);
+    const bisaLengkapi = role === 'admin' || role === 'akuntan';
     const bisaIsi = role === 'admin' || role === 'akuntan' || role === 'pic';
     const [busy, setBusy] = useState(false);
     const [hasil, setHasil] = useState(null);
@@ -3301,6 +3382,10 @@ try {
         }
         const info = lpdhInfoHari(tanggal);
         setData(r.data);
+        setSaldoRek({
+          saldo_va: r.data.saldoRekening && r.data.saldoRekening.saldo_va != null ? String(r.data.saldoRekening.saldo_va) : '',
+          penjelasan: r.data.saldoRekening && r.data.saldoRekening.penjelasan || ''
+        });
         setOpsi({
           statusHari: info.akhirPekan ? '' : 'HPE',
           hpeKe: String(info.hpeKe),
@@ -3346,6 +3431,25 @@ try {
     const lebih = [];
     if (nBarisBB > LPDH_KAP.bb) lebih.push(LPDH_KAP.bb + ' baris bahan (hari ini ' + nBarisBB + ')');
     if (nBarisRL > LPDH_KAP.rl) lebih.push(LPDH_KAP.rl + ' baris relawan (hari ini ' + nBarisRL + ')');
+    const saldoAkhirApp = data ? Math.round(data.saldoAwal + data.topups.reduce(function (s2, t) {
+      return s2 + t.jumlah;
+    }, 0) - (data.transaksi || []).reduce(function (s2, t) {
+      return s2 + t.riil;
+    }, 0)) : 0;
+    async function simpanSaldoRek() {
+      setSimpanSaldo(true);
+      const r = await api('saveSaldoLPDH', {
+        dapur: dapurId,
+        tanggal: tanggal,
+        saldo_va: saldoRek.saldo_va,
+        penjelasan: saldoRek.penjelasan
+      });
+      setSimpanSaldo(false);
+      if (r.ok) {
+        toast('Saldo rekening disimpan');
+        load();
+      } else toast(r.error, 'error');
+    }
     const bbTanpaRincian = grup.bb.filter(function (t) {
       return !(t.rincian || []).length;
     }).length;
@@ -3362,7 +3466,9 @@ try {
         if (!res.ok) throw new Error('template LPDH tidak ditemukan');
         const wb = new window.ExcelJS.Workbook();
         await wb.xlsx.load(await res.arrayBuffer());
-        const r = isiLPDH(wb, data, opsi);
+        const r = isiLPDH(wb, data, Object.assign({}, opsi, {
+          waktu: new Date()
+        }));
         const blob = new Blob([await wb.xlsx.writeBuffer()], {
           type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
         });
@@ -3557,7 +3663,118 @@ try {
       onClick: function () {
         setEditHarian(true);
       }
-    }, data.harian ? I.edit : I.plusSm, " ", data.harian ? 'Ubah' : 'Isi'))), grup.rl.length > 0 && React.createElement("div", {
+    }, data.harian ? I.edit : I.plusSm, " ", data.harian ? 'Ubah' : 'Isi'))), React.createElement("div", {
+      className: "mt-3 pt-3",
+      style: {
+        borderTop: '1px solid ' + COLORS.line
+      }
+    }, React.createElement("div", {
+      className: "text-sm font-semibold",
+      style: {
+        color: COLORS.ink
+      }
+    }, "Saldo VA menurut rekening (akhir hari)"), React.createElement("div", {
+      className: "text-xs mb-2",
+      style: {
+        color: COLORS.muted
+      }
+    }, "Ketik dari mobile banking / rekening koran \u2014 bukan dari aplikasi, agar cek PPK \"saldo komponen = saldo VA\" benar-benar menguji. Saldo menurut aplikasi: ", React.createElement("b", {
+      className: "num"
+    }, fmt(saldoAkhirApp))), bisaLengkapi ? React.createElement(React.Fragment, null, React.createElement("div", {
+      className: "grid grid-cols-2 gap-2"
+    }, React.createElement(RupiahInput, {
+      value: saldoRek.saldo_va,
+      onChange: function (v) {
+        setSaldoRek(Object.assign({}, saldoRek, {
+          saldo_va: v
+        }));
+      },
+      label: "Saldo VA rekening"
+    }), React.createElement(Btn, {
+      onClick: simpanSaldoRek,
+      disabled: simpanSaldo || saldoRek.saldo_va === ''
+    }, simpanSaldo ? I.spinner : I.check, " Simpan saldo")), saldoRek.saldo_va !== '' && Number(saldoRek.saldo_va) !== saldoAkhirApp && React.createElement("div", {
+      className: "mt-2"
+    }, React.createElement("div", {
+      className: "text-xs mb-1",
+      style: {
+        color: COLORS.danger
+      }
+    }, "Selisih ", fmt(saldoAkhirApp - Number(saldoRek.saldo_va)), " \u2014 wajib dijelaskan (mis. kas kecil di tangan, transfer belum masuk)."), React.createElement("input", {
+      value: saldoRek.penjelasan,
+      onChange: function (e) {
+        setSaldoRek(Object.assign({}, saldoRek, {
+          penjelasan: e.target.value
+        }));
+      },
+      style: inputStyle,
+      placeholder: "Penjelasan selisih",
+      "aria-label": "Penjelasan selisih"
+    }))) : React.createElement("div", {
+      className: "text-sm",
+      style: {
+        color: COLORS.ink
+      }
+    }, data.saldoRekening ? fmt(data.saldoRekening.saldo_va) : 'Belum diisi akuntan')), (data.topups.length > 0 || grup.ins.length > 0) && React.createElement("div", {
+      className: "mt-3 pt-3",
+      style: {
+        borderTop: '1px solid ' + COLORS.line
+      }
+    }, React.createElement("div", {
+      className: "text-sm font-semibold mb-1",
+      style: {
+        color: COLORS.ink
+      }
+    }, "Dokumen top up & insentif"), data.topups.map(function (t) {
+      const lengkap = t.no_sp2d && t.no_kuitansi && t.bukti_url;
+      return React.createElement("div", {
+        key: t.id,
+        className: "flex items-center justify-between gap-2 py-1.5 text-sm"
+      }, React.createElement("div", {
+        className: "min-w-0"
+      }, React.createElement("div", {
+        className: "truncate",
+        style: {
+          color: COLORS.ink
+        }
+      }, "Top up ", fmt(t.jumlah)), React.createElement("div", {
+        className: "text-xs",
+        style: {
+          color: lengkap ? COLORS.green : '#9A6A0B'
+        }
+      }, lengkap ? 'SP2D ' + t.no_sp2d + ' · kuitansi ' + t.no_kuitansi : 'SP2D / kuitansi / link bukti terima belum lengkap')), bisaLengkapi && React.createElement(Btn, {
+        size: "sm",
+        kind: lengkap ? 'ghost' : 'solid',
+        onClick: function () {
+          setEditTopup(t);
+        }
+      }, lengkap ? 'Ubah' : 'Lengkapi'));
+    }), grup.ins.map(function (t) {
+      const k = t.insentif || {};
+      const lengkap = k.no_ppk && k.nilai_ppk !== '' && k.nilai_ppk != null && k.no_kuitansi && k.kuitansi_ttd;
+      return React.createElement("div", {
+        key: t.id,
+        className: "flex items-center justify-between gap-2 py-1.5 text-sm"
+      }, React.createElement("div", {
+        className: "min-w-0"
+      }, React.createElement("div", {
+        className: "truncate",
+        style: {
+          color: COLORS.ink
+        }
+      }, "Insentif ", fmt(t.riil)), React.createElement("div", {
+        className: "text-xs",
+        style: {
+          color: lengkap ? COLORS.green : '#9A6A0B'
+        }
+      }, lengkap ? 'Pernyataan PPK ' + k.no_ppk + ' · ' + fmt(k.nilai_ppk) : 'Pernyataan PPK / kuitansi belum lengkap')), bisaLengkapi && React.createElement(Btn, {
+        size: "sm",
+        kind: lengkap ? 'ghost' : 'solid',
+        onClick: function () {
+          setEditInsentif(t);
+        }
+      }, lengkap ? 'Ubah' : 'Lengkapi'));
+    })), grup.rl.length > 0 && React.createElement("div", {
       className: "mt-3 pt-3",
       style: {
         borderTop: '1px solid ' + COLORS.line
@@ -3635,7 +3852,7 @@ try {
       style: {
         color: COLORS.ink
       }
-    }, !hasil.adaHarian && React.createElement("li", null, React.createElement("b", null, "A_PM"), " & syarat insentif: belum diisi PIC untuk tanggal ini."), React.createElement("li", null, React.createElement("b", null, "D_Insentif"), ": nomor & nilai pernyataan PPK, nomor kuitansi."), React.createElement("li", null, React.createElement("b", null, "E_Saldo"), ": saldo VA menurut mutasi rekening (E10), nomor SP2D & kuitansi top up."), React.createElement("li", null, React.createElement("b", null, "Identitas"), ": tanggal & jam unggah, kolom \"Sudah tanda tangan\".")), React.createElement("div", {
+    }, !hasil.adaHarian && React.createElement("li", null, React.createElement("b", null, "A_PM"), " & syarat insentif: belum diisi PIC untuk tanggal ini."), React.createElement("li", null, React.createElement("b", null, "Identitas"), ": kolom \"Sudah tanda tangan\" (Ya) setelah lembar J_Pengesahan ditandatangani."), React.createElement("li", null, "Tanggal & jam unggah terisi waktu unduh (", new Date().toTimeString().slice(0, 5), ") \u2014 unggah ke SIPGN segera, atau ubah bila diunggah belakangan.")), React.createElement("div", {
       className: "text-xs mt-2",
       style: {
         color: COLORS.muted
@@ -3656,6 +3873,32 @@ try {
         setEditHarian(false);
       },
       onSaved: load
+    }), editTopup && React.createElement(LpdhDokForm, {
+      judul: 'Top up ' + fmt(editTopup.jumlah),
+      aksi: "saveTopupLPDH",
+      kunci: {
+        id: editTopup.id
+      },
+      toast: toast,
+      onClose: function () {
+        setEditTopup(null);
+      },
+      onSaved: load,
+      fields: [['no_sp2d', 'No. SP2D / referensi top up PPK'], ['no_kuitansi', 'No. kuitansi / bukti terima'], ['bukti_url', 'Link bukti terima (https://…)', 'url']],
+      awal: editTopup
+    }), editInsentif && React.createElement(LpdhDokForm, {
+      judul: 'Insentif ' + fmt(editInsentif.riil),
+      aksi: "saveInsentifLPDH",
+      kunci: {
+        transaksi_id: editInsentif.id
+      },
+      toast: toast,
+      onClose: function () {
+        setEditInsentif(null);
+      },
+      onSaved: load,
+      fields: [['no_ppk', 'Nomor pernyataan besaran insentif dari PPK'], ['nilai_ppk', 'Nilai pernyataan PPK', 'rupiah'], ['no_kuitansi', 'Nomor kuitansi'], ['kuitansi_ttd', 'Kuitansi ditandatangani Mitra?', 'yatidak'], ['ref_va', 'Referensi transaksi VA (maker Mitra, approver Kepala SPPG)']],
+      awal: editInsentif.insentif || {}
     }), editRelawan && React.createElement(RelawanForm, {
       tx: editRelawan,
       toast: toast,
@@ -4139,6 +4382,75 @@ try {
       onClick: simpan,
       disabled: saving || selisih !== 0 || !rows.length
     }, saving ? I.spinner : I.check, " Simpan"))));
+  }
+  function LpdhDokForm({
+    judul,
+    aksi,
+    kunci,
+    fields,
+    awal,
+    toast,
+    onClose,
+    onSaved
+  }) {
+    const [f, setF] = useState(fields.reduce(function (o, x) {
+      o[x[0]] = awal[x[0]] == null ? '' : String(awal[x[0]]);
+      return o;
+    }, {}));
+    const [saving, setSaving] = useState(false);
+    async function simpan() {
+      setSaving(true);
+      const r = await apiPost(aksi, Object.assign({}, kunci, f));
+      setSaving(false);
+      if (r.ok) {
+        toast('Tersimpan');
+        onSaved();
+        onClose();
+      } else toast(r.error, 'error');
+    }
+    return React.createElement(Modal, {
+      title: judul,
+      onClose: onClose
+    }, fields.map(function (x) {
+      const set = function (v) {
+        const o = {};
+        o[x[0]] = v;
+        setF(Object.assign({}, f, o));
+      };
+      return React.createElement(Field, {
+        key: x[0],
+        label: x[1]
+      }, x[2] === 'rupiah' ? React.createElement(RupiahInput, {
+        value: f[x[0]],
+        onChange: set,
+        label: x[1]
+      }) : x[2] === 'yatidak' ? React.createElement("select", {
+        value: f[x[0]],
+        onChange: function (e) {
+          set(e.target.value);
+        },
+        style: inputStyle,
+        "aria-label": x[1]
+      }, React.createElement("option", {
+        value: ""
+      }, "\u2014"), React.createElement("option", null, "Ya"), React.createElement("option", null, "Tidak")) : React.createElement("input", {
+        value: f[x[0]],
+        inputMode: x[2] === 'url' ? 'url' : 'text',
+        onChange: function (e) {
+          set(e.target.value);
+        },
+        style: inputStyle,
+        "aria-label": x[1]
+      }));
+    }), React.createElement("div", {
+      className: "flex gap-2"
+    }, React.createElement(Btn, {
+      kind: "ghost",
+      onClick: onClose
+    }, "Batal"), React.createElement(Btn, {
+      onClick: simpan,
+      disabled: saving
+    }, saving ? I.spinner : I.check, " Simpan")));
   }
   function LpdhIdentForm({
     dapurId,

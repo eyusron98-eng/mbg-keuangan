@@ -69,6 +69,7 @@ function makeServer(opts) {
       case 'saveHarianLPDH': log.harian = p.data; return { ok: true };
       case 'getRelawanBayar': return { ok: true, data: { rows: [{ nama: 'Ani', tugas: 'Masak', hari: 10, upah: 100000, metode: 'Transfer' }], sumber: 'disalin dari daftar terakhir', total: 1500000 } };
       case 'saveRelawanBayar': log.relawan = p.rows; return { ok: true };
+      case 'saveSaldoLPDH': log.saldo = p; return { ok: true };
       case 'saveIdentitasLPDH': log.ident = Object.assign({}, p); log.identPost = isPost; return { ok: true };
       case 'getUsers': return { ok: true, data: [{ id: 'u1', nama: 'Siti', username: 'siti', password: 'RAHASIA-PLAINTEXT', role: 'admin', dapur: '', aktif: 'YA' }] };
       default: return { ok: true, data: [] };
@@ -182,6 +183,12 @@ async function isiBahanBaku(page, uraian, volume, harga) {
     await page.waitForSelector('text=Identitas LPDH disimpan');
     assert(srv.log.identPost && srv.log.ident.id_sppg === '32.04.01.0001' && srv.log.ident.pengawas_nik === '3204000000000001', 'identitas tidak terkirim via POST');
     assert(!srv.log.urls.some(u => u.includes('3204000000000001')), 'NIK bocor ke URL GET');
+    await page.fill('[aria-label="Saldo VA rekening"]', '6000000');
+    await page.waitForSelector('text=wajib dijelaskan');   // aplikasi: 7.000.000 − 640.000 = 6.360.000 → selisih
+    await page.fill('[aria-label="Penjelasan selisih"]', 'kas kecil di tangan');
+    await page.click('text=Simpan saldo');
+    await page.waitForSelector('text=Saldo rekening disimpan');
+    assert(srv.log.saldo && Number(srv.log.saldo.saldo_va) === 6000000 && srv.log.saldo.penjelasan === 'kas kecil di tangan', 'saldo rekening tidak terkirim');
     const [dl] = await Promise.all([page.waitForEvent('download'), page.click('text=Unduh LPDH')]);
     const file = await dl.path();
     const ExcelJS = require('exceljs');
@@ -190,6 +197,7 @@ async function isiBahanBaku(page, uraian, volume, harga) {
     assert(v('Identitas', 'B7') === 'SPPG Satu' && v('Identitas', 'B6') === '32.04.01.0001', 'identitas tidak masuk file');
     assert(v('B_BahanBaku', 'D6') === 'Beras 50 kg' && v('B_BahanBaku', 'H6') === 600000 && v('C_Operasional', 'G13') === 40000 && v('C_Operasional', 'D13') === 'Gas', 'transaksi tidak masuk file');
     assert(dl.suggestedFilename().startsWith('32.04.01.0001_SPPG Satu_LPDH_'), 'nama file salah: ' + dl.suggestedFilename());
+    assert(v('Identitas', 'B25') instanceof Date && v('Identitas', 'B26') != null, 'tanggal & jam unggah tidak terisi: ' + v('Identitas', 'B25') + ' / ' + v('Identitas', 'B26'));
     await page.waitForSelector('text=lengkapi di Excel');
     if (process.env.SHOT) await page.screenshot({ path: process.env.SHOT + '/lpdh-2.png', fullPage: true });
   });
