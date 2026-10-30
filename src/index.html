@@ -1341,6 +1341,11 @@ const LPDH_OPS_BARIS = [
   [20, 'Biaya rapat koordinasi', []],
   [21, 'Lain-lain', []],
 ];
+const LPDH_KELOMPOK = [['KS-01', 'PAUD/TK/RA'], ['KS-02', 'SD/MI Kelas 1–3'], ['KS-03', 'SD/MI Kelas 4–6'], ['KS-04', 'SMP/MTs'],
+  ['KS-05', 'SMA/MA/SMK/SLB'], ['KS-06', 'Santri'], ['KS-07', 'Ibu Hamil'], ['KS-08', 'Ibu Menyusui'], ['KS-09', 'Anak Balita (6–59 bulan)'], ['PTK', 'Pendidik & Tenaga Kependidikan']];
+const LPDH_ALASAN = ['Kualitas tidak layak/tidak standar', 'Kemasan rusak/tumpah', 'PM tidak hadir', 'Libur/kegiatan mendadak', 'Keterlambatan pengiriman', 'Kelebihan kirim/dikembalikan', 'Lainnya'];
+const LPDH_SYARAT = [['kontaminasi', 'Terjadi kontaminasi makanan/gagal penyaluran', 'Tidak'], ['fatal', 'Terjadi kejadian fatal (keracunan)', 'Tidak'],
+  ['suspend', 'SPPG dalam status suspend', 'Tidak'], ['verifikasi', 'Hasil verifikasi ketersediaan & mutu layanan memenuhi', 'Ya'], ['sipgn', 'Data penerima manfaat sudah diinput di SIPGN', 'Ya']];
 const LPDH_MAKS_TEKS = 250;   // rumus COUNTIF Excel gagal untuk teks > 255 karakter
 function lpdhTgl(s) { const p = String(s).split('-').map(Number); return new Date(Date.UTC(p[0], p[1] - 1, p[2])); }
 function lpdhInfoHari(tgl) {
@@ -1423,14 +1428,22 @@ function isiLPDH(wb, data, opsi) {
   const grup = { bb: [], op: [], rl: [], ins: [] };
   (data.transaksi || []).forEach(function(t) { grup[lpdhKomponen(t)].push(t); });
   const kelebihan = [];
-  const ambil = function(k) { const a = grup[k].slice(0, LPDH_KAP[k]); grup[k].slice(LPDH_KAP[k]).forEach(function(t) { kelebihan.push({ bagian: k, t: t }); }); return a; };
   const jml = function(a) { return a.reduce(function(s, t) { return s + t.riil; }, 0); };
 
-  const B = S('B_BahanBaku'), bb = ambil('bb');
-  bb.forEach(function(t, i) { const r = 6 + i;
-    set(B, 'C' + r, tgl); set(B, 'D' + r, t.uraian); set(B, 'F' + r, 1); set(B, 'G' + r, 'nota'); set(B, 'H' + r, t.riil);
-    set(B, 'J' + r, t.pemasok); set(B, 'K' + r, t.no_bukti); set(B, 'L' + r, t.bukti_url); });
+  // Bahan baku: satu baris per bahan bila ada rincian (nomor bukti + sufiks /1, /2 sesuai petunjuk PPK); tanpa rincian → satu baris per nota
+  const B = S('B_BahanBaku'), barisBB = [];
+  grup.bb.forEach(function(t) {
+    const rinc = t.rincian || [], link = t.nota_url || t.bukti_url;
+    if (!rinc.length) barisBB.push({ t: t, nama: t.uraian, kategori: null, volume: 1, satuan: 'nota', harga: t.riil, nb: t.no_bukti, link: link });
+    else rinc.forEach(function(x, i) { barisBB.push({ t: t, nama: x.nama, kategori: x.kategori, volume: x.volume, satuan: x.satuan, harga: x.harga,
+      nb: rinc.length > 1 ? t.no_bukti + '/' + (i + 1) : t.no_bukti, link: link }); });
+  });
+  barisBB.slice(0, LPDH_KAP.bb).forEach(function(x, i) { const r = 6 + i;
+    set(B, 'C' + r, tgl); set(B, 'D' + r, x.nama); set(B, 'E' + r, x.kategori); set(B, 'F' + r, x.volume); set(B, 'G' + r, x.satuan); set(B, 'H' + r, x.harga);
+    set(B, 'J' + r, x.t.pemasok); set(B, 'K' + r, x.nb); set(B, 'L' + r, x.link); });
+  barisBB.slice(LPDH_KAP.bb).forEach(function(x) { kelebihan.push({ bagian: 'bb', t: { no_bukti: x.nb, uraian: x.nama, riil: x.volume * x.harga } }); });
 
+  const D = S('D_Insentif');
   // Operasional: digabung per kategori ke 15 baris tetap (label kolom D milik template tidak diubah)
   const C = S('C_Operasional'), perBaris = {};
   grup.op.forEach(function(t) { const b = lpdhBarisOps(t.kategori, t.uraian); (perBaris[b[0]] = perBaris[b[0]] || []).push(t); });
@@ -1445,13 +1458,32 @@ function isiLPDH(wb, data, opsi) {
     opsRingkas.push({ baris: b[1], jumlah: n, total: jml(a) });
   });
 
-  const R = S('C1_Relawan'), rl = ambil('rl');
-  rl.forEach(function(t, i) { const r = 6 + i;
-    set(R, 'C' + r, t.uraian); set(R, 'D' + r, t.kategori); set(R, 'E' + r, tgl); set(R, 'F' + r, 1); set(R, 'G' + r, t.riil);
-    set(R, 'I' + r, t.sumber === 'Petty Cash' ? 'Tunai' : 'Transfer'); set(R, 'J' + r, t.no_bukti); set(R, 'K' + r, t.bukti_url); });
+  // Honor relawan: satu baris per relawan dari daftar penerima (nomor bukti transaksi + /1, /2, …); tanpa daftar → satu baris per transaksi
+  const R = S('C1_Relawan'), barisRL = [];
+  grup.rl.forEach(function(t) {
+    if (t.relawan && t.relawan.length) t.relawan.forEach(function(x, i) { barisRL.push({ nama: x.nama, tugas: x.tugas, hari: x.hari, upah: x.upah, metode: x.metode, nb: t.no_bukti + '/' + (i + 1), link: t.bukti_url }); });
+    else barisRL.push({ nama: t.uraian, tugas: t.kategori, hari: 1, upah: t.riil, metode: t.sumber === 'Petty Cash' ? 'Tunai' : 'Transfer', nb: t.no_bukti, link: t.bukti_url });
+  });
+  barisRL.slice(0, LPDH_KAP.rl).forEach(function(x, i) { const r = 6 + i;
+    set(R, 'C' + r, x.nama); set(R, 'D' + r, x.tugas); set(R, 'E' + r, tgl); set(R, 'F' + r, x.hari); set(R, 'G' + r, x.upah);
+    set(R, 'I' + r, x.metode); set(R, 'J' + r, x.nb); set(R, 'K' + r, x.link); });
+  barisRL.slice(LPDH_KAP.rl).forEach(function(x) { kelebihan.push({ bagian: 'rl', t: { no_bukti: x.nb, uraian: x.nama, riil: x.hari * x.upah } }); });
+
+  // A_PM (porsi POP/Fleet) & syarat insentif dari isian harian PIC
+  const h = data.harian;
+  if (h) {
+    const A = S('A_PM'), pm = {};
+    (h.pm || []).forEach(function(x) { pm[x.kode] = x; });
+    LPDH_KELOMPOK.forEach(function(k, i) { const x = pm[k[0]]; if (!x) return; const r = 6 + i;
+      set(A, 'E' + r, x.target); set(A, 'F' + r, x.distribusi); set(A, 'G' + r, x.diterima); set(A, 'H' + r, x.tidak);
+      set(A, 'I' + r, x.alasan); set(A, 'K' + r, x.bnba); set(A, 'L' + r, x.bast); set(A, 'M' + r, x.link); });
+    const pr = h.produksi || {};
+    set(A, 'C19', pr.total); set(A, 'C21', pr.organoleptik); set(A, 'C22', pr.sampel); set(A, 'C23', pr.tidak_terdistribusi); set(A, 'C24', pr.buffer);
+    LPDH_SYARAT.forEach(function(x, i) { set(D, 'B' + (6 + i), (h.syarat || {})[x[0]]); });
+  }
 
   // Insentif Mitra/Yayasan: satu slot di template → beberapa pembayaran hari itu dijumlah
-  const D = S('D_Insentif'), ins = grup.ins;
+  const ins = grup.ins;
   if (ins.length) {
     set(D, 'C21', jml(ins)); set(D, 'C22', tgl);
     set(D, 'C23', lpdhGabung(ins.map(function(t) { return t.no_bukti; }), '; '));
@@ -1486,7 +1518,7 @@ function isiLPDH(wb, data, opsi) {
     });
   });
   if (wb.calcProperties) wb.calcProperties.fullCalcOnLoad = true; else wb.calcProperties = { fullCalcOnLoad: true };
-  return { kelebihan: kelebihan, opsRingkas: opsRingkas, geser: kp.geser || [],
+  return { kelebihan: kelebihan, opsRingkas: opsRingkas, geser: kp.geser || [], barisBB: barisBB.length, barisRL: barisRL.length, adaHarian: !!h,
     jumlah: { bb: grup.bb.length, op: grup.op.length, rl: grup.rl.length, ins: grup.ins.length, topup: (kp.topups || []).length },
     total: { bb: jml(grup.bb), op: jml(grup.op), rl: jml(grup.rl), ins: jml(grup.ins) },
     namaFile: ((id.id_sppg || data.dapur.kode || data.dapur.id) + '_' + data.dapur.nama + '_LPDH_' + String(data.tanggal).replace(/-/g, '')).replace(/[\\/:*?"<>|]/g, '-') + '.xlsx' };
@@ -1518,6 +1550,9 @@ function LpdhPage({ session, scope, toast }) {
   const [loading, setLoading] = useState(false);
   const [opsi, setOpsi] = useState({ statusHari: '', hpeKe: '', nomor: '' });
   const [editIdent, setEditIdent] = useState(false);
+  const [editHarian, setEditHarian] = useState(false);
+  const [editRelawan, setEditRelawan] = useState(null);
+  const bisaIsi = role === 'admin' || role === 'akuntan' || role === 'pic';
   const [busy, setBusy] = useState(false);
   const [hasil, setHasil] = useState(null);
 
@@ -1545,7 +1580,12 @@ function LpdhPage({ session, scope, toast }) {
   const nb = {};
   ((data && data.transaksi) || []).forEach(function(t) { grup[lpdhKomponen(t)].push(t); const k = String(t.no_bukti || '').trim(); nb[k] = (nb[k] || 0) + 1; });
   const kembar = Object.keys(nb).filter(function(k) { return k === '' || k === '-' || nb[k] > 1; });
-  const lebih = ['bb', 'rl'].filter(function(k) { return grup[k].length > LPDH_KAP[k]; });
+  const nBarisBB = grup.bb.reduce(function(s, t) { return s + Math.max(1, (t.rincian || []).length); }, 0);
+  const nBarisRL = grup.rl.reduce(function(s, t) { return s + Math.max(1, (t.relawan || []).length); }, 0);
+  const lebih = [];
+  if (nBarisBB > LPDH_KAP.bb) lebih.push(LPDH_KAP.bb + ' baris bahan (hari ini ' + nBarisBB + ')');
+  if (nBarisRL > LPDH_KAP.rl) lebih.push(LPDH_KAP.rl + ' baris relawan (hari ini ' + nBarisRL + ')');
+  const bbTanpaRincian = grup.bb.filter(function(t) { return !(t.rincian || []).length; }).length;
   const sum = function(a) { return a.reduce(function(s, t) { return s + t.riil; }, 0); };
 
   async function unduh() {
@@ -1610,7 +1650,26 @@ function LpdhPage({ session, scope, toast }) {
           Ada pergeseran dana antar komponen hari ini: {data.komponen.geser.map(function(g) { return fmt(g.jumlah) + ' dari ' + data.komponen.nama[g.dari] + ' ke ' + data.komponen.nama[g.ke]; }).join('; ')}. Sesuai aturan PPK, pergeseran perlu persetujuan tertulis PPK.</div>}
         <Baris label="Top up VA hari ini" warn={data.topups.length > LPDH_KAP.topup}>{data.topups.length} · {fmt(data.topups.reduce(function(s, t) { return s + t.jumlah; }, 0))}</Baris>
         {lebih.length > 0 && <div className="text-sm rounded-lg p-3 mt-3" style={{ background: '#F8E9E5', color: COLORS.danger }}>
-          Template PPK hanya muat {lebih.map(function(k) { return LPDH_KAP[k] + ' baris ' + LPDH_BAGIAN[k]; }).join(', ')}. Transaksi sisanya tidak masuk file dan akan didaftar setelah unduh.</div>}
+          Template PPK hanya muat {lebih.join(', ')}. Sisanya tidak masuk file dan akan didaftar setelah unduh.</div>}
+        {bbTanpaRincian > 0 && <div className="text-xs mt-2" style={{ color: COLORS.muted }}>{bbTanpaRincian} nota bahan baku belum punya rincian per bahan (pengajuan lama) → ditulis 1 baris per nota.</div>}
+
+        <div className="mt-4 pt-3" style={{ borderTop: '1px solid ' + COLORS.line }}>
+          <div className="flex items-center justify-between gap-2">
+            <div>
+              <div className="text-sm font-semibold" style={{ color: COLORS.ink }}>Porsi POP/Fleet & syarat insentif</div>
+              <div className="text-xs" style={{ color: data.harian ? COLORS.green : '#9A6A0B' }}>{data.harian ? 'Sudah diisi untuk tanggal ini' : 'Belum diisi untuk tanggal ini (diisi PIC)'}</div>
+            </div>
+            {bisaIsi && <Btn size="sm" kind={data.harian ? 'ghost' : 'solid'} onClick={function() { setEditHarian(true); }}>{data.harian ? I.edit : I.plusSm} {data.harian ? 'Ubah' : 'Isi'}</Btn>}
+          </div>
+        </div>
+        {grup.rl.length > 0 && <div className="mt-3 pt-3" style={{ borderTop: '1px solid ' + COLORS.line }}>
+          <div className="text-sm font-semibold mb-1" style={{ color: COLORS.ink }}>Daftar penerima honor relawan</div>
+          {grup.rl.map(function(t) { return <div key={t.id} className="flex items-center justify-between gap-2 py-1.5 text-sm">
+            <div className="min-w-0"><div className="truncate" style={{ color: COLORS.ink }}>{t.uraian}</div>
+              <div className="text-xs" style={{ color: t.relawan ? COLORS.green : '#9A6A0B' }}>{fmt(t.riil)} · {t.relawan ? t.relawan.length + ' relawan' : 'daftar belum diisi'}</div></div>
+            {bisaIsi && <Btn size="sm" kind={t.relawan ? 'ghost' : 'solid'} onClick={function() { setEditRelawan(t); }}>{t.relawan ? 'Ubah' : 'Isi'}</Btn>}
+          </div>; })}
+        </div>}
         {kembar.length > 0 && <div className="text-sm rounded-lg p-3 mt-3" style={{ background: '#FBF3E2', color: '#7A5408' }}>
           Nomor bukti kosong/"-"/kembar: {kembar.map(function(k) { return '"' + (k || 'kosong') + '"'; }).join(', ')}. PPK mewajibkan nomor bukti unik — akan ditandai DUPLIKAT di file.</div>}
         <div className="mt-4"><Btn full onClick={unduh} disabled={busy || !data.transaksi.length && !data.topups.length}>{busy ? I.spinner : I.download} Unduh LPDH (.xlsx)</Btn></div>
@@ -1626,10 +1685,8 @@ function LpdhPage({ session, scope, toast }) {
           {LPDH_BAGIAN[x.bagian]} · {x.t.no_bukti ? x.t.no_bukti + ' · ' : ''}{x.t.uraian} · {fmt(x.t.riil)}</div>; })}
       </div>}
       <ul className="text-sm list-disc pl-5 space-y-1" style={{ color: COLORS.ink }}>
-        <li><b>A_PM</b>: data porsi POP/Fleet, BNBA, nomor & link BAST.</li>
-        <li><b>B_BahanBaku</b> kolom Kategori; rincian per bahan (volume, satuan, harga) menyusul di tahap 2.</li>
-        <li><b>C1_Relawan</b>: nama per relawan (sementara terisi per transaksi honor).</li>
-        <li><b>D_Insentif</b>: syarat insentif (Ya/Tidak), nomor & nilai pernyataan PPK, nomor kuitansi.</li>
+        {!hasil.adaHarian && <li><b>A_PM</b> & syarat insentif: belum diisi PIC untuk tanggal ini.</li>}
+        <li><b>D_Insentif</b>: nomor & nilai pernyataan PPK, nomor kuitansi.</li>
         <li><b>E_Saldo</b>: saldo VA menurut mutasi rekening (E10), nomor SP2D & kuitansi top up.</li>
         <li><b>Identitas</b>: tanggal & jam unggah, kolom "Sudah tanda tangan".</li>
       </ul>
@@ -1637,7 +1694,122 @@ function LpdhPage({ session, scope, toast }) {
     </Card>}
 
     {editIdent && <LpdhIdentForm dapurId={dapurId} initial={id} toast={toast} onClose={function() { setEditIdent(false); }} onSaved={load}/>}
+    {editHarian && <LpdhHarianForm dapurId={dapurId} tanggal={tanggal} toast={toast} onClose={function() { setEditHarian(false); }} onSaved={load}/>}
+    {editRelawan && <RelawanForm tx={editRelawan} toast={toast} onClose={function() { setEditRelawan(null); }} onSaved={load}/>}
   </div>);
+}
+
+// Kotak isian formulir harian (di luar komponen agar fokus tidak hilang saat mengetik)
+function LpdhIsian(p) {
+  return <input value={p.v} inputMode={p.mode === 'url' ? 'url' : p.mode === 'text' ? 'text' : 'numeric'} placeholder={p.ph || '0'} aria-label={p.label} style={inputStyle}
+    onChange={function(e) { p.on(p.mode === 'text' || p.mode === 'url' ? e.target.value : e.target.value.replace(/\D/g, '')); }}/>;
+}
+function LpdhHarianForm({ dapurId, tanggal, toast, onClose, onSaved }) {
+  const [d, setD] = useState(null);
+  const [sumber, setSumber] = useState('');
+  const [saving, setSaving] = useState(false);
+  useEffect(function() {
+    api('getHarianLPDH', { dapur: dapurId, tanggal: tanggal }).then(function(r) {
+      if (!r.ok) { toast(r.error, 'error'); onClose(); return; }
+      const x = r.data.data || {};
+      const pm = {}; (x.pm || []).forEach(function(p) { pm[p.kode] = p; });
+      setD({ pm: LPDH_KELOMPOK.map(function(k) { return Object.assign({ kode: k[0], target: '', distribusi: '', diterima: '', tidak: '', alasan: '', bnba: '', bast: '', link: '' }, pm[k[0]] || {}); }),
+        produksi: Object.assign({ total: '', organoleptik: '', sampel: '', tidak_terdistribusi: '', buffer: '' }, x.produksi || {}),
+        syarat: Object.assign({}, LPDH_SYARAT.reduce(function(o, s2) { o[s2[0]] = s2[2]; return o; }, {}), x.syarat || {}) });
+      setSumber(r.data.sumber);
+    });
+  }, []);
+  if (!d) return <Modal title="Porsi POP/Fleet" onClose={onClose}>{I.spinner}</Modal>;
+  function ubahPm(i, k, v) { setD(Object.assign({}, d, { pm: d.pm.map(function(x, j) { return j === i ? Object.assign({}, x, { [k]: v }) : x; }) })); }
+  const tidakSeimbang = d.pm.filter(function(x) { return (Number(x.distribusi) || 0) !== (Number(x.diterima) || 0) + (Number(x.tidak) || 0); }).map(function(x) { return x.kode; });
+  const tanpaAlasan = d.pm.filter(function(x) { return Number(x.tidak) > 0 && !x.alasan; }).map(function(x) { return x.kode; });
+  async function simpan() {
+    setSaving(true);
+    const r = await apiPost('saveHarianLPDH', { dapur: dapurId, tanggal: tanggal, data: d });
+    setSaving(false);
+    if (r.ok) { toast('Data harian disimpan'); onSaved(); onClose(); } else toast(r.error, 'error');
+  }
+  return <Modal title={'Porsi POP/Fleet · ' + fmtDDMMYYYY(tanggal)} size="lg" onClose={onClose}>
+    {sumber.indexOf('disalin') === 0 && <div className="text-sm rounded-lg p-2.5 mb-3" style={{ background: '#EAF0F8', color: COLORS.blue }}>Angka {sumber}. Periksa & sesuaikan; nomor & link BAST harus diisi baru setiap hari.</div>}
+    <div className="text-xs font-semibold uppercase mb-2" style={{ color: COLORS.muted }}>Produksi (Aplikasi POP)</div>
+    <div className="grid grid-cols-2 sm:grid-cols-3 gap-x-2">
+      {[['total', 'Total diproduksi'], ['organoleptik', 'Uji organoleptik'], ['sampel', 'Sampel makanan'], ['tidak_terdistribusi', 'Tidak terdistribusi'], ['buffer', 'Buffer']].map(function(f) {
+        return <Field key={f[0]} label={f[1]}><LpdhIsian label={f[1]} v={d.produksi[f[0]]} on={function(v) { const o = {}; o[f[0]] = v; setD(Object.assign({}, d, { produksi: Object.assign({}, d.produksi, o) })); }}/></Field>; })}
+    </div>
+    <div className="text-xs font-semibold uppercase mb-2 mt-1" style={{ color: COLORS.muted }}>Per kelompok sasaran (POP & Fleet)</div>
+    {d.pm.map(function(x, i) { return <div key={x.kode} className="rounded-lg p-2.5 mb-2" style={{ border: '1px solid ' + COLORS.line }}>
+      <div className="text-sm font-semibold mb-1.5" style={{ color: COLORS.ink }}>{x.kode} · {LPDH_KELOMPOK[i][1]}</div>
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mb-2">
+        <div><div className="text-[11px]" style={{ color: COLORS.muted }}>Target (SPS)</div><LpdhIsian label={x.kode + ' target'} v={x.target} on={function(v) { ubahPm(i, 'target', v); }}/></div>
+        <div><div className="text-[11px]" style={{ color: COLORS.muted }}>Didistribusikan</div><LpdhIsian label={x.kode + ' distribusi'} v={x.distribusi} on={function(v) { ubahPm(i, 'distribusi', v); }}/></div>
+        <div><div className="text-[11px]" style={{ color: COLORS.muted }}>Diterima (Fleet)</div><LpdhIsian label={x.kode + ' diterima'} v={x.diterima} on={function(v) { ubahPm(i, 'diterima', v); }}/></div>
+        <div><div className="text-[11px]" style={{ color: COLORS.muted }}>Tidak diterima</div><LpdhIsian label={x.kode + ' tidak'} v={x.tidak} on={function(v) { ubahPm(i, 'tidak', v); }}/></div>
+      </div>
+      {Number(x.tidak) > 0 && <select value={x.alasan} onChange={function(e) { ubahPm(i, 'alasan', e.target.value); }} style={Object.assign({}, inputStyle, { marginBottom: 8 })} aria-label={x.kode + ' alasan'}>
+        <option value="">Alasan tidak diterima…</option>{LPDH_ALASAN.map(function(a) { return <option key={a} value={a}>{a}</option>; })}</select>}
+      {(Number(x.diterima) > 0 || x.bast || x.link) && <div className="grid sm:grid-cols-3 gap-2">
+        <select value={x.bnba} onChange={function(e) { ubahPm(i, 'bnba', e.target.value); }} style={inputStyle} aria-label={x.kode + ' BNBA'}><option value="">Data BNBA?</option><option>Ya</option><option>Tidak</option></select>
+        <LpdhIsian mode="text" ph="No. BAST" label={x.kode + ' BAST'} v={x.bast} on={function(v) { ubahPm(i, 'bast', v); }}/>
+        <LpdhIsian mode="url" ph="Link BAST (https://…)" label={x.kode + ' link'} v={x.link} on={function(v) { ubahPm(i, 'link', v.trim()); }}/>
+      </div>}
+    </div>; })}
+    <div className="text-xs font-semibold uppercase mb-2 mt-3" style={{ color: COLORS.muted }}>Syarat insentif</div>
+    {LPDH_SYARAT.map(function(x) { return <div key={x[0]} className="flex items-center justify-between gap-2 mb-2 text-sm">
+      <span style={{ color: COLORS.ink }}>{x[1]}</span>
+      <select value={d.syarat[x[0]] || ''} onChange={function(e) { const o = {}; o[x[0]] = e.target.value; setD(Object.assign({}, d, { syarat: Object.assign({}, d.syarat, o) })); }} style={Object.assign({}, inputStyle, { width: 100 })} aria-label={x[1]}>
+        <option value="">—</option><option>Ya</option><option>Tidak</option></select>
+    </div>; })}
+    {(tidakSeimbang.length > 0 || tanpaAlasan.length > 0) && <div className="text-xs rounded-lg p-2.5 mb-3" style={{ background: '#FBF3E2', color: '#7A5408' }}>
+      {tidakSeimbang.length > 0 && <div>Didistribusikan ≠ diterima + tidak diterima: {tidakSeimbang.join(', ')} (cek PPK akan PERIKSA).</div>}
+      {tanpaAlasan.length > 0 && <div>Porsi tidak diterima tanpa alasan: {tanpaAlasan.join(', ')}.</div>}</div>}
+    <div className="flex gap-2"><Btn kind="ghost" onClick={onClose}>Batal</Btn><Btn onClick={simpan} disabled={saving}>{saving ? I.spinner : I.check} Simpan</Btn></div>
+  </Modal>;
+}
+
+function RelawanForm({ tx, toast, onClose, onSaved }) {
+  const [rows, setRows] = useState(null);
+  const [sumber, setSumber] = useState('');
+  const [saving, setSaving] = useState(false);
+  useEffect(function() {
+    api('getRelawanBayar', { transaksi_id: tx.id }).then(function(r) {
+      if (!r.ok) { toast(r.error, 'error'); onClose(); return; }
+      setRows((r.data.rows || []).map(function(x) { return { nama: x.nama, tugas: x.tugas, hari: String(x.hari), upah: String(x.upah), metode: x.metode || 'Transfer' }; }));
+      setSumber(r.data.sumber);
+    });
+  }, []);
+  if (!rows) return <Modal title="Daftar relawan" onClose={onClose}>{I.spinner}</Modal>;
+  const total = rows.reduce(function(s, x) { return s + (Number(x.hari) || 0) * (Number(x.upah) || 0); }, 0);
+  const selisih = total - tx.riil;
+  function ubah(i, k, v) { setRows(rows.map(function(x, j) { return j === i ? Object.assign({}, x, { [k]: v }) : x; })); }
+  async function simpan() {
+    setSaving(true);
+    const r = await apiPost('saveRelawanBayar', { transaksi_id: tx.id, rows: rows.map(function(x) { return { nama: x.nama, tugas: x.tugas, hari: Number(x.hari), upah: Number(x.upah), metode: x.metode }; }) });
+    setSaving(false);
+    if (r.ok) { toast('Daftar relawan disimpan'); onSaved(); onClose(); } else toast(r.error, 'error');
+  }
+  return <Modal title="Daftar penerima honor relawan" size="lg" onClose={onClose}>
+    <div className="text-sm mb-2" style={{ color: COLORS.ink }}>{tx.uraian} · <b>{fmt(tx.riil)}</b></div>
+    {sumber.indexOf('disalin') === 0 && <div className="text-sm rounded-lg p-2.5 mb-3" style={{ background: '#EAF0F8', color: COLORS.blue }}>Daftar {sumber}. Sesuaikan hari kerja bila berbeda.</div>}
+    {rows.map(function(x, i) { return <div key={i} className="rounded-lg p-2.5 mb-2" style={{ border: '1px solid ' + COLORS.line }}>
+      <div className="grid grid-cols-2 gap-2">
+        <input value={x.nama} onChange={function(e) { ubah(i, 'nama', e.target.value); }} style={inputStyle} placeholder="Nama relawan" aria-label={'Nama ' + (i + 1)}/>
+        <input value={x.tugas} onChange={function(e) { ubah(i, 'tugas', e.target.value); }} style={inputStyle} placeholder="Tugas, cth. Juru masak" aria-label={'Tugas ' + (i + 1)}/>
+        <div className="flex gap-1.5">
+          <input value={x.hari} inputMode="numeric" onChange={function(e) { ubah(i, 'hari', e.target.value.replace(/\D/g, '')); }} style={Object.assign({}, inputStyle, { width: '40%', minWidth: 0 })} placeholder="Hari" aria-label={'Hari ' + (i + 1)}/>
+          <select value={x.metode} onChange={function(e) { ubah(i, 'metode', e.target.value); }} style={Object.assign({}, inputStyle, { minWidth: 0 })} aria-label={'Metode ' + (i + 1)}><option>Transfer</option><option>Tunai</option></select>
+        </div>
+        <RupiahInput value={x.upah} onChange={function(v) { ubah(i, 'upah', v); }}/>
+      </div>
+      <div className="flex justify-between text-xs mt-1.5"><span style={{ color: COLORS.muted }}>Diterima {fmt((Number(x.hari) || 0) * (Number(x.upah) || 0))}</span>
+        <button type="button" onClick={function() { setRows(rows.filter(function(_, j) { return j !== i; })); }} style={{ color: COLORS.danger }}>Hapus</button></div>
+    </div>; })}
+    <Btn size="sm" kind="ghost" onClick={function() { setRows(rows.concat([{ nama: '', tugas: '', hari: '1', upah: '', metode: 'Transfer' }])); }}>{I.plusSm} Tambah relawan</Btn>
+    <div className="sticky-bar">
+      <div className="flex justify-between text-sm"><span style={{ color: COLORS.muted }}>{rows.length} relawan · total</span><b className="num">{fmt(total)}</b></div>
+      {selisih !== 0 && <div className="text-xs mt-1" style={{ color: COLORS.danger }}>Selisih {fmt(selisih)} dari nilai transaksi — harus sama sebelum disimpan.</div>}
+      <div className="flex gap-2 mt-2"><Btn kind="ghost" onClick={onClose}>Batal</Btn><Btn onClick={simpan} disabled={saving || selisih !== 0 || !rows.length}>{saving ? I.spinner : I.check} Simpan</Btn></div>
+    </div>
+  </Modal>;
 }
 
 function LpdhIdentForm({ dapurId, initial, toast, onClose, onSaved }) {
@@ -2805,10 +2977,10 @@ function StatusBadge({ status }) {
 function MiniBadge({ bg, fg, children }) {
   return <span className="inline-block rounded px-1.5 py-0.5 text-[10px] font-semibold whitespace-nowrap" style={{ background: bg, color: fg }}>{children}</span>;
 }
-function RupiahInput({ value, onChange, disabled }) {
+function RupiahInput({ value, onChange, disabled, label }) {
   return <div style={{ position: 'relative' }}>
     <span style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)', color: COLORS.muted, fontSize: 14, pointerEvents: 'none' }}>Rp</span>
-    <input type="text" inputMode="numeric" value={fmtRupiahInput(value)} disabled={disabled}
+    <input type="text" inputMode="numeric" value={fmtRupiahInput(value)} disabled={disabled} aria-label={label}
       onChange={function(e){ onChange(parseRupiahInput(e.target.value)); }} placeholder="0"
       style={Object.assign({}, inputStyle, { paddingLeft: 32, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }, disabled ? { background: COLORS.paper } : {})}/>
   </div>;
@@ -2916,13 +3088,72 @@ function usePenerimaList() {
 }
 
 // ---------- Baris pengajuan (form) ----------
-function emptyRow() { return { key: Math.random().toString(36).slice(2), jenis: '', kategori: '', uraian: '', nominal: '', penerima_id: '', susulan: false }; }
+// Rincian per bahan (LPDH PPK sheet B): nama, kategori bahan, volume, satuan, harga satuan. Nominal = jumlahnya.
+const KATEGORI_BAHAN = ['Karbohidrat', 'Protein hewani', 'Protein nabati', 'Sayuran', 'Buah', 'Susu', 'Minyak dan bumbu', 'Lainnya'];
+const SATUAN_UMUM = ['kg', 'gram', 'liter', 'ml', 'pcs', 'butir', 'ikat', 'pack', 'potong', 'ekor', 'dus', 'karung', 'papan', 'sisir'];
+function angkaDesimal(v) { const n = Number(String(v == null ? '' : v).replace(',', '.')); return isNaN(n) ? 0 : n; }
+function rincianTotal(rinc) { return (rinc || []).reduce(function(s, x) { return s + angkaDesimal(x.volume) * (Number(x.harga) || 0); }, 0); }
+function rincianError(rinc) {
+  if (!rinc || !rinc.length) return 'rincian bahan';
+  for (let i = 0; i < rinc.length; i++) {
+    const x = rinc[i], n = 'rincian ' + (i + 1) + ': ';
+    if (!String(x.nama || '').trim()) return n + 'nama bahan'; if (!x.kategori) return n + 'kategori bahan';
+    if (!(angkaDesimal(x.volume) > 0)) return n + 'volume'; if (!String(x.satuan || '').trim()) return n + 'satuan';
+    if (!(Number(x.harga) > 0)) return n + 'harga satuan';
+  }
+  return null;
+}
+function rincianKirim(rinc) { return (rinc || []).map(function(x) { return { nama: String(x.nama).trim(), kategori: x.kategori, volume: angkaDesimal(x.volume), satuan: String(x.satuan).trim(), harga: Number(x.harga) }; }); }
+function emptyRow() { return { key: Math.random().toString(36).slice(2), jenis: '', kategori: '', uraian: '', nominal: '', penerima_id: '', susulan: false, rincian: [], nota_url: '', notaFile: null }; }
 function rowError(r) {
   if (!r.jenis) return 'jenis'; if (!r.kategori) return 'kategori'; if (!String(r.uraian).trim()) return 'uraian';
+  if (r.jenis === 'Bahan Baku') { const e = rincianError(r.rincian); if (e) return e; }
   if (!(Number(r.nominal) > 0)) return 'nominal'; if (!r.penerima_id) return 'penerima'; return null;
 }
+function RincianBahan({ rows, onChange }) {
+  function ubah(i, k, v) { onChange(rows.map(function(x, j) { return j === i ? Object.assign({}, x, { [k]: v }) : x; })); }
+  return <div className="sm:col-span-2 mb-3">
+    <div className="text-sm font-medium mb-1.5" style={{ color: COLORS.ink }}>Rincian bahan * <span className="text-xs font-normal" style={{ color: COLORS.muted }}>— satu baris per bahan di nota; nominal dihitung otomatis</span></div>
+    <datalist id="satuan-umum">{SATUAN_UMUM.map(function(x) { return <option key={x} value={x}/>; })}</datalist>
+    {rows.map(function(x, i) {
+      const sub = angkaDesimal(x.volume) * (Number(x.harga) || 0);
+      return <div key={i} className="rounded-lg p-2.5 mb-2" style={{ border: '1px solid ' + COLORS.line, background: '#fff' }}>
+        <div className="grid grid-cols-2 gap-2">
+          <input value={x.nama} onChange={function(e) { ubah(i, 'nama', e.target.value); }} style={inputStyle} placeholder="Nama bahan, cth. Beras" aria-label={'Nama bahan ' + (i + 1)}/>
+          <select value={x.kategori} onChange={function(e) { ubah(i, 'kategori', e.target.value); }} style={inputStyle} aria-label={'Kategori bahan ' + (i + 1)}>
+            <option value="">Kategori…</option>
+            {KATEGORI_BAHAN.map(function(k) { return <option key={k} value={k}>{k}</option>; })}
+          </select>
+          <div className="flex gap-1.5">
+            <input value={x.volume} inputMode="decimal" onChange={function(e) { ubah(i, 'volume', e.target.value.replace(/[^0-9.,]/g, '')); }} style={Object.assign({}, inputStyle, { minWidth: 0 })} placeholder="Volume" aria-label={'Volume ' + (i + 1)}/>
+            <input value={x.satuan} list="satuan-umum" onChange={function(e) { ubah(i, 'satuan', e.target.value); }} style={Object.assign({}, inputStyle, { minWidth: 0, width: '45%' })} placeholder="kg" aria-label={'Satuan ' + (i + 1)}/>
+          </div>
+          <RupiahInput value={x.harga} onChange={function(v) { ubah(i, 'harga', v); }} label={'Harga satuan ' + (i + 1)}/>
+        </div>
+        <div className="flex items-center justify-between mt-1.5 text-xs">
+          <span style={{ color: COLORS.muted }}>Harga satuan × volume = <b className="num" style={{ color: COLORS.ink }}>{fmt(sub)}</b></span>
+          {rows.length > 1 && <button type="button" onClick={function() { onChange(rows.filter(function(_, j) { return j !== i; })); }} style={{ color: COLORS.danger }}>Hapus</button>}
+        </div>
+      </div>;
+    })}
+    <Btn size="sm" kind="ghost" onClick={function() { onChange(rows.concat([{ nama: '', kategori: '', volume: '', satuan: '', harga: '' }])); }}>{I.plusSm} Tambah bahan</Btn>
+  </div>;
+}
+async function unggahNota(file, tanggal, uraian) {
+  const ext = (String(file.name).split('.').pop() || 'jpg').toLowerCase();
+  const nama = 'NOTA_' + tanggal + '_' + String(uraian || 'bahan').replace(/[^a-zA-Z0-9_-]+/g, '-').slice(0, 40) + '.' + ext;
+  const up = await apiUpload('uploadBukti', { fileData: await fileToBase64(file), fileName: nama, mimeType: file.type });
+  if (!up.ok) throw new Error('Gagal unggah nota: ' + up.error);
+  return up.data.url;
+}
 function ItemFields({ row, onChange, kategoriMap, penerima, upsertPenerima, toast }) {
-  function set(k, v) { const n = Object.assign({}, row, { [k]: v }); if (k === 'jenis') n.kategori = (kategoriMap[v] || []).length === 1 ? kategoriMap[v][0] : ''; onChange(n); }
+  const isBB = row.jenis === 'Bahan Baku';
+  function set(k, v) {
+    const n = Object.assign({}, row, { [k]: v });
+    if (k === 'jenis') { n.kategori = (kategoriMap[v] || []).length === 1 ? kategoriMap[v][0] : ''; if (v === 'Bahan Baku' && !(n.rincian || []).length) n.rincian = [{ nama: '', kategori: '', volume: '', satuan: '', harga: '' }]; }
+    if (k === 'rincian') n.nominal = String(Math.round(rincianTotal(v)) || '');
+    onChange(n);
+  }
   return <div className="grid sm:grid-cols-2 gap-x-3">
     <Field label="Jenis *">
       <select value={row.jenis} onChange={function(e){ set('jenis', e.target.value); }} style={inputStyle}>
@@ -2936,8 +3167,12 @@ function ItemFields({ row, onChange, kategoriMap, penerima, upsertPenerima, toas
         {(kategoriMap[row.jenis] || []).map(function(k){ return <option key={k} value={k}>{k}</option>; })}
       </select>
     </Field>
-    <Field label="Uraian *"><input value={row.uraian} onChange={function(e){ set('uraian', e.target.value); }} style={inputStyle} placeholder="cth. Beras 50 kg"/></Field>
-    <Field label="Nominal *"><RupiahInput value={row.nominal} onChange={function(v){ set('nominal', v); }}/></Field>
+    <Field label="Uraian *"><input value={row.uraian} onChange={function(e){ set('uraian', e.target.value); }} style={inputStyle} placeholder={isBB ? 'cth. Belanja sayur menu Kamis' : 'cth. Beras 50 kg'}/></Field>
+    <Field label="Nominal *" hint={isBB ? 'Otomatis = jumlah rincian bahan' : null}><RupiahInput value={row.nominal} onChange={function(v){ set('nominal', v); }} disabled={isBB}/></Field>
+    {isBB && <RincianBahan rows={row.rincian && row.rincian.length ? row.rincian : [{ nama: '', kategori: '', volume: '', satuan: '', harga: '' }]} onChange={function(v){ set('rincian', v); }}/>}
+    {isBB && <div className="sm:col-span-2"><Field label="Nota / bukti belanja" hint="Foto nota dari toko. Dipakai sebagai bukti autentik di LPDH; bila kosong, LPDH memakai bukti transfer.">
+      <BuktiPicker bukti={row.notaFile} setBukti={function(f){ set('notaFile', f); }} existing={row.nota_url}/>
+    </Field></div>}
     <div className="sm:col-span-2">
       <Field label="Ditransfer ke *" hint="Bank & nomor rekening terisi otomatis dari daftar penerima">
         <PenerimaSelect list={penerima} value={row.penerima_id} onChange={function(v){ set('penerima_id', v); }} onListChange={upsertPenerima} toast={toast}/>
@@ -2985,10 +3220,17 @@ function PengajuanForm({ kategoriMap, penerima, upsertPenerima, toast, onCreated
     if (lockRef.current) return;
     lockRef.current = true; setSaving(true);
     try {
-      const items = rows.map(function(r){ return { jenis: r.jenis, kategori: r.kategori, uraian: r.uraian.trim(), nominal: Number(r.nominal), penerima_id: r.penerima_id, susulan: !!r.susulan }; });
+      const items = rows.map(function(r){ return { jenis: r.jenis, kategori: r.kategori, uraian: r.uraian.trim(), nominal: Number(r.nominal), penerima_id: r.penerima_id, susulan: !!r.susulan,
+        rincian: r.jenis === 'Bahan Baku' ? rincianKirim(r.rincian) : undefined }; });
       if (!force) {
         const d = await cariDuplikatPengajuan(items, needDapur ? dapur : ownDapur, tanggal);
         if (d) { setConfirm(false); setDup(d); return; }
+      }
+      for (let i = 0; i < rows.length; i++) {
+        if (rows[i].jenis === 'Bahan Baku' && rows[i].notaFile) {
+          try { items[i].nota_url = await unggahNota(rows[i].notaFile, tanggal, rows[i].uraian); }
+          catch (e) { setConfirm(false); toast('Baris ' + (i + 1) + ': ' + e.message, 'error'); return; }
+        }
       }
       const res = await apiPost('createPengajuan', { items: items, dapur: dapur, tanggal: tanggal, request_id: reqId.current });
       setConfirm(false);
@@ -3059,14 +3301,21 @@ function PengajuanForm({ kategoriMap, penerima, upsertPenerima, toast, onCreated
 }
 
 function ItemEditModal({ item, kategoriMap, penerima, upsertPenerima, toast, onClose, onSaved }) {
-  const [row, setRow] = useState({ jenis: item.jenis, kategori: item.kategori, uraian: item.uraian, nominal: String(item.nominal), penerima_id: item.penerima_id, susulan: item.susulan });
+  const [row, setRow] = useState({ jenis: item.jenis, kategori: item.kategori, uraian: item.uraian, nominal: String(item.nominal), penerima_id: item.penerima_id, susulan: item.susulan,
+    rincian: (item.rincian || []).map(function(x) { return { nama: x.nama, kategori: x.kategori, volume: String(x.volume), satuan: x.satuan, harga: String(x.harga) }; }), nota_url: item.nota_url || '', notaFile: null });
   const [saving, setSaving] = useState(false);
   const err = rowError(row);
   const revisi = item.status === 'REVISI';
   async function submit() {
     setSaving(true);
-    const res = await api('updatePengajuanItem', { item_id: item.id, jenis: row.jenis, kategori: row.kategori, uraian: row.uraian.trim(),
-      nominal: row.nominal, penerima_id: row.penerima_id, susulan: row.susulan ? 'true' : 'false' });
+    let nota = row.nota_url;
+    if (row.jenis === 'Bahan Baku' && row.notaFile) {
+      try { nota = await unggahNota(row.notaFile, item.tanggal_pengajuan || todayISO(), row.uraian); }
+      catch (e) { setSaving(false); toast(e.message, 'error'); return; }
+    }
+    const res = await apiPost('updatePengajuanItem', { item_id: item.id, jenis: row.jenis, kategori: row.kategori, uraian: row.uraian.trim(),
+      nominal: row.nominal, penerima_id: row.penerima_id, susulan: row.susulan ? 'true' : 'false',
+      rincian: row.jenis === 'Bahan Baku' ? rincianKirim(row.rincian) : undefined, nota_url: nota });
     setSaving(false);
     if (res.ok) { toast(revisi ? 'Baris diajukan ulang' : 'Baris diperbarui'); onSaved(); onClose(); }
     else toast(res.error || 'Gagal menyimpan', 'error');
@@ -3119,6 +3368,9 @@ function ItemRow({ it, actions, children }) {
           <span style={{ color: COLORS.muted }}>#{it.urut}</span> {it.uraian}
         </div>
         <div className="text-[11px] mt-0.5" style={{ color: COLORS.muted }}>{it.jenis} · {it.kategori}</div>
+        {(it.rincian || []).length > 0 && <div className="text-[11px] mt-1" style={{ color: COLORS.ink }}>
+          {it.rincian.map(function(x, i) { return <span key={i}>{i ? ' · ' : ''}{x.nama} {String(x.volume).replace('.', ',')} {x.satuan} × {fmtNoRp(x.harga)}</span>; })}</div>}
+        {it.nota_url && <a href={it.nota_url} target="_blank" rel="noopener" className="text-[11px] underline" style={{ color: COLORS.blue }}>Lihat nota</a>}
         <div className="text-xs mt-1" style={{ color: COLORS.ink }}>→ <b>{it.penerima_nama}</b> <span style={{ color: COLORS.muted }}>· {it.bank} {it.no_rek}</span></div>
         <div className="flex flex-wrap gap-1 mt-1.5"><StatusBadge status={it.status}/><ItemFlags it={it}/>{it.putaran > 1 && <MiniBadge bg={COLORS.paper} fg={COLORS.muted}>Putaran {it.putaran}</MiniBadge>}</div>
         {pendingSt(it) && it.rek_berubah && <div className="text-[11px] mt-1.5 rounded p-1.5" style={{ background: '#F8E9E5', color: COLORS.danger }}>

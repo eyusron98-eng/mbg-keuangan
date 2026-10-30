@@ -64,6 +64,11 @@ function makeServer(opts) {
         transaksi: [{ id: 'T1', tanggal: p.tanggal, no_bukti: 'NT-1', jenis: 'Bahan Baku', kategori: 'Semua Kategori', uraian: 'Beras 50 kg', sumber: 'VA', riil: 600000, bukti_url: 'https://drive.google.com/x', pemasok: 'Toko A' },
           { id: 'T2', tanggal: p.tanggal, no_bukti: '-', jenis: 'Operasional', kategori: 'Gas', uraian: 'Gas 3 kg', sumber: 'VA', riil: 40000, bukti_url: 'https://drive.google.com/y', pemasok: '' }],
         topups: [], komponen: { awal: [5000000, 1500000, 500000], topups: [], geser: [], nama: ['Bahan Baku', 'Operasional', 'Insentif'] } } };
+      case 'getHarianLPDH': return { ok: true, data: { data: { pm: [{ kode: 'KS-02', target: 650, distribusi: 650, diterima: 640, tidak: 10, alasan: 'PM tidak hadir', bnba: 'Ya', bast: '', link: '' }],
+        produksi: { total: 660 }, syarat: { kontaminasi: 'Tidak' } }, sumber: 'disalin dari 2026-10-29' } };
+      case 'saveHarianLPDH': log.harian = p.data; return { ok: true };
+      case 'getRelawanBayar': return { ok: true, data: { rows: [{ nama: 'Ani', tugas: 'Masak', hari: 10, upah: 100000, metode: 'Transfer' }], sumber: 'disalin dari daftar terakhir', total: 1500000 } };
+      case 'saveRelawanBayar': log.relawan = p.rows; return { ok: true };
       case 'saveIdentitasLPDH': log.ident = Object.assign({}, p); log.identPost = isPost; return { ok: true };
       case 'getUsers': return { ok: true, data: [{ id: 'u1', nama: 'Siti', username: 'siti', password: 'RAHASIA-PLAINTEXT', role: 'admin', dapur: '', aktif: 'YA' }] };
       default: return { ok: true, data: [] };
@@ -113,6 +118,15 @@ async function login(page, user) {
   await page.click('text=Masuk >> nth=-1');
 }
 function assert(c, m) { if (!c) throw new Error(m); }
+// Pengajuan Bahan Baku: uraian + 1 baris rincian bahan (nominal = volume × harga, dihitung aplikasi)
+async function isiBahanBaku(page, uraian, volume, harga) {
+  await page.fill('input[placeholder="cth. Belanja sayur menu Kamis"]', uraian);
+  await page.fill('[aria-label="Nama bahan 1"]', uraian);
+  await page.selectOption('[aria-label="Kategori bahan 1"]', 'Karbohidrat');
+  await page.fill('[aria-label="Volume 1"]', String(volume));
+  await page.fill('[aria-label="Satuan 1"]', 'kg');
+  await page.fill('[aria-label="Harga satuan 1"]', String(harga));
+}
 
 (async () => {
   let all = true;
@@ -180,6 +194,43 @@ function assert(c, m) { if (!c) throw new Error(m); }
     if (process.env.SHOT) await page.screenshot({ path: process.env.SHOT + '/lpdh-2.png', fullPage: true });
   });
 
+  all &= await run('LPDH: PIC mengisi porsi POP/Fleet (disalin) & daftar relawan honor', { role: 'pic',
+    override: (a, m, p) => a === 'getDataLPDH' ? { ok: true, data: { dapur: { id: 'D1', nama: 'SPPG Satu', kode: 'S1' }, identitas: {}, tanggal: p.tanggal, harian: null,
+      periode: { id: 'P2', periode_no: 2, tanggal_mulai: '2026-10-01', tanggal_akhir: '2026-10-31', status: 'AKTIF' }, saldoAwal: 5000000, topups: [],
+      transaksi: [{ id: 'TH', tanggal: p.tanggal, no_bukti: 'HN-1', jenis: 'Operasional', kategori: 'Gaji/honor relawan pekerja SPPG', uraian: 'Honor relawan', sumber: 'VA', riil: 1500000, bukti_url: 'https://x', relawan: null }],
+      komponen: { awal: [3000000, 1500000, 500000], topups: [], geser: [], nama: ['Bahan Baku', 'Operasional', 'Insentif'] } } } : null }, async (page, srv) => {
+    await login(page, 'siti');
+    await page.waitForSelector('header');
+    await page.click('nav:visible >> text=LPDH Harian');
+    await page.waitForSelector('text=Belum diisi untuk tanggal ini');
+    await page.click('button:has-text("Isi") >> nth=0');
+    await page.waitForSelector('text=disalin dari 2026-10-29');
+    assert((await page.inputValue('[aria-label="KS-02 target"]')) === '650', 'angka kemarin tidak tersalin');
+    assert((await page.inputValue('[aria-label="KS-02 BAST"]')) === '', 'nomor BAST kemarin ikut tersalin');
+    if (process.env.SHOT) { await page.waitForTimeout(800); await page.screenshot({ path: process.env.SHOT + '/harian.png' }); }
+    await page.fill('[aria-label="KS-02 diterima"]', '');
+    await page.type('[aria-label="KS-02 diterima"]', '645');   // ketik per huruf: fokus tidak boleh lepas
+    assert((await page.inputValue('[aria-label="KS-02 diterima"]')) === '645', 'ketik per huruf terputus (fokus hilang)');
+    await page.waitForSelector('text=Didistribusikan ≠ diterima');
+    await page.fill('[aria-label="KS-02 tidak"]', '5');
+    await page.fill('[aria-label="KS-02 BAST"]', 'BAST-30');
+    await page.fill('[aria-label="KS-02 link"]', 'https://cloud/bast30');
+    await page.click('.sheet >> text=Simpan');
+    await page.waitForSelector('text=Data harian disimpan');
+    const ks2 = srv.log.harian.pm.find(x => x.kode === 'KS-02');
+    assert(ks2.diterima === '645' && ks2.tidak === '5' && ks2.bast === 'BAST-30' && srv.log.harian.pm.length === 10, 'data harian terkirim salah: ' + JSON.stringify(ks2));
+    // daftar relawan: total harus sama dengan transaksi
+    await page.click('button:has-text("Isi") >> nth=-1');
+    await page.waitForSelector('text=disalin dari daftar terakhir');
+    if (process.env.SHOT) { await page.waitForTimeout(800); await page.screenshot({ path: process.env.SHOT + '/relawan.png' }); }
+    await page.waitForSelector('text=harus sama sebelum disimpan');
+    await page.fill('[aria-label="Hari 1"]', '15');
+    await page.waitForSelector('text=harus sama sebelum disimpan', { state: 'detached' });
+    await page.click('.sheet >> text=Simpan');
+    await page.waitForSelector('text=Daftar relawan disimpan');
+    assert(srv.log.relawan.length === 1 && srv.log.relawan[0].hari === 15, 'daftar relawan terkirim salah');
+  });
+
   all &= await run('Setup: kartu sinkron saldo + form periode', { role: 'akuntan' }, async (page) => {
     await login(page, 'siti');
     await page.waitForSelector('header');
@@ -211,8 +262,7 @@ function assert(c, m) { if (!c) throw new Error(m); }
     await page.click('nav:visible >> text=Pengajuan');
     await page.click('button:has-text("Buat pengajuan")');
     await page.selectOption('.rounded-lg select >> nth=0', 'Bahan Baku');
-    await page.fill('input[placeholder="cth. Beras 50 kg"]', 'Beras 50 kg');
-    await page.fill('input[inputmode=numeric]', '600000');
+    await isiBahanBaku(page, 'Beras 50 kg', 50, 12000);
     await page.selectOption('select >> nth=-1', 'pn1');
     await page.click('text=Kirim untuk persetujuan');
     await page.click('.sheet button:text-is("Kirim")');
@@ -228,6 +278,8 @@ function assert(c, m) { if (!c) throw new Error(m); }
     await page.waitForFunction(() => document.body.innerText.includes('terkirim untuk persetujuan'));
     assert(srv.log.createCount === 1, 'Tetap kirim harus mengirim tepat 1x');
     assert(srv.log.posts.find(p => p.action === 'createPengajuan').params.request_id, 'request_id tidak terkirim');
+    const it0 = srv.log.posts.find(p => p.action === 'createPengajuan').params.items[0];
+    assert(it0.nominal === 600000 && it0.rincian && it0.rincian[0].volume === 50 && it0.rincian[0].harga === 12000 && it0.rincian[0].kategori === 'Karbohidrat', 'rincian bahan tidak terkirim / nominal tidak dihitung: ' + JSON.stringify(it0));
   });
 
   all &= await run('Pengajuan: tanpa duplikat langsung terkirim 1x', { role: 'akuntan', existing: false, tanggal: tgl }, async (page, srv) => {
@@ -309,8 +361,7 @@ function assert(c, m) { if (!c) throw new Error(m); }
     // isi 1 baris lengkap, hapus 3 baris kosong lalu kirim
     for (let i = 0; i < 4; i++) await page.click('text=Hapus baris >> nth=-1');
     await page.selectOption('.rounded-lg select >> nth=0', 'Bahan Baku');
-    await page.fill('input[placeholder="cth. Beras 50 kg"]', 'Gula 10 kg');
-    await page.fill('input[inputmode=numeric]', '150000');
+    await isiBahanBaku(page, 'Gula 10 kg', 10, 15000);
     await page.selectOption('select >> nth=-1', 'pn1');
     await page.click('text=Kirim untuk persetujuan');
     await page.click('.sheet button:text-is("Kirim")');
@@ -321,7 +372,7 @@ function assert(c, m) { if (!c) throw new Error(m); }
     assert(await page.isVisible('text=BA-PA/S1/2026/10/001'), 'setelah kirim harus pindah ke daftar');
     assert(!(await page.isVisible('text=Kirim untuk persetujuan')), 'formulir harus tersembunyi setelah kirim');
     await page.click('button:has-text("Buat pengajuan")');
-    assert((await page.inputValue('input[placeholder="cth. Beras 50 kg"]')) === '', 'formulir harus kosong lagi setelah kirim');
+    assert((await page.inputValue('input[placeholder="cth. Belanja sayur menu Kamis"]')) === '', 'formulir harus kosong lagi setelah kirim');
   });
 
   all &= await run('Berita Acara: asisten punya menu; default hanya hari ini; periode lain dimuat bila dipilih', { role: 'asisten' }, async (page, srv) => {
@@ -488,8 +539,7 @@ function assert(c, m) { if (!c) throw new Error(m); }
     for (let i = 0; i < 4; i++) await page.click('text=Tambah baris');
     await page.selectOption('.rounded-lg select >> nth=0', 'Bahan Baku');
     for (let i = 0; i < 4; i++) await page.click('text=Hapus baris >> nth=-1');
-    await page.fill('input[placeholder="cth. Beras 50 kg"]', 'Gula');
-    await page.fill('input[inputmode=numeric]', '1000');
+    await isiBahanBaku(page, 'Gula', 1, 1000);
     await page.selectOption('select >> nth=-1', 'pn1');
     await page.evaluate(() => window.scrollTo(0, 99999));
     await page.click('text=Kirim untuk persetujuan');
