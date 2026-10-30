@@ -639,14 +639,16 @@ function addTransaksi(p) {
   const periode = findPeriodeCoveringDate(p.dapur, p.tanggal);
   if (!periode) return { ok: false, error: 'Tanggal di luar periode aktif. Setup periode dulu.' };
 
+  const nb = siapkanNoBukti(p.no_bukti, p.dapur, p.tanggal, null);
+  if (nb.error) return { ok: false, error: nb.error };
   const id = 'TX' + Utilities.formatDate(new Date(), 'GMT+7', 'yyyyMMddHHmmss') + '-' + Math.floor(Math.random() * 1000);
   getSheet(SHEETS.TRANSAKSI).appendRow([
-    id, p.dapur, p.tanggal, teksSel(p.no_bukti), p.jenis, p.kategori, p.uraian,
+    id, p.dapur, p.tanggal, teksSel(nb.value), p.jenis, p.kategori, p.uraian,
     p.sumber, Number(p.riil) || 0, Number(p.unriil) || Number(p.riil) || 0,
     p.bukti_url || '', new Date(), p.user_id || '', periode.id, 'DARURAT: ' + String(p.alasan).trim()
   ]);
   logActivity(p.user_id, 'addTransaksi(darurat)', id);
-  return { ok: true, data: { id: id, periode_id: periode.id } };
+  return { ok: true, data: { id: id, periode_id: periode.id, no_bukti: nb.value } };
 }
 
 function updateTransaksi(p) {
@@ -665,6 +667,12 @@ function updateTransaksi(p) {
       if (!per || per.status !== 'AKTIF') return { ok: false, error: 'Periode sudah ditutup, tidak bisa edit' };
 
       const row = i + 1;
+      if (p.no_bukti !== undefined && !nbBerubah(p.no_bukti, row)) delete p.no_bukti;
+      if (p.no_bukti !== undefined) {
+        const nb = siapkanNoBukti(p.no_bukti, dapurId, p.tanggal || formatDate(data[i][2]), p.id);
+        if (nb.error) return { ok: false, error: nb.error };
+        p.no_bukti = nb.value;
+      }
       const linkId = String(data[i][14] || '');
       if (linkId && linkId.indexOf('DARURAT') !== 0) {
         // Transaksi hasil realisasi pengajuan: jenis/kategori/uraian/anggaran/sumber terkunci
@@ -1556,7 +1564,7 @@ function realisasiItem(p) {
   const me = authUser(p);
   if (!me) return { ok: false, error: SESI_ERR };
   if (me.role !== 'akuntan') return { ok: false, error: 'Hanya akuntan' };
-  if (!p.item_id || !p.tanggal || !p.no_bukti || !p.bukti_url) return { ok: false, error: 'Tanggal, no bukti, dan bukti transfer wajib' };
+  if (!p.item_id || !p.tanggal || !p.bukti_url) return { ok: false, error: 'Tanggal dan bukti transfer wajib' };
 
   return withLock(function() {
     const it = findItem(p.item_id);
@@ -1572,6 +1580,9 @@ function realisasiItem(p) {
     const fee = parseFee(p.biaya_admin);
     if (fee < 0) return { ok: false, error: 'Biaya admin harus antara Rp 1 dan ' + rupiah(BIAYA_ADMIN_MAX) };
 
+    const nb = siapkanNoBukti(p.no_bukti, it.dapur, p.tanggal, null);
+    if (nb.error) return { ok: false, error: nb.error };
+    p.no_bukti = nb.value;
     const txId = 'TX' + nowStamp() + '-' + Math.floor(Math.random() * 1000);
     getSheet(SHEETS.TRANSAKSI).appendRow([
       txId, it.dapur, p.tanggal, teksSel(p.no_bukti), it.jenis, it.kategori, it.uraian,
@@ -1583,7 +1594,7 @@ function realisasiItem(p) {
     sh.getRange(it._row, 20).setValue(txId);
     sh.getRange(it._row, 22).setValue(new Date());
     logActivity(me.id, 'realisasiItem', it.id + ' → ' + txId + (fee > 0 ? ' + biaya admin ' + fee : ''));
-    return { ok: true, data: { transaksi_id: txId } };
+    return { ok: true, data: { transaksi_id: txId, no_bukti: p.no_bukti } };
   });
 }
 
@@ -1709,6 +1720,9 @@ function requestTxChange(p) {
       });
       if (!Object.keys(baru).length) return { ok: false, error: 'Tidak ada perubahan' };
       const merged = Object.assign({}, lama, baru);
+      if (baru.no_bukti !== undefined && !nbBerubah(baru.no_bukti, tx._rowIndex)) delete baru.no_bukti;
+      if (!Object.keys(baru).length) return { ok: false, error: 'Tidak ada perubahan' };
+      if (baru.no_bukti !== undefined) { const nb = siapkanNoBukti(baru.no_bukti, tx.dapur, merged.tanggal, tx.id); if (nb.error) return { ok: false, error: nb.error }; }
       if (merged.tanggal < per.tanggal_mulai || merged.tanggal > per.tanggal_akhir) return { ok: false, error: 'Tanggal harus di dalam Periode ' + per.periode_no };
       if (!JENIS_KATEGORI[merged.jenis] || JENIS_KATEGORI[merged.jenis].indexOf(merged.kategori) < 0) return { ok: false, error: 'Jenis/kategori tidak valid' };
       if (!(merged.riil > 0) || !(merged.unriil > 0)) return { ok: false, error: 'Nominal harus lebih dari 0' };
@@ -1770,6 +1784,10 @@ function decideTxChange(p) {
       if (berubah.length) return { ok: false, error: 'Transaksi sudah berubah sejak diajukan (' + berubah.join(', ') + '). Tolak dan minta akuntan mengajukan ulang.' };
       const txSheet = getSheet(SHEETS.TRANSAKSI);
       if (req.aksi === 'EDIT') {
+        if (req.data_baru.no_bukti !== undefined) {
+          const nb = siapkanNoBukti(req.data_baru.no_bukti, tx.dapur, req.data_baru.tanggal || tx.tanggal, tx.id);
+          if (nb.error) return { ok: false, error: nb.error + ' Tolak pengajuan ini dan minta akuntan mengajukan ulang.' };
+        }
         Object.keys(req.data_baru).forEach(function(k) {
           if (TX_COL[k]) txSheet.getRange(tx._rowIndex, TX_COL[k]).setValue(k === 'no_bukti' ? teksSel(req.data_baru[k]) : req.data_baru[k]);
         });
@@ -1862,6 +1880,30 @@ function getSheet(name) {
   return s;
 }
 
+// ── Nomor bukti: wajib unik (syarat LPDH PPK). Kosong → aplikasi membuat nomor unik; "-" ditolak. ──
+function normNB(v) { return String(v == null ? '' : v).toUpperCase().replace(/\s+/g, ''); }
+// Hasil: { value } atau { error }. kecualiId = transaksi yang sedang diubah (boleh memakai nomornya sendiri).
+function siapkanNoBukti(raw, dapurId, tanggal, kecualiId) {
+  const s = String(raw == null ? '' : raw).trim();
+  const sh = getSheet(SHEETS.TRANSAKSI);
+  const ids = sh.getDataRange().getValues().map(function(r) { return r[0]; });
+  const tampil = sh.getRange(1, 4, Math.max(sh.getLastRow(), 1), 1).getDisplayValues();
+  const dipakai = {};
+  for (let i = 1; i < ids.length; i++) if (ids[i] && ids[i] !== kecualiId) dipakai[normNB(tampil[i] && tampil[i][0])] = i;
+  if (s === '') {
+    const d = getDapur().data.find(function(x) { return x.id === dapurId; }) || {};
+    const awalan = (d.kode || dapurId || 'SPPG') + '-' + String(tanggal || todayStr()).substring(0, 10).replace(/-/g, '') + '-';
+    for (let n = 1; n < 10000; n++) { const c = awalan + String(n).padStart(3, '0'); if (!(normNB(c) in dipakai)) return { value: c, otomatis: true }; }
+  }
+  if (/^[\s\-\u2013\u2014_.\/]*$/.test(s)) return { error: 'Nomor bukti tidak boleh "' + s + '". Kosongkan bila nota tidak bernomor — aplikasi membuatkan nomor unik.' };
+  if (normNB(s) in dipakai) return { error: 'Nomor bukti "' + s + '" sudah dipakai transaksi lain. Bila notanya memang berbeda (mis. dari toko lain), tambahkan kode toko, cth. ' + s + '-TOKOA.' };
+  return { value: s };
+}
+
+function nbTampil(rowIndex) { return String(getSheet(SHEETS.TRANSAKSI).getRange(rowIndex, 4, 1, 1).getDisplayValues()[0][0] || ''); }
+// Nomor bukti tidak diubah → data lama (yang mungkin kembar) tetap boleh diedit bagian lainnya
+function nbBerubah(baru, rowIndex) { return normNB(baru) !== normNB(nbTampil(rowIndex)); }
+
 // Nomor bukti seperti "01-2026" atau "1/10" diubah Google Sheets menjadi tanggal/angka → simpan sebagai teks
 function teksSel(v) {
   const s = String(v == null ? '' : v).trim();
@@ -1951,6 +1993,92 @@ function saveIdentitasLPDH(p) {
   });
 }
 
+// ── Saldo per komponen (0 Bahan Baku, 1 Operasional, 2 Insentif) bersambung dari hari ke hari ──
+// Format PPK memisah saldo per komponen walau VA hanya satu rekening. Aturan:
+//  1. Saldo awal tiap periode (ditetapkan akuntan) dibagi menurut pola belanja nyata sejauh ini;
+//     periode pertama memakai rasio pagu PPK (bahan 10.000 : operasional 3.000 : insentif 2.000).
+//  2. Tiap hari: top up dipakai dulu menutup komponen yang kurang untuk pengeluaran hari itu, sisanya
+//     mendekatkan saldo ke pola belanja nyata sampai hari sebelumnya (belum ada riwayat → rasio pagu),
+//     supaya komponen yang paling sering dipakai tidak cepat habis.
+//  3. Bila masih kurang → digeser dari komponen lain (dicatat; perlu persetujuan tertulis PPK). Saldo komponen tidak negatif
+//     selama total saldo cukup.
+const LPDH_RASIO = [10, 3, 2];
+const LPDH_KOMP = ['Bahan Baku', 'Operasional', 'Insentif'];
+function lpdhKompIdx(jenis) { return jenis === 'Bahan Baku' ? 0 : jenis === 'Fasilitas SPPG' ? 2 : 1; }
+function bagiRupiah(total, bobot) {
+  const sum = bobot.reduce(function(a, b) { return a + b; }, 0);
+  if (!(sum > 0)) return [total, 0, 0];
+  const r = bobot.map(function(b) { return Math.floor(total * b / sum); });
+  let iMax = 0; bobot.forEach(function(b, i) { if (b > bobot[iMax]) iMax = i; });
+  r[iMax] += total - r.reduce(function(a, b) { return a + b; }, 0);
+  return r;
+}
+function komponenLPDH(dapurId, tgl) {
+  const per = readAllPeriode(dapurId).filter(function(r) { return r.tanggal_mulai <= tgl; })
+    .sort(function(a, b) { return a.tanggal_mulai < b.tanggal_mulai ? -1 : 1; });
+  const allTx = readAllTransaksi([dapurId]);
+  const allTu = readVATopups(dapurId);
+  let bal = null, hasil = null;
+  const riwayat = [0, 0, 0];   // total belanja per komponen sampai hari sebelumnya (semua periode)
+  per.forEach(function(pr) {
+    const total0 = pr.saldoVA + pr.saldoPettyAwal;
+    // awal periode = alokasi baru: dibagi menurut pola belanja nyata sejauh ini (belum ada riwayat → rasio pagu)
+    bal = bagiRupiah(total0, riwayat[0] + riwayat[1] + riwayat[2] > 0 ? riwayat : LPDH_RASIO);
+    const hari = {};
+    const akhir = pr.tanggal_akhir < tgl ? pr.tanggal_akhir : tgl;
+    allTx.forEach(function(t) { if (t.periode_id === pr.id && t.tanggal <= akhir) { const h = hari[t.tanggal] = hari[t.tanggal] || { sp: [0, 0, 0], tu: [] }; h.sp[lpdhKompIdx(t.jenis)] += t.riil; } });
+    allTu.forEach(function(t) { if (t.periode_id === pr.id && t.tanggal <= akhir) { const h = hari[t.tanggal] = hari[t.tanggal] || { sp: [0, 0, 0], tu: [] }; h.tu.push(t); } });
+    Object.keys(hari).sort().forEach(function(d) {
+      const h = hari[d], sp = h.sp;
+      const awal = bal.slice();
+      const T = h.tu.reduce(function(s, t) { return s + t.jumlah; }, 0);
+      // 2. top up: tutup kekurangan dulu, sisanya sesuai porsi pengeluaran
+      const kurang = sp.map(function(x, k) { return Math.max(0, x - bal[k]); });
+      const sumK = kurang[0] + kurang[1] + kurang[2];
+      let alok = sumK >= T ? bagiRupiah(T, kurang) : kurang.slice();
+      if (sumK < T) {
+        // sisa top up → isi komponen yang paling jauh di bawah porsi targetnya
+        const pola = riwayat[0] + riwayat[1] + riwayat[2] > 0 ? riwayat : LPDH_RASIO;
+        const sumPola = pola[0] + pola[1] + pola[2];
+        const totalSetelah = bal[0] + bal[1] + bal[2] + T - (sp[0] + sp[1] + sp[2]);
+        const posisi = bal.map(function(b, k) { return b + kurang[k] - sp[k]; });   // saldo akhir bila hanya ditutup kekurangannya
+        const celah = posisi.map(function(x, k) { return Math.max(0, totalSetelah * pola[k] / sumPola - x); });
+        const sisa = bagiRupiah(T - sumK, celah[0] + celah[1] + celah[2] > 0 ? celah : pola);
+        alok = alok.map(function(a, k) { return a + sisa[k]; });
+      }
+      if (!(T > 0)) alok = [0, 0, 0];
+      const setelahTU = bal.map(function(b, k) { return b + alok[k]; });
+      // 3. pergeseran bila masih kurang (urutan sumber: komponen lain yang paling longgar)
+      const geser = [];
+      for (let k = 0; k < 3; k++) {
+        let perlu = sp[k] - setelahTU[k];
+        [0, 1, 2].filter(function(j) { return j !== k; }).sort(function(a, b) { return (setelahTU[b] - sp[b]) - (setelahTU[a] - sp[a]); }).forEach(function(j) {
+          const luang = setelahTU[j] - sp[j];
+          if (perlu > 0 && luang > 0) { const x = Math.min(perlu, luang); setelahTU[j] -= x; setelahTU[k] += x; perlu -= x; geser.push({ dari: j, ke: k, jumlah: x }); }
+        });
+      }
+      // bagi tiap baris top up sesuai alokasi total
+      let sisaAlok = alok.slice();
+      const baris = h.tu.map(function(t, i) {
+        const b = i === h.tu.length - 1 ? sisaAlok.slice() : bagiRupiah(t.jumlah, alok);
+        sisaAlok = sisaAlok.map(function(x, k) { return x - b[k]; });
+        return { tanggal: t.tanggal, jumlah: t.jumlah, keterangan: t.keterangan, bagi: b };
+      });
+      if (d === tgl) {
+        // pergeseran dicatat di saldo awal hari itu (jumlah total tidak berubah)
+        const awalGeser = awal.slice();
+        geser.forEach(function(g) { awalGeser[g.dari] -= g.jumlah; awalGeser[g.ke] += g.jumlah; });
+        hasil = { awal: awalGeser, awalSebelumGeser: awal, topups: baris, geser: geser };
+      }
+      bal = setelahTU.map(function(b, k) { return b - sp[k]; });
+      sp.forEach(function(x, k) { riwayat[k] += x; });
+    });
+  });
+  if (!hasil) hasil = { awal: bal || [0, 0, 0], awalSebelumGeser: bal || [0, 0, 0], topups: [], geser: [] };
+  hasil.nama = LPDH_KOMP;
+  return hasil;
+}
+
 // Data satu hari untuk LPDH: transaksi bertanggal hari itu, saldo awal hari itu, dan top up hari itu.
 // Uang yang dihitung = riil (uang yang benar-benar keluar), karena LPDH dicocokkan dengan mutasi rekening.
 function getDataLPDH(p) {
@@ -1990,7 +2118,7 @@ function getDataLPDH(p) {
   return { ok: true, data: {
     dapur: { id: dapur.id, nama: dapur.nama, kode: dapur.kode }, identitas: ident,
     periode: { id: periode.id, periode_no: periode.periode_no, tanggal_mulai: periode.tanggal_mulai, tanggal_akhir: periode.tanggal_akhir, status: periode.status },
-    tanggal: tgl, saldoAwal: saldoAwal, transaksi: hari,
+    tanggal: tgl, saldoAwal: saldoAwal, transaksi: hari, komponen: komponenLPDH(dapurId, tgl),
     topups: topups.filter(function(t) { return t.tanggal === tgl; }).map(function(t) { return { tanggal: t.tanggal, jumlah: t.jumlah, keterangan: t.keterangan }; }),
   } };
 }

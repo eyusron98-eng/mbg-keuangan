@@ -320,6 +320,42 @@ const ok = (c, m) => { console.log((c ? 'PASS ' : 'FAIL ') + m); if (!c) fails++
   ok(!call(e8, 'POST', Object.assign({ action: 'saveIdentitasLPDH', token: tk8('yay') }, idt)).ok, 'yayasan hanya bisa melihat, tidak mengubah');
   ok(lp('adm').data.identitas.yayasan === 'Yayasan Y', 'data LPDH membawa identitas');
   // nomor bukti tipe tanggal disimpan sebagai teks
+  // saldo per komponen bersambung
+  r = lp('adm');
+  const kp = r.data.komponen;
+  ok(kp.awal.reduce((a, b) => a + b) === r.data.saldoAwal, 'saldo awal 3 komponen = saldo awal total (' + kp.awal.join('/') + ')');
+  ok(kp.awal.every(x => x >= 0), 'tidak ada komponen negatif');
+  ok(kp.topups.length === 1 && kp.topups[0].bagi.reduce((a, b) => a + b) === 700000, 'top up hari itu dibagi ke komponen, jumlah tetap');
+  // hari dengan belanja Operasional melebihi jatahnya dan tanpa top up → digeser, dicatat
+  B8.Transaksi.push(tx('T6', '2026-10-12', 'NB-6', 'Operasional', 'Sewa Kendaraan', 'Sewa', 5500000));
+  r = call(e8, 'POST', { action: 'getDataLPDH', token: tk8('adm'), dapur: 'D001', tanggal: '2026-10-12' });
+  const k2 = r.data.komponen;
+  ok(k2.geser.length > 0 && k2.geser.every(g => g.ke === 1), 'kekurangan Operasional ditutup pergeseran dari komponen lain (' + JSON.stringify(k2.geser) + ')');
+  ok(k2.awal[1] >= 5500000 && k2.awal.every(x => x >= 0) && k2.awal.reduce((a, b) => a + b) === r.data.saldoAwal, 'setelah pergeseran: Operasional cukup, tidak ada yang negatif, total tetap');
+  r = call(e8, 'POST', { action: 'getDataLPDH', token: tk8('adm'), dapur: 'D001', tanggal: '2026-10-13' });
+  ok(r.data.komponen.awal[1] === 0 && r.data.komponen.awal.reduce((a, b) => a + b) === r.data.saldoAwal, 'hari berikutnya melanjutkan saldo komponen kemarin (bersambung)');
+
+  // nomor bukti: "-" ditolak, kembar ditolak, kosong → otomatis unik
+  const tkA = tk8('akn');
+  const itemBaru = (id) => { B8.PengajuanItem.push([id, 'PA1', 'D001', 'P1', 2, 'Bahan Baku', 'Semua Kategori', 'Telur', 100000, 'pn1', 'Toko A', 'BCA', '123', 'TIDAK', 'DISETUJUI']); };
+  const real = (id, nb) => call(e8, 'POST', { action: 'realisasiItem', token: tkA, item_id: id, tanggal: '2026-10-14', no_bukti: nb, bukti_url: 'https://drive.google.com/z' });
+  itemBaru('IT2'); itemBaru('IT3'); itemBaru('IT4'); itemBaru('IT5'); itemBaru('IT6');
+  r = real('IT2', '-'); ok(!r.ok && /tidak boleh/.test(r.error), 'nomor bukti "-" ditolak');
+  r = real('IT2', '01-2026'); ok(!r.ok && /sudah dipakai/.test(r.error), 'nomor bukti yang sudah dipakai ditolak (termasuk data lama)');
+  r = real('IT2', ' nb-5 '); ok(!r.ok && /sudah dipakai/.test(r.error), 'pembanding tidak peka huruf besar/kecil & spasi');
+  r = real('IT2', ''); ok(r.ok && r.data.no_bukti === 'S1-20261014-001', 'kosong → nomor otomatis: ' + (r.data && r.data.no_bukti || r.error));
+  r = real('IT3', ''); ok(r.ok && r.data.no_bukti === 'S1-20261014-002', 'nomor otomatis berikutnya berurutan: ' + (r.data && r.data.no_bukti));
+  r = real('IT4', 'NT-77'); ok(r.ok && r.data.no_bukti === 'NT-77', 'nomor unik diterima apa adanya');
+  r = real('IT5', '01-2026-TOKOB'); ok(r.ok, 'nomor kembar + kode toko diterima');
+  // edit transaksi lama yang nomornya kembar: bagian lain tetap bisa diedit
+  B8.Transaksi.push(tx('T7', '2026-10-14', '01-2026', 'Operasional', 'Gas', 'Gas lama', 1000));
+  r = call(e8, 'POST', { action: 'updateTransaksi', token: tkA, id: 'T7', no_bukti: '01-2026', tanggal: '2026-10-14', riil: 2000 });
+  ok(r.ok, 'transaksi lama dengan nomor kembar tetap bisa diedit selama nomornya tidak diubah: ' + (r.error || ''));
+  r = call(e8, 'POST', { action: 'updateTransaksi', token: tkA, id: 'T7', no_bukti: 'NT-77' });
+  ok(!r.ok && /sudah dipakai/.test(r.error), 'mengubah nomor ke nomor yang sudah dipakai ditolak');
+  r = call(e8, 'POST', { action: 'addTransaksi', token: tk8('adm'), dapur: 'D001', tanggal: '2026-10-14', jenis: 'Operasional', kategori: 'Gas', uraian: 'x', sumber: 'VA', riil: 1, no_bukti: '—', alasan: 'uji' });
+  ok(!r.ok && /tidak boleh/.test(r.error), 'input darurat dengan "—" ditolak');
+
   ok(e8.teksSel('01-2026') === "'01-2026" && e8.teksSel('1/10') === "'1/10" && e8.teksSel('NT-001') === 'NT-001' && e8.teksSel('') === '', 'nomor bukti mirip tanggal/angka disimpan sebagai teks');
 
   console.log(fails ? '\n' + fails + ' GAGAL' : '\nSEMUA LULUS');

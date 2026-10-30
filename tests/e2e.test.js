@@ -63,7 +63,7 @@ function makeServer(opts) {
         periode: { id: 'P2', periode_no: 2, tanggal_mulai: '2026-10-01', tanggal_akhir: '2026-10-31', status: 'AKTIF' }, saldoAwal: 7000000,
         transaksi: [{ id: 'T1', tanggal: p.tanggal, no_bukti: 'NT-1', jenis: 'Bahan Baku', kategori: 'Semua Kategori', uraian: 'Beras 50 kg', sumber: 'VA', riil: 600000, bukti_url: 'https://drive.google.com/x', pemasok: 'Toko A' },
           { id: 'T2', tanggal: p.tanggal, no_bukti: '-', jenis: 'Operasional', kategori: 'Gas', uraian: 'Gas 3 kg', sumber: 'VA', riil: 40000, bukti_url: 'https://drive.google.com/y', pemasok: '' }],
-        topups: [] } };
+        topups: [], komponen: { awal: [5000000, 1500000, 500000], topups: [], geser: [], nama: ['Bahan Baku', 'Operasional', 'Insentif'] } } };
       case 'saveIdentitasLPDH': log.ident = Object.assign({}, p); log.identPost = isPost; return { ok: true };
       case 'getUsers': return { ok: true, data: [{ id: 'u1', nama: 'Siti', username: 'siti', password: 'RAHASIA-PLAINTEXT', role: 'admin', dapur: '', aktif: 'YA' }] };
       default: return { ok: true, data: [] };
@@ -174,7 +174,7 @@ function assert(c, m) { if (!c) throw new Error(m); }
     const wb = new ExcelJS.Workbook(); await wb.xlsx.readFile(file);
     const v = (s, a) => wb.getWorksheet(s).getCell(a).value;
     assert(v('Identitas', 'B7') === 'SPPG Satu' && v('Identitas', 'B6') === '32.04.01.0001', 'identitas tidak masuk file');
-    assert(v('B_BahanBaku', 'D6') === 'Beras 50 kg' && v('B_BahanBaku', 'H6') === 600000 && v('C_Operasional', 'D7') === 'Gas 3 kg', 'transaksi tidak masuk file');
+    assert(v('B_BahanBaku', 'D6') === 'Beras 50 kg' && v('B_BahanBaku', 'H6') === 600000 && v('C_Operasional', 'G13') === 40000 && v('C_Operasional', 'D13') === 'Gas', 'transaksi tidak masuk file');
     assert(dl.suggestedFilename().startsWith('32.04.01.0001_SPPG Satu_LPDH_'), 'nama file salah: ' + dl.suggestedFilename());
     await page.waitForSelector('text=lengkapi di Excel');
     if (process.env.SHOT) await page.screenshot({ path: process.env.SHOT + '/lpdh-2.png', fullPage: true });

@@ -2883,12 +2883,12 @@ try {
   }
   const LPDH_KAP = {
     bb: 40,
-    op: 15,
     rl: 60,
-    ins: 1,
     topup: 5
   };
   const LPDH_BULAN_ROMAWI = ['I', 'II', 'III', 'IV', 'V', 'VI', 'VII', 'VIII', 'IX', 'X', 'XI', 'XII'];
+  const LPDH_OPS_BARIS = [[7, 'Insentif penanggung jawab satuan pendidikan', ['Insentif Guru/PIC Sekolah']], [8, 'Insentif kader posyandu', ['Insentif Kader Posyandu']], [9, 'BPJS Ketenagakerjaan', ['Asuransi kecelakaan kerja (BPJS) relawan']], [10, 'Listrik', ['Listrik']], [11, 'Air PDAM', ['Air Bersih (Sumur)']], [12, 'Air minum/galon', ['Air Galon Masak', 'Air Minum']], [13, 'Gas', ['Gas']], [14, 'Sewa kendaraan', ['Sewa Kendaraan']], [15, 'BBM', ['BBM Operasional Kendaraan']], [16, 'Pulsa dan internet', ['Pulsa', 'Internet/Telepon']], [17, 'ATK', ['ATK']], [18, 'Alat kebersihan', ['Alat Kebersihan']], [19, 'APD (masker, sarung tangan, penutup kepala)', ['APD']], [20, 'Biaya rapat koordinasi', []], [21, 'Lain-lain', []]];
+  const LPDH_MAKS_TEKS = 250;
   function lpdhTgl(s) {
     const p = String(s).split('-').map(Number);
     return new Date(Date.UTC(p[0], p[1] - 1, p[2]));
@@ -2907,32 +2907,34 @@ try {
     const p = String(tgl).split('-');
     return p[2].padStart(3, '0') + '/LPDH/' + (kode || 'SPPG') + '/' + LPDH_BULAN_ROMAWI[Number(p[1]) - 1] + '/' + p[0];
   }
-  function lpdhPisah(total, bobot) {
-    const sum = bobot.reduce(function (a, b) {
-      return a + b;
-    }, 0);
-    if (!(sum > 0)) return [total, 0, 0];
-    const r = bobot.map(function (b) {
-      return Math.floor(total * b / sum);
-    });
-    let iMax = 0;
-    bobot.forEach(function (b, i) {
-      if (b > bobot[iMax]) iMax = i;
-    });
-    r[iMax] += total - r.reduce(function (a, b) {
-      return a + b;
-    }, 0);
-    return r;
-  }
   function lpdhKomponen(t) {
     if (t.jenis === 'Bahan Baku') return 'bb';
     if (t.jenis === 'Fasilitas SPPG') return 'ins';
     if (/^gaji\/honor relawan/i.test(String(t.kategori || ''))) return 'rl';
     return 'op';
   }
+  function lpdhBarisOps(kategori) {
+    for (let i = 0; i < LPDH_OPS_BARIS.length; i++) if (LPDH_OPS_BARIS[i][2].indexOf(kategori) >= 0) return LPDH_OPS_BARIS[i];
+    return LPDH_OPS_BARIS[LPDH_OPS_BARIS.length - 1];
+  }
+  function lpdhGabung(arr, sep) {
+    const u = arr.filter(function (x, i) {
+      return x && arr.indexOf(x) === i;
+    });
+    let out = '';
+    for (let i = 0; i < u.length; i++) {
+      const cand = out ? out + sep + u[i] : u[i];
+      if (cand.length > LPDH_MAKS_TEKS - 16) return out + ' (+' + (u.length - i) + ' lainnya)';
+      out = cand;
+    }
+    return out;
+  }
   function lpdhWarna(cell) {
     const f = cell.fill;
     return f && f.fgColor && f.fgColor.argb ? String(f.fgColor.argb).slice(-6).toUpperCase() : '';
+  }
+  function lpdhRp(n) {
+    return 'Rp ' + new Intl.NumberFormat('id-ID').format(Math.round(n || 0));
   }
   function isiLPDH(wb, data, opsi) {
     opsi = opsi || {};
@@ -2957,6 +2959,7 @@ try {
       ws.getCell(addr).value = v === '' || v === undefined ? null : v;
     };
     const info = lpdhInfoHari(data.tanggal);
+    const tgl = lpdhTgl(data.tanggal);
     const I = S('Identitas');
     set(I, 'B5', opsi.nomor || lpdhNomorDefault(data.tanggal, data.dapur.kode));
     set(I, 'B6', id.id_sppg);
@@ -2968,7 +2971,7 @@ try {
     set(I, 'B12', id.yayasan);
     set(I, 'B13', id.no_va);
     set(I, 'B14', id.bank);
-    set(I, 'B15', lpdhTgl(data.tanggal));
+    set(I, 'B15', tgl);
     set(I, 'B17', info.mingguKe);
     set(I, 'B18', opsi.statusHari || (info.akhirPekan ? '' : 'HPE'));
     set(I, 'B19', opsi.hpeKe !== undefined && opsi.hpeKe !== '' ? Number(opsi.hpeKe) : info.hpeKe);
@@ -2998,7 +3001,11 @@ try {
       });
       return a;
     };
-    const tgl = lpdhTgl(data.tanggal);
+    const jml = function (a) {
+      return a.reduce(function (s, t) {
+        return s + t.riil;
+      }, 0);
+    };
     const B = S('B_BahanBaku'),
       bb = ambil('bb');
     bb.forEach(function (t, i) {
@@ -3013,17 +3020,35 @@ try {
       set(B, 'L' + r, t.bukti_url);
     });
     const C = S('C_Operasional'),
-      op = ambil('op');
-    op.forEach(function (t, i) {
-      const r = 7 + i;
+      perBaris = {};
+    grup.op.forEach(function (t) {
+      const b = lpdhBarisOps(t.kategori);
+      (perBaris[b[0]] = perBaris[b[0]] || []).push(t);
+    });
+    const opsRingkas = [];
+    LPDH_OPS_BARIS.forEach(function (b) {
+      const a = perBaris[b[0]];
+      if (!a) return;
+      const r = b[0],
+        n = a.length;
       set(C, 'C' + r, tgl);
-      set(C, 'D' + r, t.uraian);
       set(C, 'E' + r, 1);
-      set(C, 'F' + r, 'transaksi');
-      set(C, 'G' + r, t.riil);
-      set(C, 'I' + r, t.no_bukti);
-      set(C, 'J' + r, t.bukti_url);
-      set(C, 'M' + r, t.kategori);
+      set(C, 'F' + r, n === 1 ? 'transaksi' : n + ' transaksi');
+      set(C, 'G' + r, jml(a));
+      set(C, 'I' + r, lpdhGabung(a.map(function (t) {
+        return t.no_bukti;
+      }), '; '));
+      set(C, 'J' + r, a.map(function (t) {
+        return t.bukti_url;
+      }).filter(Boolean).join(' | '));
+      set(C, 'M' + r, lpdhGabung(a.map(function (t) {
+        return t.kategori === b[1] || b[2].indexOf(t.kategori) >= 0 ? t.uraian : t.kategori + ': ' + t.uraian;
+      }), '; '));
+      opsRingkas.push({
+        baris: b[1],
+        jumlah: n,
+        total: jml(a)
+      });
     });
     const R = S('C1_Relawan'),
       rl = ambil('rl');
@@ -3039,30 +3064,37 @@ try {
       set(R, 'K' + r, t.bukti_url);
     });
     const D = S('D_Insentif'),
-      ins = ambil('ins');
-    if (ins[0]) {
-      set(D, 'C21', ins[0].riil);
+      ins = grup.ins;
+    if (ins.length) {
+      set(D, 'C21', jml(ins));
       set(D, 'C22', tgl);
-      set(D, 'C23', ins[0].no_bukti);
-      set(D, 'C26', ins[0].bukti_url);
+      set(D, 'C23', lpdhGabung(ins.map(function (t) {
+        return t.no_bukti;
+      }), '; '));
+      set(D, 'C26', ins.map(function (t) {
+        return t.bukti_url;
+      }).filter(Boolean).join(' | '));
     }
-    const jml = function (a) {
-      return a.reduce(function (s, t) {
-        return s + t.riil;
-      }, 0);
-    };
-    const bobot = [jml(bb), jml(op) + jml(rl), jml(ins)];
-    const E = S('E_Saldo');
-    const awal = lpdhPisah(Math.round(data.saldoAwal || 0), bobot);
-    const totB = bobot[0] + bobot[1] + bobot[2];
+    const E = S('E_Saldo'),
+      kp = data.komponen || {
+        awal: [data.saldoAwal || 0, 0, 0],
+        topups: [],
+        geser: []
+      };
     ['B5', 'B6', 'B7'].forEach(function (a, i) {
-      set(E, a, awal[i]);
+      set(E, a, Math.round(kp.awal[i]));
     });
+    const nama = ['Bahan Baku', 'Operasional', 'Insentif'];
     ['F5', 'F6', 'F7'].forEach(function (a, i) {
-      set(E, a, totB > 0 ? 'Dibagi sesuai porsi pengeluaran hari ini (' + Math.round(bobot[i] / totB * 1000) / 10 + '%)' : 'Tidak ada pengeluaran: seluruh saldo dicatat di Bahan Baku');
+      const g = (kp.geser || []).filter(function (x) {
+        return x.ke === i || x.dari === i;
+      }).map(function (x) {
+        return x.ke === i ? 'termasuk pergeseran ' + lpdhRp(x.jumlah) + ' dari ' + nama[x.dari] : 'dikurangi pergeseran ' + lpdhRp(x.jumlah) + ' ke ' + nama[x.ke];
+      });
+      set(E, a, g.length ? 'Saldo awal ' + g.join('; ') + ' (perlu persetujuan tertulis PPK)' : '');
     });
-    const tu = (data.topups || []).slice(0, LPDH_KAP.topup);
-    (data.topups || []).slice(LPDH_KAP.topup).forEach(function (t) {
+    const tu = (kp.topups || []).slice(0, LPDH_KAP.topup);
+    (kp.topups || []).slice(LPDH_KAP.topup).forEach(function (t) {
       kelebihan.push({
         bagian: 'topup',
         t: {
@@ -3072,13 +3104,12 @@ try {
       });
     });
     tu.forEach(function (t, i) {
-      const r = 19 + i,
-        b = lpdhPisah(Math.round(t.jumlah), bobot);
+      const r = 19 + i;
       set(E, 'C' + r, lpdhTgl(t.tanggal));
       set(E, 'D' + r, t.keterangan || 'Top up VA');
-      set(E, 'E' + r, b[0]);
-      set(E, 'F' + r, b[1]);
-      set(E, 'G' + r, b[2]);
+      set(E, 'E' + r, t.bagi[0]);
+      set(E, 'F' + r, t.bagi[1]);
+      set(E, 'G' + r, t.bagi[2]);
     });
     wb.eachSheet(function (ws) {
       ws.eachRow({
@@ -3089,9 +3120,9 @@ try {
         }, function (cell) {
           const v = cell.value;
           if (v && typeof v === 'object' && (v.formula || v.sharedFormula) && 'result' in v) {
-            const b = Object.assign({}, v);
-            delete b.result;
-            cell.value = b;
+            const b2 = Object.assign({}, v);
+            delete b2.result;
+            cell.value = b2;
           }
         });
       });
@@ -3099,22 +3130,23 @@ try {
     if (wb.calcProperties) wb.calcProperties.fullCalcOnLoad = true;else wb.calcProperties = {
       fullCalcOnLoad: true
     };
-    const total = {
-      bb: jml(grup.bb),
-      op: jml(grup.op),
-      rl: jml(grup.rl),
-      ins: jml(grup.ins)
-    };
     return {
       kelebihan: kelebihan,
+      opsRingkas: opsRingkas,
+      geser: kp.geser || [],
       jumlah: {
         bb: grup.bb.length,
         op: grup.op.length,
         rl: grup.rl.length,
         ins: grup.ins.length,
-        topup: (data.topups || []).length
+        topup: (kp.topups || []).length
       },
-      total: total,
+      total: {
+        bb: jml(grup.bb),
+        op: jml(grup.op),
+        rl: jml(grup.rl),
+        ins: jml(grup.ins)
+      },
       namaFile: ((id.id_sppg || data.dapur.kode || data.dapur.id) + '_' + data.dapur.nama + '_LPDH_' + String(data.tanggal).replace(/-/g, '')).replace(/[\\/:*?"<>|]/g, '-') + '.xlsx'
     };
   }
@@ -3202,7 +3234,7 @@ try {
     const kembar = Object.keys(nb).filter(function (k) {
       return k === '' || k === '-' || nb[k] > 1;
     });
-    const lebih = ['bb', 'op', 'rl', 'ins'].filter(function (k) {
+    const lebih = ['bb', 'rl'].filter(function (k) {
       return grup[k].length > LPDH_KAP[k];
     });
     const sum = function (a) {
@@ -3359,9 +3391,22 @@ try {
       return React.createElement(Baris, {
         key: k,
         label: LPDH_BAGIAN[k],
-        warn: grup[k].length > LPDH_KAP[k]
-      }, grup[k].length, " transaksi \xB7 ", fmt(sum(grup[k])), grup[k].length > LPDH_KAP[k] ? ' · muat ' + LPDH_KAP[k] : '');
-    }), React.createElement(Baris, {
+        warn: LPDH_KAP[k] && grup[k].length > LPDH_KAP[k]
+      }, grup[k].length, " transaksi \xB7 ", fmt(sum(grup[k])), LPDH_KAP[k] && grup[k].length > LPDH_KAP[k] ? ' · muat ' + LPDH_KAP[k] : '');
+    }), data.komponen && React.createElement("div", {
+      className: "mt-2 text-xs",
+      style: {
+        color: COLORS.muted
+      }
+    }, "Saldo awal per komponen: Bahan Baku ", fmt(data.komponen.awal[0]), " \xB7 Operasional ", fmt(data.komponen.awal[1]), " \xB7 Insentif ", fmt(data.komponen.awal[2])), data.komponen && data.komponen.geser.length > 0 && React.createElement("div", {
+      className: "text-sm rounded-lg p-3 mt-3",
+      style: {
+        background: '#FBF3E2',
+        color: '#7A5408'
+      }
+    }, "Ada pergeseran dana antar komponen hari ini: ", data.komponen.geser.map(function (g) {
+      return fmt(g.jumlah) + ' dari ' + data.komponen.nama[g.dari] + ' ke ' + data.komponen.nama[g.ke];
+    }).join('; '), ". Sesuai aturan PPK, pergeseran perlu persetujuan tertulis PPK."), React.createElement(Baris, {
       label: "Top up VA hari ini",
       warn: data.topups.length > LPDH_KAP.topup
     }, data.topups.length, " \xB7 ", fmt(data.topups.reduce(function (s, t) {
@@ -3424,7 +3469,7 @@ try {
       style: {
         color: COLORS.muted
       }
-    }, "Saldo awal & top up dibagi ke 3 komponen sesuai porsi pengeluaran hari ini. Angka memakai nilai riil (uang keluar).")), editIdent && React.createElement(LpdhIdentForm, {
+    }, "Operasional digabung per kategori ke 15 baris tetap template. Saldo per komponen bersambung dari hari sebelumnya: top up menutup komponen yang kurang lebih dulu, sisanya sesuai porsi pengeluaran hari itu. Angka memakai nilai riil (uang keluar).")), editIdent && React.createElement(LpdhIdentForm, {
       dapurId: dapurId,
       initial: id,
       toast: toast,
@@ -9048,7 +9093,7 @@ try {
     const [bukti, setBukti] = useState(null);
     const [saving, setSaving] = useState(false);
     const outRange = periode && (f.tanggal < periode.tanggal_mulai || f.tanggal > periode.tanggal_akhir);
-    const err = !f.tanggal ? 'Tanggal wajib' : outRange ? 'Tanggal di luar periode' : !f.no_bukti.trim() ? 'No bukti wajib' : isOps && !(Number(f.riil) > 0) ? 'Realisasi aktual wajib' : f.adaAdmin && !(Number(f.biaya) > 0 && Number(f.biaya) <= 50000) ? 'Biaya admin Rp 1 – Rp 50.000' : !bukti ? 'Bukti transfer wajib diunggah' : null;
+    const err = !f.tanggal ? 'Tanggal wajib' : outRange ? 'Tanggal di luar periode' : /^[\s\-\u2013\u2014_.\/]+$/.test(f.no_bukti) ? 'No bukti tidak boleh "' + f.no_bukti.trim() + '" — kosongkan bila nota tidak bernomor' : isOps && !(Number(f.riil) > 0) ? 'Realisasi aktual wajib' : f.adaAdmin && !(Number(f.biaya) > 0 && Number(f.biaya) <= 50000) ? 'Biaya admin Rp 1 – Rp 50.000' : !bukti ? 'Bukti transfer wajib diunggah' : null;
     const keluarVA = (isOps ? Number(f.riil || 0) : item.nominal) + (f.adaAdmin ? Number(f.biaya || 0) : 0);
     async function submit() {
       setSaving(true);
@@ -9073,7 +9118,7 @@ try {
       });
       setSaving(false);
       if (res.ok) {
-        toast('Realisasi tersimpan');
+        toast(!f.no_bukti.trim() && res.data && res.data.no_bukti ? 'Realisasi tersimpan · nomor bukti otomatis ' + res.data.no_bukti : 'Realisasi tersimpan');
         onSaved();
         onClose();
       } else toast(res.error || 'Gagal menyimpan', 'error');
@@ -9122,8 +9167,8 @@ try {
       },
       style: inputStyle
     })), React.createElement(Field, {
-      label: "No Bukti *",
-      hint: "Juga dipakai sebagai nama file bukti"
+      label: "No Bukti / Nota",
+      hint: "Wajib unik (syarat LPDH). Kosongkan bila nota tidak bernomor \u2192 nomor dibuat otomatis. Nomor sama dari toko lain? tambahkan kode toko, cth. 001/2026-TMB"
     }, React.createElement("input", {
       value: f.no_bukti,
       onChange: function (e) {
@@ -9132,7 +9177,7 @@ try {
         }));
       },
       style: inputStyle,
-      placeholder: "NB-001"
+      placeholder: "kosong = otomatis"
     })), isOps ? React.createElement(React.Fragment, null, React.createElement(Field, {
       label: "Realisasi Anggaran",
       hint: "Terkunci = nominal disetujui"
