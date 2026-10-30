@@ -1358,7 +1358,16 @@ function lpdhKomponen(t) {
   if (/^gaji\/honor relawan/i.test(String(t.kategori || ''))) return 'rl';
   return 'op';
 }
-function lpdhBarisOps(kategori) {
+// "Barang Habis Pakai" dipilah dari uraiannya: APD → Alat kebersihan → ATK; selain itu (kemasan, tanpa rincian) → Lain-lain
+const LPDH_BHP_KATA = [
+  ['APD', /masker|sarung\s*tangan|hand\s*scoo?n|glove|hair\s*net|penutup\s*kepala|celemek|apron|sepatu\s*boot|\bapd\b/i],
+  ['Alat Kebersihan', /mama\s*lemon|sunlight|deterj?en|detergen|soklin|vixal|supersol|kinclong|sabun|wipol|\bpel\b|sapu|sikat|spons|sponge|kanebo|\blap\b|tr[au]?sh\s*bag|thrush\s*bag|plastik\s*sampah|kantong\s*sampah|tis+u|tissue|pembersih|rinso|kebersihan/i],
+  ['ATK', /kertas|\bhvs\b|pulpen|\bpena\b|spidol|tinta|\bmap\b|lakban|stapler|amplop|materai|buku\s*tulis|\batk\b|printer|isolasi|cartridge/i],
+];
+function lpdhBarisOps(kategori, uraian) {
+  if (kategori === 'Barang Habis Pakai') {
+    for (let j = 0; j < LPDH_BHP_KATA.length; j++) if (LPDH_BHP_KATA[j][1].test(String(uraian || ''))) { kategori = LPDH_BHP_KATA[j][0]; break; }
+  }
   for (let i = 0; i < LPDH_OPS_BARIS.length; i++) if (LPDH_OPS_BARIS[i][2].indexOf(kategori) >= 0) return LPDH_OPS_BARIS[i];
   return LPDH_OPS_BARIS[LPDH_OPS_BARIS.length - 1];
 }
@@ -1424,7 +1433,7 @@ function isiLPDH(wb, data, opsi) {
 
   // Operasional: digabung per kategori ke 15 baris tetap (label kolom D milik template tidak diubah)
   const C = S('C_Operasional'), perBaris = {};
-  grup.op.forEach(function(t) { const b = lpdhBarisOps(t.kategori); (perBaris[b[0]] = perBaris[b[0]] || []).push(t); });
+  grup.op.forEach(function(t) { const b = lpdhBarisOps(t.kategori, t.uraian); (perBaris[b[0]] = perBaris[b[0]] || []).push(t); });
   const opsRingkas = [];
   LPDH_OPS_BARIS.forEach(function(b) {
     const a = perBaris[b[0]]; if (!a) return;

@@ -29,6 +29,14 @@ function dataUji(nOp) {
 (async () => {
   // fungsi bantu
   ok(L.lpdhBarisOps('Biaya Admin Bank')[0] === 21 && L.lpdhBarisOps('Sewa Kendaraan')[0] === 14 && L.lpdhBarisOps('Internet/Telepon')[0] === 16, 'pemetaan kategori: admin bank → Lain-lain, sewa → 14, internet → 16');
+  ok(L.lpdhBarisOps('Barang Habis Pakai', 'Pembelian BHP (Sunlight 610ml) tgl 24')[1] === 'Alat kebersihan'
+    && L.lpdhBarisOps('Barang Habis Pakai', 'Trash Bag 5 pack')[1] === 'Alat kebersihan'
+    && L.lpdhBarisOps('Barang Habis Pakai', 'beli masker & sarung tangan, sabun')[1].startsWith('APD')
+    && L.lpdhBarisOps('Barang Habis Pakai', 'kertas HVS & spidol')[1] === 'ATK'
+    && L.lpdhBarisOps('Barang Habis Pakai', 'Plastik 1/2 17 pack')[1] === 'Lain-lain'
+    && L.lpdhBarisOps('Barang Habis Pakai', 'Pembelian BHP tgl 6 Okt')[1] === 'Lain-lain'
+    && L.lpdhBarisOps('Air Bersih (Sumur)', '')[1] === 'Air PDAM' && L.lpdhBarisOps('Konsumsi Tamu', 'rapat')[1] === 'Lain-lain',
+    'Barang Habis Pakai dipilah dari uraian (APD/kebersihan/ATK, sisanya Lain-lain); Air Sumur → Air PDAM; rapat → Lain-lain');
   const pj = L.lpdhGabung(Array.from({ length: 60 }, (_, i) => 'NOMOR-BUKTI-' + i), '; ');
   ok(pj.length <= 250 && /lainnya\)$/.test(pj), 'gabungan nomor bukti dibatasi ≤ 250 karakter (batas rumus COUNTIF)');
   const h = L.lpdhInfoHari('2026-10-28');
