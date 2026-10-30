@@ -15,6 +15,7 @@ const MAP = [
   [/unpkg\.com\/prop-types@/, NM + '/prop-types/prop-types.min.js'],
   [/unpkg\.com\/recharts@/, NM + '/recharts/umd/Recharts.js'],
   [/unpkg\.com\/xlsx@/, NM + '/xlsx/dist/xlsx.full.min.js'],
+  [/unpkg\.com\/exceljs@/, NM + '/exceljs/dist/exceljs.min.js'],
   [/unpkg\.com\/@babel\/standalone@/, NM + '/@babel/standalone/babel.min.js'],
 ];
 
@@ -58,6 +59,12 @@ function makeServer(opts) {
       }
       case 'createPengajuan': log.createCount++; return { ok: true, data: { nomor: 'BA-PA/S1/2026/10/00' + (log.createCount + 1) } };
       case 'getDashboard': return { ok: true, data: { hasActivePeriode: true, periode: P2, kpi: { penerima: 100, sisaVA: 7000000, saldoVATotal: 7000000, sisaPetty: 0, saldoPettyTotal: 0, totalRiil: 0, totalUnriil: 0, selisihAnggaran: 0, serap: 0, komitmen: 0, komitmenCount: 0, menungguNominal: 0, menungguCount: 0, vaTersedia: 7000000, daruratCount: 0 }, kategoriByJenis: {}, byDay: opts.grafik ? [{ tanggal: '01/10', value: 150000 }, { tanggal: '02/10', value: 90000 }] : [] } };
+      case 'getDataLPDH': return { ok: true, data: { dapur: { id: 'D1', nama: 'SPPG Satu', kode: 'S1' }, identitas: log.ident || {}, tanggal: p.tanggal,
+        periode: { id: 'P2', periode_no: 2, tanggal_mulai: '2026-10-01', tanggal_akhir: '2026-10-31', status: 'AKTIF' }, saldoAwal: 7000000,
+        transaksi: [{ id: 'T1', tanggal: p.tanggal, no_bukti: 'NT-1', jenis: 'Bahan Baku', kategori: 'Semua Kategori', uraian: 'Beras 50 kg', sumber: 'VA', riil: 600000, bukti_url: 'https://drive.google.com/x', pemasok: 'Toko A' },
+          { id: 'T2', tanggal: p.tanggal, no_bukti: '-', jenis: 'Operasional', kategori: 'Gas', uraian: 'Gas 3 kg', sumber: 'VA', riil: 40000, bukti_url: 'https://drive.google.com/y', pemasok: '' }],
+        topups: [] } };
+      case 'saveIdentitasLPDH': log.ident = Object.assign({}, p); log.identPost = isPost; return { ok: true };
       case 'getUsers': return { ok: true, data: [{ id: 'u1', nama: 'Siti', username: 'siti', password: 'RAHASIA-PLAINTEXT', role: 'admin', dapur: '', aktif: 'YA' }] };
       default: return { ok: true, data: [] };
     }
@@ -77,6 +84,7 @@ async function run(name, opts, fn) {
   await page.route('**/*', async route => {
     const url = route.request().url();
     if (url.startsWith('file://')) return route.continue();
+    if (/templates\/LPDH_SPPG\.xlsx/.test(url)) { srv.log.lazy.push(url); return route.fulfill({ status: 200, contentType: 'application/octet-stream', body: fs.readFileSync(path.join(__dirname, '..', 'templates', 'LPDH_SPPG.xlsx')) }); }
     for (const [re, file] of MAP) if (re.test(url)) { srv.log.lazy.push(url); return route.fulfill({ status: 200, contentType: 'application/javascript', body: fs.readFileSync(file) }); }
     if (/cdn\.tailwindcss\.com/.test(url)) return route.fulfill({ status: 200, contentType: 'application/javascript', body: '' });   // hanya src/index.html; tanpa CSS
     if (/script\.google\.com/.test(url)) {
@@ -144,6 +152,32 @@ function assert(c, m) { if (!c) throw new Error(m); }
     await login(page, 'siti');
     await page.waitForSelector('input[type=password]', { timeout: 10000 });
     await page.waitForSelector('text=Sesi tidak valid');
+  });
+
+  all &= await run('LPDH: isi identitas, unduh file berisi data hari itu', { role: 'akuntan' }, async (page, srv) => {
+    await login(page, 'siti');
+    await page.waitForSelector('header');
+    await page.click('nav:visible >> text=LPDH Harian');
+    await page.waitForSelector('text=Belum diisi');
+    await page.waitForSelector('text=Nomor bukti kosong');
+    if (process.env.SHOT) await page.screenshot({ path: process.env.SHOT + '/lpdh-1.png', fullPage: true });
+    await page.click('text=Ubah');
+    await page.fill('.sheet input >> nth=0', '32.04.01.0001');
+    await page.fill('.sheet input >> nth=9', '3204000000000001');
+    await page.click('.sheet >> text=Simpan');
+    await page.waitForSelector('text=Identitas LPDH disimpan');
+    assert(srv.log.identPost && srv.log.ident.id_sppg === '32.04.01.0001' && srv.log.ident.pengawas_nik === '3204000000000001', 'identitas tidak terkirim via POST');
+    assert(!srv.log.urls.some(u => u.includes('3204000000000001')), 'NIK bocor ke URL GET');
+    const [dl] = await Promise.all([page.waitForEvent('download'), page.click('text=Unduh LPDH')]);
+    const file = await dl.path();
+    const ExcelJS = require('exceljs');
+    const wb = new ExcelJS.Workbook(); await wb.xlsx.readFile(file);
+    const v = (s, a) => wb.getWorksheet(s).getCell(a).value;
+    assert(v('Identitas', 'B7') === 'SPPG Satu' && v('Identitas', 'B6') === '32.04.01.0001', 'identitas tidak masuk file');
+    assert(v('B_BahanBaku', 'D6') === 'Beras 50 kg' && v('B_BahanBaku', 'H6') === 600000 && v('C_Operasional', 'D7') === 'Gas 3 kg', 'transaksi tidak masuk file');
+    assert(dl.suggestedFilename().startsWith('32.04.01.0001_SPPG Satu_LPDH_'), 'nama file salah: ' + dl.suggestedFilename());
+    await page.waitForSelector('text=lengkapi di Excel');
+    if (process.env.SHOT) await page.screenshot({ path: process.env.SHOT + '/lpdh-2.png', fullPage: true });
   });
 
   all &= await run('Setup: kartu sinkron saldo + form periode', { role: 'akuntan' }, async (page) => {

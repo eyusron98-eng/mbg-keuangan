@@ -57,7 +57,7 @@ const SHEETS = {
   TRANSAKSI: 'Transaksi', LOG: 'Log',
   SESI: 'Sesi', PENERIMA: 'Penerima',
   PENGAJUAN: 'Pengajuan', PITEM: 'PengajuanItem',
-  PERUBAHAN: 'PerubahanTx',
+  PERUBAHAN: 'PerubahanTx', LPDH: 'IdentitasLPDH',
 };
 
 const JENIS_KATEGORI = {
@@ -126,7 +126,7 @@ function handleRequest(e, method) {
     }
     let result;
     switch (action) {
-      case 'ping':              result = { ok: true, time: new Date().toISOString(), version: 'v6-ba-sec5' }; break;
+      case 'ping':              result = { ok: true, time: new Date().toISOString(), version: 'v6-ba-sec6' }; break;
       case 'login':             result = login(params); break;
       case 'getPeriodeList':    result = getPeriodeList(params); break;
       case 'getActivePeriode':  result = getActivePeriode(params); break;
@@ -176,6 +176,9 @@ function handleRequest(e, method) {
       case 'hapusTtd':          result = hapusTtd(params); break;
       case 'getBeritaAcara':    result = getBeritaAcara(params); break;
       case 'getBADaftar':       result = getBADaftar(params); break;
+      case 'getIdentitasLPDH':  result = getIdentitasLPDH(params); break;
+      case 'saveIdentitasLPDH': result = saveIdentitasLPDH(params); break;
+      case 'getDataLPDH':       result = getDataLPDH(params); break;
       case 'getPenandatangan':  result = getPenandatangan(params); break;
       case 'getLogoKop':        result = getLogoKop(params); break;
       case 'saveLogoKop':       result = saveLogoKop(params); break;
@@ -638,7 +641,7 @@ function addTransaksi(p) {
 
   const id = 'TX' + Utilities.formatDate(new Date(), 'GMT+7', 'yyyyMMddHHmmss') + '-' + Math.floor(Math.random() * 1000);
   getSheet(SHEETS.TRANSAKSI).appendRow([
-    id, p.dapur, p.tanggal, p.no_bukti || '', p.jenis, p.kategori, p.uraian,
+    id, p.dapur, p.tanggal, teksSel(p.no_bukti), p.jenis, p.kategori, p.uraian,
     p.sumber, Number(p.riil) || 0, Number(p.unriil) || Number(p.riil) || 0,
     p.bukti_url || '', new Date(), p.user_id || '', periode.id, 'DARURAT: ' + String(p.alasan).trim()
   ]);
@@ -666,7 +669,7 @@ function updateTransaksi(p) {
       if (linkId && linkId.indexOf('DARURAT') !== 0) {
         // Transaksi hasil realisasi pengajuan: jenis/kategori/uraian/anggaran/sumber terkunci
         if (p.tanggal !== undefined)  sheet.getRange(row, 3).setValue(p.tanggal);
-        if (p.no_bukti !== undefined) sheet.getRange(row, 4).setValue(p.no_bukti || '');
+        if (p.no_bukti !== undefined) sheet.getRange(row, 4).setValue(teksSel(p.no_bukti));
         if (String(data[i][4]) === 'Operasional' && p.riil !== undefined && Number(p.riil) > 0) {
           if (isFeeLink(linkId)) {
             if (Number(p.riil) > BIAYA_ADMIN_MAX) return { ok: false, error: 'Biaya admin maksimal ' + rupiah(BIAYA_ADMIN_MAX) };
@@ -678,7 +681,7 @@ function updateTransaksi(p) {
         return { ok: true };
       }
       if (p.tanggal !== undefined)   sheet.getRange(row, 3).setValue(p.tanggal);
-      if (p.no_bukti !== undefined)  sheet.getRange(row, 4).setValue(p.no_bukti || '');
+      if (p.no_bukti !== undefined)  sheet.getRange(row, 4).setValue(teksSel(p.no_bukti));
       if (p.jenis !== undefined)     sheet.getRange(row, 5).setValue(p.jenis);
       if (p.kategori !== undefined)  sheet.getRange(row, 6).setValue(p.kategori);
       if (p.uraian !== undefined)    sheet.getRange(row, 7).setValue(p.uraian);
@@ -1571,7 +1574,7 @@ function realisasiItem(p) {
 
     const txId = 'TX' + nowStamp() + '-' + Math.floor(Math.random() * 1000);
     getSheet(SHEETS.TRANSAKSI).appendRow([
-      txId, it.dapur, p.tanggal, p.no_bukti, it.jenis, it.kategori, it.uraian,
+      txId, it.dapur, p.tanggal, teksSel(p.no_bukti), it.jenis, it.kategori, it.uraian,
       'VA', riil, it.nominal, p.bukti_url, new Date(), me.id, it.periode_id, it.id
     ]);
     if (fee > 0) getSheet(SHEETS.TRANSAKSI).appendRow(feeRowFor(it, txId, p.tanggal, p.no_bukti, p.bukti_url, fee, me.id));
@@ -1768,7 +1771,7 @@ function decideTxChange(p) {
       const txSheet = getSheet(SHEETS.TRANSAKSI);
       if (req.aksi === 'EDIT') {
         Object.keys(req.data_baru).forEach(function(k) {
-          if (TX_COL[k]) txSheet.getRange(tx._rowIndex, TX_COL[k]).setValue(req.data_baru[k]);
+          if (TX_COL[k]) txSheet.getRange(tx._rowIndex, TX_COL[k]).setValue(k === 'no_bukti' ? teksSel(req.data_baru[k]) : req.data_baru[k]);
         });
       } else {
         txSheet.deleteRow(tx._rowIndex);
@@ -1859,6 +1862,11 @@ function getSheet(name) {
   return s;
 }
 
+// Nomor bukti seperti "01-2026" atau "1/10" diubah Google Sheets menjadi tanggal/angka → simpan sebagai teks
+function teksSel(v) {
+  const s = String(v == null ? '' : v).trim();
+  return /^[\d\s\/\-.,:]+$/.test(s) && s !== '' ? "'" + s : s;
+}
 function formatDate(d) {
   if (!d) return '';
   if (typeof d === 'string') return d.length >= 10 ? d.substring(0, 10) : d;
@@ -1875,6 +1883,116 @@ function formatTimestamp(d) {
 function logActivity(userId, action, ref) {
   try { getSheet(SHEETS.LOG).appendRow([new Date(), userId || '', action, ref || '']); }
   catch (e) { /* ignore */ }
+}
+
+// ============================================================
+//  LPDH — Laporan Penggunaan Dana Harian (format PPK)
+//  IdentitasLPDH (dibuat otomatis): dapur_id | id_sppg | desa | kecamatan | kabupaten | provinsi | yayasan
+//    | no_va | bank | pengawas_nama | pengawas_nik | kepala_nama | kepala_nip | wakil_nama | wakil_nik | updated_at | updated_by
+// ============================================================
+const LPDH_FIELDS = ['id_sppg', 'desa', 'kecamatan', 'kabupaten', 'provinsi', 'yayasan', 'no_va', 'bank',
+  'pengawas_nama', 'pengawas_nik', 'kepala_nama', 'kepala_nip', 'wakil_nama', 'wakil_nik'];
+
+function lpdhSheet() {
+  const ss = getSS();
+  let s = ss.getSheetByName(SHEETS.LPDH);
+  if (!s) {
+    s = ss.insertSheet(SHEETS.LPDH);
+    s.appendRow(['dapur_id'].concat(LPDH_FIELDS, ['updated_at', 'updated_by']));
+  }
+  return s;
+}
+// akuntan/pic hanya dapurnya sendiri; admin & yayasan memilih dapur
+function lpdhDapur(me, dapur) {
+  if (me.role === 'akuntan' || me.role === 'pic') return me.dapur || null;
+  if (me.role === 'admin' || me.role === 'yayasan') return String(dapur || '') || null;
+  return null;
+}
+function readIdentitasLPDH(dapurId) {
+  const d = lpdhSheet().getDataRange().getValues();
+  for (let i = 1; i < d.length; i++) {
+    if (d[i][0] === dapurId) {
+      const o = { _row: i + 1 };
+      LPDH_FIELDS.forEach(function(f, k) { o[f] = String(d[i][k + 1] == null ? '' : d[i][k + 1]).replace(/^'/, ''); });
+      return o;
+    }
+  }
+  return null;
+}
+function getIdentitasLPDH(p) {
+  const me = authUser(p);
+  if (!me) return { ok: false, error: SESI_ERR };
+  const dapurId = lpdhDapur(me, p.dapur);
+  if (!dapurId) return { ok: false, error: 'Pilih dapur' };
+  const o = readIdentitasLPDH(dapurId) || {};
+  delete o._row;
+  return { ok: true, data: o };
+}
+function saveIdentitasLPDH(p) {
+  const me = authUser(p);
+  if (!me) return { ok: false, error: SESI_ERR };
+  if (['admin', 'akuntan', 'pic'].indexOf(me.role) < 0) return { ok: false, error: 'Hanya admin, akuntan, atau PIC' };
+  const dapurId = lpdhDapur(me, p.dapur);
+  if (!dapurId || !getDapur().data.some(function(x) { return x.id === dapurId; })) return { ok: false, error: 'Pilih dapur' };
+  const v = {};
+  LPDH_FIELDS.forEach(function(f) { v[f] = String(p[f] == null ? '' : p[f]).trim(); });
+  const cekAngka = function(val, n, label) { return !val || new RegExp('^\\d{' + n + '}$').test(val) ? null : label + ' harus ' + n + ' digit angka'; };
+  const err = cekAngka(v.pengawas_nik, 16, 'NIK Pengawas Keuangan') || cekAngka(v.kepala_nip, 18, 'NIP Kepala SPPG') || cekAngka(v.wakil_nik, 16, 'NIK Perwakilan Yayasan');
+  if (err) return { ok: false, error: err };
+  return withLock(function() {
+    const sh = lpdhSheet();
+    // angka panjang (NIK/NIP/VA) disimpan sebagai teks agar tidak berubah jadi 1,87E+15
+    const row = [dapurId].concat(LPDH_FIELDS.map(function(f) { return /^\d+$/.test(v[f]) ? "'" + v[f] : v[f]; }), [new Date(), me.id]);
+    const ada = readIdentitasLPDH(dapurId);
+    if (ada) sh.getRange(ada._row, 1, 1, row.length).setValues([row]);
+    else sh.appendRow(row);
+    logActivity(me.id, 'saveIdentitasLPDH', dapurId);
+    return { ok: true };
+  });
+}
+
+// Data satu hari untuk LPDH: transaksi bertanggal hari itu, saldo awal hari itu, dan top up hari itu.
+// Uang yang dihitung = riil (uang yang benar-benar keluar), karena LPDH dicocokkan dengan mutasi rekening.
+function getDataLPDH(p) {
+  const me = authUser(p);
+  if (!me) return { ok: false, error: SESI_ERR };
+  const dapurId = lpdhDapur(me, p.dapur);
+  if (!dapurId) return { ok: false, error: 'Pilih dapur' };
+  const tgl = String(p.tanggal || '').substring(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(tgl)) return { ok: false, error: 'Tanggal tidak valid' };
+  const dapur = getDapur().data.find(function(x) { return x.id === dapurId; });
+  if (!dapur) return { ok: false, error: 'Dapur tidak ditemukan' };
+  const periode = readAllPeriode(dapurId).find(function(r) { return tgl >= r.tanggal_mulai && tgl <= r.tanggal_akhir; });
+  if (!periode) return { ok: false, error: 'Tanggal ' + tgl + ' tidak berada di periode mana pun' };
+
+  const tx = readAllTransaksi([dapurId], periode.id);
+  const topups = readVATopups(dapurId, periode.id);
+  const sebelum = function(t) { return t.tanggal < tgl; };
+  const saldoAwal = periode.saldoVA + periode.saldoPettyAwal
+    + topups.filter(sebelum).reduce(function(s, t) { return s + t.jumlah; }, 0)
+    - tx.filter(sebelum).reduce(function(s, t) { return s + t.riil; }, 0);
+
+  const items = {};
+  readAllItems().forEach(function(i) { items[i.id] = i; });
+  // Nomor bukti dibaca persis seperti yang tampil di Sheet (data lama "01-2026" tersimpan sebagai tanggal)
+  const txSh = getSheet(SHEETS.TRANSAKSI);
+  const tampil = txSh.getRange(1, 4, Math.max(txSh.getLastRow(), 1), 1).getDisplayValues();
+  const hari = tx.filter(function(t) { return t.tanggal === tgl; }).map(function(t) {
+    const link = String(t.pengajuan_item_id || '');
+    const it = items[isFeeLink(link) ? link.substring(BIAYA_ADMIN_PREFIX.length) : link];
+    return { id: t.id, tanggal: t.tanggal, no_bukti: String((tampil[t.seq] && tampil[t.seq][0]) || t.no_bukti || ''), jenis: t.jenis, kategori: t.kategori,
+      uraian: t.uraian, sumber: t.sumber, riil: t.riil, bukti_url: String(t.bukti_url || ''),
+      pemasok: it ? (isFeeLink(link) ? it.bank : it.penerima_nama) : '', seq: t.seq };
+  }).sort(function(a, b) { return a.seq - b.seq; });
+
+  const ident = readIdentitasLPDH(dapurId) || {};
+  delete ident._row;
+  return { ok: true, data: {
+    dapur: { id: dapur.id, nama: dapur.nama, kode: dapur.kode }, identitas: ident,
+    periode: { id: periode.id, periode_no: periode.periode_no, tanggal_mulai: periode.tanggal_mulai, tanggal_akhir: periode.tanggal_akhir, status: periode.status },
+    tanggal: tgl, saldoAwal: saldoAwal, transaksi: hari,
+    topups: topups.filter(function(t) { return t.tanggal === tgl; }).map(function(t) { return { tanggal: t.tanggal, jumlah: t.jumlah, keterangan: t.keterangan }; }),
+  } };
 }
 
 // Gangguan sesaat dari Google (bukan salah pengguna) → pesan yang jelas & aman diulang

@@ -5,6 +5,8 @@ const vm = require('vm');
 const crypto = require('crypto');
 const FILE = process.argv[2] || require('path').join(__dirname, '..', 'backend', 'Code.gs');
 
+// Google Sheets menyimpan "'teks" sebagai teks tanpa tanda kutip
+const tampilSheets = v => (typeof v === 'string' && v[0] === "'" ? v.slice(1) : v);
 function makeEnv(usersInit, transform) {
   const book = {
     Users: [['id','username','password','nama','role','dapur_id','aktif'], ...usersInit],
@@ -24,10 +26,11 @@ function makeEnv(usersInit, transform) {
       return rows;
     } }),
     getRange: (r, c, nr, nc) => ({
-      setValue: v => { book[name][r - 1][c - 1] = v; },
-      setValues: vals => { vals.forEach((row, i) => { book[name][r - 1 + i] = book[name][r - 1 + i] || []; row.forEach((v, j) => { book[name][r - 1 + i][c - 1 + j] = v; }); }); },
+      setValue: v => { book[name][r - 1][c - 1] = tampilSheets(v); },
+      getDisplayValues: () => book[name].slice(r - 1, r - 1 + nr).map(row => Array.from({ length: nc || 1 }, (_, j) => String(row[c - 1 + j] == null ? '' : row[c - 1 + j]))),
+      setValues: vals => { vals.forEach((row, i) => { book[name][r - 1 + i] = book[name][r - 1 + i] || []; row.forEach((v, j) => { book[name][r - 1 + i][c - 1 + j] = tampilSheets(v); }); }); },
     }),
-    appendRow: row => { if (name === 'Sesi' && sandbox.__appendGagal > 0) { sandbox.__appendGagal--; throw new Error('Layanan Spreadsheet gagal'); } book[name].push(row); },
+    appendRow: row => { if (name === 'Sesi' && sandbox.__appendGagal > 0) { sandbox.__appendGagal--; throw new Error('Layanan Spreadsheet gagal'); } book[name].push(row.map(tampilSheets)); },
     deleteRow: n => { book[name].splice(n - 1, 1); },
     getLastRow: () => book[name].length,
   });
@@ -38,7 +41,7 @@ function makeEnv(usersInit, transform) {
     SpreadsheetApp: {
       // tiru gangguan sesaat Google: openById melempar galat "izin" sebanyak __openGagal kali
       openById: () => { if (sandbox.__openGagal > 0) { sandbox.__openGagal--; throw new Error('Anda tidak memiliki izin untuk mengakses dokumen yang diminta.'); }
-        return { getSheetByName: n => (book[n] ? sheet(n) : null) }; },
+        return { getSheetByName: n => (book[n] ? sheet(n) : null), insertSheet: n => { book[n] = []; return sheet(n); } }; },
       getActiveSpreadsheet: () => (sandbox.__aktifBisa ? { getId: () => sandbox.SPREADSHEET_ID_TES, getSheetByName: n => (book[n] ? sheet(n) : null) } : null),
       flush() {},
     },
@@ -77,7 +80,7 @@ const ok = (c, m) => { console.log((c ? 'PASS ' : 'FAIL ') + m); if (!c) fails++
     ['U3', 'off', 'xxxxxxx', 'Nonaktif', 'pic', 'D001', 'TIDAK'],
   ]);
   const B = env.__book;
-  ok(call(env, 'GET', { action: 'ping' }).version === 'v6-ba-sec5', 'ping menampilkan versi baru');
+  ok(call(env, 'GET', { action: 'ping' }).version === 'v6-ba-sec6', 'ping menampilkan versi baru');
 
   // 1. login lama (teks biasa) berhasil via POST dan password otomatis di-hash
   let r = call(env, 'POST', { action: 'login', username: 'AKUN1', password: 'RahasiaKu9' });
@@ -273,6 +276,51 @@ const ok = (c, m) => { console.log((c ? 'PASS ' : 'FAIL ') + m); if (!c) fails++
   ok(!/Sesi tidak valid/.test(r.error || ''), 'tanpa cache pun, server membaca ulang sekali sebelum menolak sesi');
   r = call(e7, 'POST', { action: 'getUsers', token: 'palsu' });
   ok(/Sesi tidak valid/.test(r.error || ''), 'token palsu tetap ditolak');
+
+  // 15. LPDH: identitas per dapur + data harian
+  const e8 = makeEnv([
+    ['U1', 'adm', 'passwd1', 'Admin', 'admin', '', 'YA'], ['U2', 'akn', 'passwd2', 'Akuntan', 'akuntan', 'D001', 'YA'],
+    ['U3', 'pic', 'passwd3', 'PIC', 'pic', 'D001', 'YA'], ['U4', 'yay', 'passwd4', 'Yayasan', 'yayasan', '', 'YA'], ['U5', 'ast', 'passwd5', 'Ast', 'asisten', '', 'YA']]);
+  const pw8 = { adm: 'passwd1', akn: 'passwd2', pic: 'passwd3', yay: 'passwd4', ast: 'passwd5' };
+  const tk8 = u => call(e8, 'POST', { action: 'login', username: u, password: pw8[u] }).data.token;
+  const B8 = e8.__book;
+  B8.Dapur.push(['D002', 'SPPG Dua', '', 'S2']);
+  B8.Setup[1] = ['P1', 'D001', 1, '2026-10-01', '2026-10-31', 100, 5000000, 200000, 'AKTIF'];
+  B8.VATopup = [['id', 'dapur', 'periode', 'tanggal', 'jumlah', 'ket'], ['V1', 'D001', 'P1', '2026-10-05', 1000000, 'TU 1'], ['V2', 'D001', 'P1', '2026-10-10', 700000, 'TU 2']];
+  B8.PengajuanItem = [['h'], ['IT1', 'PA1', 'D001', 'P1', 1, 'Bahan Baku', 'Semua Kategori', 'Beras', 300000, 'pn1', 'Toko A', 'BCA', '123', 'TIDAK', 'TEREALISASI']];
+  const tx = (id, tgl, nb, jenis, kat, ur, riil, link, dapur) => [id, dapur || 'D001', tgl, nb, jenis, kat, ur, 'VA', riil, riil, 'https://drive.google.com/x' + id, '', 'U2', 'P1', link || ''];
+  B8.Transaksi = [['h'],
+    tx('T1', '2026-10-09', 'NB-0', 'Operasional', 'Listrik', 'Listrik', 100000),
+    tx('T2', '2026-10-10', '01-2026', 'Bahan Baku', 'Semua Kategori', 'Beras', 300000, 'IT1'),
+    tx('T3', '2026-10-10', 'NB-ADM', 'Operasional', 'Biaya Admin Bank', 'Admin', 6500, 'ADMIN:IT1'),
+    tx('T4', '2026-10-10', 'NB-9', 'Bahan Baku', 'Semua Kategori', 'Dapur lain', 999, '', 'D002'),
+    tx('T5', '2026-10-11', 'NB-5', 'Operasional', 'Gas', 'Gas', 50000)];
+  const lp = (u, extra) => call(e8, 'POST', Object.assign({ action: 'getDataLPDH', token: tk8(u), dapur: 'D001', tanggal: '2026-10-10' }, extra || {}));
+  r = lp('adm');
+  ok(r.ok, 'admin bisa membuat data LPDH: ' + (r.error || ''));
+  ok(r.ok && r.data.saldoAwal === 5000000 + 200000 + 1000000 - 100000, 'saldo awal = saldo VA + kas kecil awal + top up sebelum hari ini − pengeluaran sebelum hari ini (' + (r.data && r.data.saldoAwal) + ')');
+  ok(r.ok && r.data.transaksi.map(t => t.id).join(',') === 'T2,T3', 'hanya transaksi dapur ini bertanggal hari itu');
+  ok(r.ok && r.data.transaksi[0].pemasok === 'Toko A' && r.data.transaksi[1].pemasok === 'BCA', 'pemasok dari pengajuan; biaya admin → bank');
+  ok(r.ok && r.data.topups.length === 1 && r.data.topups[0].jumlah === 700000, 'top up hari itu ikut');
+  ok(r.ok && r.data.transaksi[0].no_bukti === '01-2026', 'nomor bukti dibaca sesuai tampilan sheet');
+  r = call(e8, 'POST', { action: 'getDataLPDH', token: tk8('akn'), dapur: 'D002', tanggal: '2026-10-10' });
+  ok(r.ok && r.data.dapur.id === 'D001', 'akuntan dipaksa ke dapurnya sendiri walau minta dapur lain');
+  ok(!lp('ast').ok, 'asisten tidak bisa membuat LPDH');
+  ok(!lp('adm', { tanggal: '2026-12-01' }).ok, 'tanggal di luar periode ditolak');
+  // identitas
+  const idt = { dapur: 'D001', id_sppg: '32.04.01.0001', yayasan: 'Yayasan X', no_va: '0012345678901234', pengawas_nama: 'Peng', pengawas_nik: '3204000000000001', kepala_nip: '199001012026011001', wakil_nik: '3204000000000002' };
+  r = call(e8, 'POST', Object.assign({ action: 'saveIdentitasLPDH', token: tk8('akn') }, idt));
+  ok(r.ok, 'akuntan menyimpan identitas LPDH (sheet dibuat otomatis): ' + (r.error || ''));
+  r = call(e8, 'POST', { action: 'getIdentitasLPDH', token: tk8('pic') });
+  ok(r.ok && r.data.no_va === '0012345678901234' && r.data.pengawas_nik === '3204000000000001', 'angka panjang (VA/NIK) tersimpan utuh sebagai teks, nol di depan tidak hilang');
+  r = call(e8, 'POST', Object.assign({ action: 'saveIdentitasLPDH', token: tk8('pic') }, idt, { kepala_nip: '123' }));
+  ok(!r.ok && /NIP/.test(r.error), 'NIP bukan 18 digit ditolak');
+  r = call(e8, 'POST', Object.assign({ action: 'saveIdentitasLPDH', token: tk8('pic') }, idt, { yayasan: 'Yayasan Y' }));
+  ok(r.ok && B8.IdentitasLPDH.length === 2 && B8.IdentitasLPDH[1][6] === 'Yayasan Y', 'simpan ulang memperbarui baris yang sama (tidak dobel)');
+  ok(!call(e8, 'POST', Object.assign({ action: 'saveIdentitasLPDH', token: tk8('yay') }, idt)).ok, 'yayasan hanya bisa melihat, tidak mengubah');
+  ok(lp('adm').data.identitas.yayasan === 'Yayasan Y', 'data LPDH membawa identitas');
+  // nomor bukti tipe tanggal disimpan sebagai teks
+  ok(e8.teksSel('01-2026') === "'01-2026" && e8.teksSel('1/10') === "'1/10" && e8.teksSel('NT-001') === 'NT-001' && e8.teksSel('') === '', 'nomor bukti mirip tanggal/angka disimpan sebagai teks');
 
   console.log(fails ? '\n' + fails + ' GAGAL' : '\nSEMUA LULUS');
   process.exit(fails ? 1 : 0);

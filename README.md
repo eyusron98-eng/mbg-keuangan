@@ -29,7 +29,10 @@ Semua uji memakai data dan API **tiruan**; tidak menyentuh Google Sheet asli.
 |---|---|
 | `npm run test:backend` | Logika `backend/Code.gs` di Node dengan layanan Apps Script tiruan: hash password & migrasi, batas percobaan login, pencabutan sesi, hak akses per peran, pengajuan ganda (`request_id`), Berita Acara, penanda tangan Laporan. |
 | `npm run test:e2e` | Aplikasi `index.html` di Chromium: login lewat POST, sinkron saldo antar periode, pengajuan (tab, duplikat, koneksi putus), persetujuan per peran, Berita Acara, Laporan, Riwayat (saldo saat difilter, ganti dapur, ekspor Excel), posisi modal, grafik. |
-| `npm test` | Keduanya. |
+| `npm run test:lpdh` | Pengisian template LPDH (`templates/LPDH_SPPG.xlsx`, format PPK): identitas, transaksi per sheet, kapasitas baris, pembagian saldo 3 komponen, rumus utuh; hasil rumus diperiksa dengan LibreOffice bila `soffice` tersedia. |
+| `npm test` | Semuanya. |
+
+Template LPDH dari PPK ada di `templates/LPDH_SPPG.xlsx`. Bila PPK menerbitkan versi baru, ganti file itu (nama sama), naikkan `?v=` di `LPDH_TEMPLATE_URL` (src/index.html), lalu jalankan `npm run test:lpdh` untuk memastikan alamat sel masih cocok.
 
 Uji browser butuh Chromium: `npx playwright install chromium`, atau arahkan ke Chromium yang sudah ada dengan
 `CHROMIUM_PATH=/path/ke/chromium`. Opsi lain: `ONLY="Riwayat"` (hanya uji yang namanya memuat teks itu),
