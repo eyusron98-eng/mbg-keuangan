@@ -80,7 +80,7 @@ const ok = (c, m) => { console.log((c ? 'PASS ' : 'FAIL ') + m); if (!c) fails++
     ['U3', 'off', 'xxxxxxx', 'Nonaktif', 'pic', 'D001', 'TIDAK'],
   ]);
   const B = env.__book;
-  ok(call(env, 'GET', { action: 'ping' }).version === 'v6-ba-sec7', 'ping menampilkan versi baru');
+  ok(call(env, 'GET', { action: 'ping' }).version === 'v6-ba-sec8', 'ping menampilkan versi baru');
 
   // 1. login lama (teks biasa) berhasil via POST dan password otomatis di-hash
   let r = call(env, 'POST', { action: 'login', username: 'AKUN1', password: 'RahasiaKu9' });
@@ -425,6 +425,31 @@ const ok = (c, m) => { console.log((c ? 'PASS ' : 'FAIL ') + m); if (!c) fails++
   r = call(e8, 'POST', { action: 'getDataLPDH', token: tk8('adm'), dapur: 'D001', tanggal: '2026-10-16' });
   const th = r.data.transaksi.find(t => t.id === 'TH1');
   ok(th && th.relawan && th.relawan.length === 2 && th.relawan[0].nama === 'Ani', 'data LPDH membawa daftar relawan transaksi honor');
+
+  // ── Kelengkapan dokumen LPDH ──
+  r = call(e8, 'POST', { action: 'saveTopupLPDH', token: tkA, id: 'V2', no_sp2d: 'SP2D-001/2026', no_kuitansi: 'KW-TU-1', bukti_url: 'https://cloud/tu1' });
+  ok(r.ok, 'akuntan melengkapi SP2D/kuitansi/link top up: ' + (r.error || ''));
+  ok(!call(e8, 'POST', { action: 'saveTopupLPDH', token: tkA, id: 'V2', bukti_url: 'cloud/x' }).ok, 'link bukti terima tanpa https ditolak');
+  ok(!call(e8, 'POST', { action: 'saveTopupLPDH', token: tk8('pic'), id: 'V2', no_sp2d: 'x' }).ok, 'PIC tidak mengisi dokumen keuangan');
+  r = call(e8, 'POST', { action: 'getDataLPDH', token: tk8('adm'), dapur: 'D001', tanggal: '2026-10-10' });
+  ok(r.data.topups[0].no_sp2d === 'SP2D-001/2026' && r.data.komponen.topups[0].no_kuitansi === 'KW-TU-1' && r.data.komponen.topups[0].bukti_url === 'https://cloud/tu1', 'data LPDH membawa dokumen top up');
+  r = call(e8, 'POST', { action: 'addVATopup', token: tkA, dapur: 'D001', tanggal: '2026-10-20', jumlah: 500000, keterangan: 'TU 3', no_sp2d: 'SP2D-002', no_kuitansi: '01-2026', bukti_url: 'https://cloud/tu3' });
+  const vRow = B8.VATopup[B8.VATopup.length - 1];
+  ok(r.ok && vRow[8] === 'SP2D-002' && vRow[9] === '01-2026' && vRow[10] === 'https://cloud/tu3', 'top up baru langsung menyimpan SP2D, kuitansi (sebagai teks), link');
+  B8.Transaksi.push(tx('TI1', '2026-10-17', 'INS-1', 'Fasilitas SPPG', 'Sewa Gedung', 'Insentif 1-10 Okt', 5000000));
+  r = call(e8, 'POST', { action: 'saveInsentifLPDH', token: tkA, transaksi_id: 'TI1', no_ppk: 'PPK/INS/2026/0101', nilai_ppk: 5000000, no_kuitansi: 'KW-INS-1', kuitansi_ttd: 'Ya', ref_va: 'TRX-1' });
+  ok(r.ok, 'akuntan mengisi pernyataan PPK & kuitansi insentif: ' + (r.error || ''));
+  ok(!call(e8, 'POST', { action: 'saveInsentifLPDH', token: tkA, transaksi_id: 'T5', no_ppk: 'x' }).ok, 'transaksi bukan insentif ditolak');
+  r = call(e8, 'POST', { action: 'getDataLPDH', token: tk8('adm'), dapur: 'D001', tanggal: '2026-10-17' });
+  const ti = r.data.transaksi.find(t => t.id === 'TI1');
+  ok(ti.insentif.no_ppk === 'PPK/INS/2026/0101' && ti.insentif.nilai_ppk === 5000000 && ti.insentif.kuitansi_ttd === 'Ya', 'data LPDH membawa pernyataan PPK insentif');
+  ok(r.data.saldoRekening === null, 'saldo rekening belum diisi → kosong (tidak diisi otomatis dari aplikasi)');
+  r = call(e8, 'POST', { action: 'saveSaldoLPDH', token: tkA, tanggal: '2026-10-17', saldo_va: 1234567, penjelasan: 'kas kecil di tangan' });
+  ok(r.ok, 'akuntan menyimpan saldo VA rekening: ' + (r.error || ''));
+  ok(!call(e8, 'POST', { action: 'saveSaldoLPDH', token: tkA, tanggal: '2026-10-17', saldo_va: '' }).ok, 'saldo kosong ditolak');
+  call(e8, 'POST', { action: 'saveSaldoLPDH', token: tkA, tanggal: '2026-10-17', saldo_va: 1234000, penjelasan: '' });
+  r = call(e8, 'POST', { action: 'getDataLPDH', token: tk8('adm'), dapur: 'D001', tanggal: '2026-10-17' });
+  ok(r.data.saldoRekening.saldo_va === 1234000 && B8.LPDHSaldo.length === 2, 'saldo rekening tersimpan & diperbarui (tidak dobel)');
 
   ok(e8.teksSel('01-2026') === "'01-2026" && e8.teksSel('1/10') === "'1/10" && e8.teksSel('NT-001') === 'NT-001' && e8.teksSel('') === '', 'nomor bukti mirip tanggal/angka disimpan sebagai teks');
 

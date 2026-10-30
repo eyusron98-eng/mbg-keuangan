@@ -20,7 +20,8 @@ function dataUji(nOp) {
       rincian: [{ nama: 'Wortel', kategori: 'Sayuran', volume: 10, satuan: 'kg', harga: 15000 }, { nama: 'Kol', kategori: 'Sayuran', volume: 12.5, satuan: 'kg', harga: 20000 }] }),
     tx(3, 'Operasional', 'Gaji/honor relawan pekerja SPPG', 90000, { sumber: 'Petty Cash',
       relawan: [{ nama: 'Ani', tugas: 'Juru masak', hari: 1, upah: 50000, metode: 'Tunai' }, { nama: 'Budi', tugas: 'Pengemudi', hari: 1, upah: 40000, metode: 'Transfer' }] }),
-    tx(4, 'Fasilitas SPPG', 'Sewa Gedung', 300000), tx(5, 'Fasilitas SPPG', 'Sewa Gedung', 200000)];
+    tx(4, 'Fasilitas SPPG', 'Sewa Gedung', 300000, { insentif: { no_ppk: 'PPK/1', nilai_ppk: 300000, no_kuitansi: 'KW-1', kuitansi_ttd: 'Ya', ref_va: 'TRX-1' } }),
+    tx(5, 'Fasilitas SPPG', 'Sewa Gedung', 200000, { insentif: { no_ppk: 'PPK/2', nilai_ppk: 200000, no_kuitansi: 'KW-2', kuitansi_ttd: 'Ya', ref_va: 'TRX-2' } })];
   for (let i = 0; i < nOp; i++) t.push(tx(10 + i, 'Operasional', KAT_OPS[i % KAT_OPS.length], 10000));
   return { dapur: { id: 'D004', nama: 'SPPG Cipaku 02', kode: 'CPK02' }, tanggal: '2026-10-28', saldoAwal: 10000000,
     identitas: { id_sppg: '32.04.01.0001', desa: 'Cipaku', kecamatan: 'Paseh', kabupaten: 'Kabupaten Bandung', provinsi: 'Jawa Barat', yayasan: 'Koperasi ISS',
@@ -29,7 +30,9 @@ function dataUji(nOp) {
         { kode: 'PTK', target: 40, distribusi: 40, diterima: 40, tidak: 0, alasan: '', bnba: 'Ya', bast: 'BAST-PTK', link: 'https://cloud/bastptk' }],
       produksi: { total: 696, organoleptik: 3, sampel: 3, tidak_terdistribusi: 0, buffer: 0 },
       syarat: { kontaminasi: 'Tidak', fatal: 'Tidak', suspend: 'Tidak', verifikasi: 'Ya', sipgn: 'Ya' } },
-    transaksi: t, komponen: { awal: [6000000, 3000000, 1000000], topups: [{ tanggal: '2026-10-28', jumlah: 1000000, keterangan: 'TU-1', bagi: [700000, 200000, 100000] }],
+    saldoRekening: { saldo_va: 9060000, penjelasan: '' },
+    transaksi: t, komponen: { awal: [6000000, 3000000, 1000000], topups: [{ tanggal: '2026-10-28', jumlah: 1000000, keterangan: 'TU-1', bagi: [700000, 200000, 100000],
+      no_sp2d: 'SP2D-9', no_kuitansi: 'KW-TU-9', bukti_url: 'https://cloud/tu9' }],
       geser: [{ dari: 1, ke: 0, jumlah: 50000 }], nama: ['Bahan Baku', 'Operasional', 'Insentif'] } };
 }
 
@@ -53,11 +56,12 @@ function dataUji(nOp) {
 
   const wb = new ExcelJS.Workbook(); await wb.xlsx.readFile(TPL);
   const d = dataUji(35);
-  const r = L.isiLPDH(wb, d, {});
+  const r = L.isiLPDH(wb, d, { waktu: new Date(2026, 9, 29, 5, 30) });
   const v = (s, a) => { const x = wb.getWorksheet(s).getCell(a).value; return x && x.formula ? '=' : x; };
   ok(v('Identitas', 'B7') === 'SPPG Cipaku 02' && v('Identitas', 'B6') === '32.04.01.0001' && v('Identitas', 'D36') === '3204000000000001', 'identitas & NIK terisi (NIK sebagai teks)');
   ok(v('Identitas', 'B18') === 'HPE' && v('Identitas', 'B19') === 3, 'status hari & HPE ke- terisi');
-  ok(v('Identitas', 'F36') === null && v('Identitas', 'B25') === null, 'tanda tangan & waktu unggah dikosongkan (diisi manual)');
+  ok(v('Identitas', 'F36') === null, 'kolom "sudah tanda tangan" dikosongkan (diisi setelah ttd)');
+  ok(v('Identitas', 'B25') instanceof Date && v('Identitas', 'B25').toISOString().slice(0, 10) === '2026-10-29' && Math.abs(v('Identitas', 'B26') - 330 / 1440) < 1e-9, 'tanggal & jam unggah = waktu LPDH dibuat');
   ok(v('A_PM', 'E6') === null && v('A_PM', 'M6') === null && v('A_PM', 'E10') === null, 'data contoh A_PM dibersihkan');
   ok(v('Ref', 'A64') === null, 'contoh indeks kemahalan di Ref dibersihkan');
   ok(v('B_BahanBaku', 'D6') === 'Uraian 1' && v('B_BahanBaku', 'G6') === 'nota' && v('B_BahanBaku', 'J6') === 'Toko 1', 'nota tanpa rincian (data lama): 1 baris per nota');
@@ -81,9 +85,11 @@ function dataUji(nOp) {
   ok(v('D_Insentif', 'B6') === 'Tidak' && v('D_Insentif', 'B9') === 'Ya' && v('D_Insentif', 'B10') === 'Ya', 'syarat insentif terisi dari data harian');
   ok(v('D_Insentif', 'C21') === 500000 && v('D_Insentif', 'C23') === 'NB-4; NB-5', 'dua pembayaran insentif Yayasan hari itu dijumlah');
   ok(v('E_Saldo', 'B5') === 6000000 && v('E_Saldo', 'B6') === 3000000 && v('E_Saldo', 'B7') === 1000000, 'saldo awal komponen dari server');
-  ok(v('E_Saldo', 'E19') === 700000 && v('E_Saldo', 'F19') === 200000 && v('E_Saldo', 'G19') === 100000 && v('E_Saldo', 'D19') === 'TU-1', 'top up per komponen dari server');
+  ok(v('E_Saldo', 'E19') === 700000 && v('E_Saldo', 'F19') === 200000 && v('E_Saldo', 'G19') === 100000, 'top up per komponen dari server');
   ok(/pergeseran Rp 50\.000 dari Operasional/.test(v('E_Saldo', 'F5')) && /ke Bahan Baku/.test(v('E_Saldo', 'F6')) && /PPK/.test(v('E_Saldo', 'F5')), 'pergeseran antar komponen dicatat di keterangan saldo');
-  ok(v('E_Saldo', 'E10') === null, 'saldo VA mutasi rekening dikosongkan (diisi manual)');
+  ok(v('E_Saldo', 'E10') === 9060000, 'saldo VA rekening dari isian akuntan');
+  ok(v('E_Saldo', 'D19') === 'SP2D-9' && v('E_Saldo', 'I19') === 'KW-TU-9' && v('E_Saldo', 'J19') === 'https://cloud/tu9', 'top up: SP2D, kuitansi, link bukti terima');
+  ok(v('D_Insentif', 'C19') === 'PPK/1; PPK/2' && v('D_Insentif', 'C20') === 500000 && v('D_Insentif', 'C24') === 'KW-1; KW-2' && v('D_Insentif', 'C25') === 'Ya' && v('D_Insentif', 'C27') === 'TRX-1; TRX-2', 'insentif: pernyataan PPK, kuitansi, ttd, referensi VA');
   let sisa = 0;
   wb.eachSheet(ws => ws.eachRow(row => row.eachCell(c => { const x = c.value; if (x && typeof x === 'object' && (x.formula || x.sharedFormula) && 'result' in x) sisa++; })));
   ok(sisa === 0, 'tidak ada hasil rumus lama (angka contoh) yang terbawa: ' + sisa);
@@ -110,13 +116,16 @@ function dataUji(nOp) {
     ok(g('B_BahanBaku', 'I46') === 1000000 && g('B_BahanBaku', 'N6') === 'Sesuai' && g('B_BahanBaku', 'M7') === 'Unik' && g('B_BahanBaku', 'M8') === 'Unik', 'total bahan baku (rincian = nominal) & nomor bersufiks unik');
     ok(g('C1_Relawan', 'H66') === 90000 && g('C1_Relawan', 'N6') === 'Lengkap' && g('C1_Relawan', 'L7') === 'Unik', 'C1: total relawan = transaksi; bukti per relawan lengkap & unik');
     ok(g('A_PM', 'J7') === 0 && g('A_PM', 'N7') === 'Terlampir' && g('A_PM', 'O7') === 640 && g('A_PM', 'C47') === 640 + 40 + 3 + 3, 'A_PM: distribusi seimbang, BAST terlampir, PM dihitung (' + ['J7', 'N7', 'O7', 'C44', 'C45', 'C46', 'C47'].map(a => a + '=' + g('A_PM', a)).join(' ') + ')');
-    ok(g('D_Insentif', 'C11') === 'Ya', 'syarat insentif terpenuhi');
+    ok(g('D_Insentif', 'C11') === 'Ya' && g('D_Insentif', 'C31') === 0 && g('D_Insentif', 'C34') === 'Lengkap', 'syarat insentif terpenuhi; pembayaran = pernyataan PPK; bukti lengkap');
+    ok(g('Identitas', 'B28') === 'Ya', 'unggah tepat waktu (05:30 H+1)');
+    ok(g('E_Saldo', 'M19') === 'Lengkap' && g('I_RegisterBukti', 'C129') === 0, 'top up berbukti lengkap; tidak ada transaksi tanpa link');
+    ok(Math.abs(g('E_Saldo', 'E11')) < 1, 'saldo komponen = saldo VA rekening (' + g('E_Saldo', 'E11') + ')');
     ok(g('C_Operasional', 'H6') === 90000 && g('C_Operasional', 'H22') === 90000 + 350000, 'operasional = honor relawan (C1) + semua 35 transaksi');
     ok(g('C_Operasional', 'K13') === 'Unik' && g('C_Operasional', 'L13') === 'Sesuai', 'baris gabungan lolos cek nomor & tanggal');
     ok(g('E_Saldo', 'E5') >= 0 && g('E_Saldo', 'E6') >= 0 && g('E_Saldo', 'E7') >= 0, 'saldo akhir tiap komponen tidak negatif');
     ok(g('E_Saldo', 'E8') === 10000000 + 1000000 - (1000000 + 440000 + 500000), 'saldo akhir total = awal + top up − pengeluaran');
     ok(g('Identitas', 'E36') === 'Valid' && g('Identitas', 'E37') === 'Valid', 'NIK/NIP lolos validasi rumus');
-    ok(g('I_RegisterBukti', 'C127') === 0 && g('I_RegisterBukti', 'C129') === 1, 'register: tidak ada duplikat; satu-satunya tanpa link = bukti terima top up (diisi manual)');
+    ok(g('I_RegisterBukti', 'C127') === 0, 'register: tidak ada nomor duplikat');
     ok(String(g('J_Pengesahan', 'D5')).includes('SPPG Cipaku 02') && g('J_Pengesahan', 'B33') === 'Peng', 'lembar pengesahan terisi');
   }
   console.log(fails ? '\n' + fails + ' GAGAL' : '\nSEMUA LULUS');

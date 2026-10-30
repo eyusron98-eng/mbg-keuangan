@@ -566,7 +566,7 @@ function PeriodeForm({ initial, carry, prefill, onClose, onSaved, session, toast
 }
 
 function TopupForm({ tipe, periode, onClose, onSaved, session, toast }) {
-  const [f, setF] = useState({ tanggal: todayISO(), jumlah: '', keterangan: '' });
+  const [f, setF] = useState({ tanggal: todayISO(), jumlah: '', keterangan: '', no_sp2d: '', no_kuitansi: '', bukti_url: '' });
   const [saving, setSaving] = useState(false);
   function set(k, v) { setF(function(p){ const n = Object.assign({}, p); n[k] = v; return n; }); }
   async function submit() {
@@ -575,7 +575,7 @@ function TopupForm({ tipe, periode, onClose, onSaved, session, toast }) {
     setSaving(true);
     const action = tipe === 'VA' ? 'addVATopup' : 'addPettyTopup';
     const res = await api(action, { role: session.user.role, user_id: session.user.id, dapur: session.user.dapur,
-      tanggal: f.tanggal, jumlah: f.jumlah, keterangan: f.keterangan });
+      tanggal: f.tanggal, jumlah: f.jumlah, keterangan: f.keterangan, no_sp2d: f.no_sp2d, no_kuitansi: f.no_kuitansi, bukti_url: f.bukti_url.trim() });
     setSaving(false);
     if (res.ok) { toast('Top-up tersimpan'); onSaved(); onClose(); }
     else toast(res.error || 'Gagal menyimpan', 'error');
@@ -596,6 +596,14 @@ function TopupForm({ tipe, periode, onClose, onSaved, session, toast }) {
       <Field label="Keterangan" hint={tipe==='VA' ? 'cth. Transfer dari yayasan' : 'cth. Tarik tunai untuk kas operasional'}>
         <input value={f.keterangan} onChange={function(e){set('keterangan', e.target.value);}} style={inputStyle}/>
       </Field>
+      {!isPetty && <>
+        <div className="text-xs mb-2" style={{ color: COLORS.muted }}>Untuk LPDH (boleh dilengkapi nanti di menu LPDH Harian):</div>
+        <div className="grid grid-cols-2 gap-x-2">
+          <Field label="No. SP2D / referensi PPK"><input value={f.no_sp2d} onChange={function(e){set('no_sp2d', e.target.value);}} style={inputStyle}/></Field>
+          <Field label="No. kuitansi / bukti terima"><input value={f.no_kuitansi} onChange={function(e){set('no_kuitansi', e.target.value);}} style={inputStyle}/></Field>
+        </div>
+        <Field label="Link bukti terima (Cloud SIPGN)"><input value={f.bukti_url} inputMode="url" placeholder="https://…" onChange={function(e){set('bukti_url', e.target.value);}} style={inputStyle}/></Field>
+      </>}
       <div className="flex gap-2"><Btn kind="ghost" onClick={onClose}>Batal</Btn><Btn onClick={submit} disabled={saving}>{saving ? I.spinner : I.check} Simpan</Btn></div>
     </Modal>
   );
@@ -1485,9 +1493,16 @@ function isiLPDH(wb, data, opsi) {
   // Insentif Mitra/Yayasan: satu slot di template → beberapa pembayaran hari itu dijumlah
   const ins = grup.ins;
   if (ins.length) {
+    const ki = ins.map(function(t) { return t.insentif || {}; });
+    set(D, 'C19', lpdhGabung(ki.map(function(x) { return x.no_ppk; }), '; '));
+    const adaNilai = ki.every(function(x) { return x.nilai_ppk !== '' && x.nilai_ppk != null; });
+    set(D, 'C20', adaNilai ? ki.reduce(function(s2, x) { return s2 + Number(x.nilai_ppk); }, 0) : null);
     set(D, 'C21', jml(ins)); set(D, 'C22', tgl);
     set(D, 'C23', lpdhGabung(ins.map(function(t) { return t.no_bukti; }), '; '));
+    set(D, 'C24', lpdhGabung(ki.map(function(x) { return x.no_kuitansi; }), '; '));
+    set(D, 'C25', ki.every(function(x) { return x.kuitansi_ttd === 'Ya'; }) ? 'Ya' : ki.some(function(x) { return x.kuitansi_ttd === 'Tidak'; }) ? 'Tidak' : null);
     set(D, 'C26', ins.map(function(t) { return t.bukti_url; }).filter(Boolean).join(' | '));
+    set(D, 'C27', lpdhGabung(ki.map(function(x) { return x.ref_va; }), '; '));
   }
 
   // 4. Saldo per komponen (dihitung server, bersambung dari hari ke hari)
@@ -1503,8 +1518,17 @@ function isiLPDH(wb, data, opsi) {
   const tu = (kp.topups || []).slice(0, LPDH_KAP.topup);
   (kp.topups || []).slice(LPDH_KAP.topup).forEach(function(t) { kelebihan.push({ bagian: 'topup', t: { uraian: t.keterangan, riil: t.jumlah } }); });
   tu.forEach(function(t, i) { const r = 19 + i;
-    set(E, 'C' + r, lpdhTgl(t.tanggal)); set(E, 'D' + r, t.keterangan || 'Top up VA');
-    set(E, 'E' + r, t.bagi[0]); set(E, 'F' + r, t.bagi[1]); set(E, 'G' + r, t.bagi[2]); });
+    set(E, 'C' + r, lpdhTgl(t.tanggal)); set(E, 'D' + r, t.no_sp2d || t.keterangan || 'Top up VA');
+    set(E, 'E' + r, t.bagi[0]); set(E, 'F' + r, t.bagi[1]); set(E, 'G' + r, t.bagi[2]);
+    set(E, 'I' + r, t.no_kuitansi); set(E, 'J' + r, t.bukti_url); });
+  // saldo VA menurut mutasi rekening (diketik dari rekening, bukan dihitung aplikasi) + penjelasan selisih
+  if (data.saldoRekening) { set(E, 'E10', data.saldoRekening.saldo_va); set(E, 'E12', data.saldoRekening.penjelasan); }
+  // waktu unggah = saat LPDH dibuat (opsi.waktu = Date lokal); dianggap langsung diunggah ke SIPGN
+  if (opsi.waktu) {
+    const w = opsi.waktu;
+    set(I, 'B25', new Date(Date.UTC(w.getFullYear(), w.getMonth(), w.getDate())));
+    set(I, 'B26', (w.getHours() * 60 + w.getMinutes()) / 1440);
+  }
 
   // 5. Buang hasil hitungan lama (dari data contoh) di semua rumus → Excel/Google Sheets/LibreOffice wajib menghitung ulang
   wb.eachSheet(function(ws) {
@@ -1552,6 +1576,11 @@ function LpdhPage({ session, scope, toast }) {
   const [editIdent, setEditIdent] = useState(false);
   const [editHarian, setEditHarian] = useState(false);
   const [editRelawan, setEditRelawan] = useState(null);
+  const [editTopup, setEditTopup] = useState(null);
+  const [editInsentif, setEditInsentif] = useState(null);
+  const [saldoRek, setSaldoRek] = useState({ saldo_va: '', penjelasan: '' });
+  const [simpanSaldo, setSimpanSaldo] = useState(false);
+  const bisaLengkapi = role === 'admin' || role === 'akuntan';
   const bisaIsi = role === 'admin' || role === 'akuntan' || role === 'pic';
   const [busy, setBusy] = useState(false);
   const [hasil, setHasil] = useState(null);
@@ -1564,6 +1593,7 @@ function LpdhPage({ session, scope, toast }) {
       if (!r.ok) { setData(null); setErr(r.error); return; }
       const info = lpdhInfoHari(tanggal);
       setData(r.data);
+      setSaldoRek({ saldo_va: r.data.saldoRekening && r.data.saldoRekening.saldo_va != null ? String(r.data.saldoRekening.saldo_va) : '', penjelasan: (r.data.saldoRekening && r.data.saldoRekening.penjelasan) || '' });
       setOpsi({ statusHari: info.akhirPekan ? '' : 'HPE', hpeKe: String(info.hpeKe), nomor: lpdhNomorDefault(tanggal, r.data.dapur.kode) });
     });
   }
@@ -1585,6 +1615,13 @@ function LpdhPage({ session, scope, toast }) {
   const lebih = [];
   if (nBarisBB > LPDH_KAP.bb) lebih.push(LPDH_KAP.bb + ' baris bahan (hari ini ' + nBarisBB + ')');
   if (nBarisRL > LPDH_KAP.rl) lebih.push(LPDH_KAP.rl + ' baris relawan (hari ini ' + nBarisRL + ')');
+  const saldoAkhirApp = data ? Math.round(data.saldoAwal + data.topups.reduce(function(s2, t) { return s2 + t.jumlah; }, 0) - (data.transaksi || []).reduce(function(s2, t) { return s2 + t.riil; }, 0)) : 0;
+  async function simpanSaldoRek() {
+    setSimpanSaldo(true);
+    const r = await api('saveSaldoLPDH', { dapur: dapurId, tanggal: tanggal, saldo_va: saldoRek.saldo_va, penjelasan: saldoRek.penjelasan });
+    setSimpanSaldo(false);
+    if (r.ok) { toast('Saldo rekening disimpan'); load(); } else toast(r.error, 'error');
+  }
   const bbTanpaRincian = grup.bb.filter(function(t) { return !(t.rincian || []).length; }).length;
   const sum = function(a) { return a.reduce(function(s, t) { return s + t.riil; }, 0); };
 
@@ -1596,7 +1633,7 @@ function LpdhPage({ session, scope, toast }) {
       if (!res.ok) throw new Error('template LPDH tidak ditemukan');
       const wb = new window.ExcelJS.Workbook();
       await wb.xlsx.load(await res.arrayBuffer());
-      const r = isiLPDH(wb, data, opsi);
+      const r = isiLPDH(wb, data, Object.assign({}, opsi, { waktu: new Date() }));
       const blob = new Blob([await wb.xlsx.writeBuffer()], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
       const a = document.createElement('a');
       a.href = URL.createObjectURL(blob); a.download = r.namaFile;
@@ -1662,6 +1699,33 @@ function LpdhPage({ session, scope, toast }) {
             {bisaIsi && <Btn size="sm" kind={data.harian ? 'ghost' : 'solid'} onClick={function() { setEditHarian(true); }}>{data.harian ? I.edit : I.plusSm} {data.harian ? 'Ubah' : 'Isi'}</Btn>}
           </div>
         </div>
+        <div className="mt-3 pt-3" style={{ borderTop: '1px solid ' + COLORS.line }}>
+          <div className="text-sm font-semibold" style={{ color: COLORS.ink }}>Saldo VA menurut rekening (akhir hari)</div>
+          <div className="text-xs mb-2" style={{ color: COLORS.muted }}>Ketik dari mobile banking / rekening koran — bukan dari aplikasi, agar cek PPK "saldo komponen = saldo VA" benar-benar menguji. Saldo menurut aplikasi: <b className="num">{fmt(saldoAkhirApp)}</b></div>
+          {bisaLengkapi ? <>
+            <div className="grid grid-cols-2 gap-2">
+              <RupiahInput value={saldoRek.saldo_va} onChange={function(v) { setSaldoRek(Object.assign({}, saldoRek, { saldo_va: v })); }} label="Saldo VA rekening"/>
+              <Btn onClick={simpanSaldoRek} disabled={simpanSaldo || saldoRek.saldo_va === ''}>{simpanSaldo ? I.spinner : I.check} Simpan saldo</Btn>
+            </div>
+            {saldoRek.saldo_va !== '' && Number(saldoRek.saldo_va) !== saldoAkhirApp && <div className="mt-2">
+              <div className="text-xs mb-1" style={{ color: COLORS.danger }}>Selisih {fmt(saldoAkhirApp - Number(saldoRek.saldo_va))} — wajib dijelaskan (mis. kas kecil di tangan, transfer belum masuk).</div>
+              <input value={saldoRek.penjelasan} onChange={function(e) { setSaldoRek(Object.assign({}, saldoRek, { penjelasan: e.target.value })); }} style={inputStyle} placeholder="Penjelasan selisih" aria-label="Penjelasan selisih"/>
+            </div>}
+          </> : <div className="text-sm" style={{ color: COLORS.ink }}>{data.saldoRekening ? fmt(data.saldoRekening.saldo_va) : 'Belum diisi akuntan'}</div>}
+        </div>
+        {(data.topups.length > 0 || grup.ins.length > 0) && <div className="mt-3 pt-3" style={{ borderTop: '1px solid ' + COLORS.line }}>
+          <div className="text-sm font-semibold mb-1" style={{ color: COLORS.ink }}>Dokumen top up & insentif</div>
+          {data.topups.map(function(t) { const lengkap = t.no_sp2d && t.no_kuitansi && t.bukti_url; return <div key={t.id} className="flex items-center justify-between gap-2 py-1.5 text-sm">
+            <div className="min-w-0"><div className="truncate" style={{ color: COLORS.ink }}>Top up {fmt(t.jumlah)}</div>
+              <div className="text-xs" style={{ color: lengkap ? COLORS.green : '#9A6A0B' }}>{lengkap ? 'SP2D ' + t.no_sp2d + ' · kuitansi ' + t.no_kuitansi : 'SP2D / kuitansi / link bukti terima belum lengkap'}</div></div>
+            {bisaLengkapi && <Btn size="sm" kind={lengkap ? 'ghost' : 'solid'} onClick={function() { setEditTopup(t); }}>{lengkap ? 'Ubah' : 'Lengkapi'}</Btn>}
+          </div>; })}
+          {grup.ins.map(function(t) { const k = t.insentif || {}; const lengkap = k.no_ppk && k.nilai_ppk !== '' && k.nilai_ppk != null && k.no_kuitansi && k.kuitansi_ttd; return <div key={t.id} className="flex items-center justify-between gap-2 py-1.5 text-sm">
+            <div className="min-w-0"><div className="truncate" style={{ color: COLORS.ink }}>Insentif {fmt(t.riil)}</div>
+              <div className="text-xs" style={{ color: lengkap ? COLORS.green : '#9A6A0B' }}>{lengkap ? 'Pernyataan PPK ' + k.no_ppk + ' · ' + fmt(k.nilai_ppk) : 'Pernyataan PPK / kuitansi belum lengkap'}</div></div>
+            {bisaLengkapi && <Btn size="sm" kind={lengkap ? 'ghost' : 'solid'} onClick={function() { setEditInsentif(t); }}>{lengkap ? 'Ubah' : 'Lengkapi'}</Btn>}
+          </div>; })}
+        </div>}
         {grup.rl.length > 0 && <div className="mt-3 pt-3" style={{ borderTop: '1px solid ' + COLORS.line }}>
           <div className="text-sm font-semibold mb-1" style={{ color: COLORS.ink }}>Daftar penerima honor relawan</div>
           {grup.rl.map(function(t) { return <div key={t.id} className="flex items-center justify-between gap-2 py-1.5 text-sm">
@@ -1686,15 +1750,19 @@ function LpdhPage({ session, scope, toast }) {
       </div>}
       <ul className="text-sm list-disc pl-5 space-y-1" style={{ color: COLORS.ink }}>
         {!hasil.adaHarian && <li><b>A_PM</b> & syarat insentif: belum diisi PIC untuk tanggal ini.</li>}
-        <li><b>D_Insentif</b>: nomor & nilai pernyataan PPK, nomor kuitansi.</li>
-        <li><b>E_Saldo</b>: saldo VA menurut mutasi rekening (E10), nomor SP2D & kuitansi top up.</li>
-        <li><b>Identitas</b>: tanggal & jam unggah, kolom "Sudah tanda tangan".</li>
+        <li><b>Identitas</b>: kolom "Sudah tanda tangan" (Ya) setelah lembar J_Pengesahan ditandatangani.</li>
+        <li>Tanggal & jam unggah terisi waktu unduh ({new Date().toTimeString().slice(0, 5)}) — unggah ke SIPGN segera, atau ubah bila diunggah belakangan.</li>
       </ul>
       <div className="text-xs mt-2" style={{ color: COLORS.muted }}>Operasional digabung per kategori ke 15 baris tetap template. Saldo per komponen bersambung dari hari sebelumnya: top up menutup komponen yang kurang lebih dulu, sisanya sesuai porsi pengeluaran hari itu. Angka memakai nilai riil (uang keluar).</div>
     </Card>}
 
     {editIdent && <LpdhIdentForm dapurId={dapurId} initial={id} toast={toast} onClose={function() { setEditIdent(false); }} onSaved={load}/>}
     {editHarian && <LpdhHarianForm dapurId={dapurId} tanggal={tanggal} toast={toast} onClose={function() { setEditHarian(false); }} onSaved={load}/>}
+    {editTopup && <LpdhDokForm judul={'Top up ' + fmt(editTopup.jumlah)} aksi="saveTopupLPDH" kunci={{ id: editTopup.id }} toast={toast} onClose={function() { setEditTopup(null); }} onSaved={load}
+      fields={[['no_sp2d', 'No. SP2D / referensi top up PPK'], ['no_kuitansi', 'No. kuitansi / bukti terima'], ['bukti_url', 'Link bukti terima (https://…)', 'url']]} awal={editTopup}/>}
+    {editInsentif && <LpdhDokForm judul={'Insentif ' + fmt(editInsentif.riil)} aksi="saveInsentifLPDH" kunci={{ transaksi_id: editInsentif.id }} toast={toast} onClose={function() { setEditInsentif(null); }} onSaved={load}
+      fields={[['no_ppk', 'Nomor pernyataan besaran insentif dari PPK'], ['nilai_ppk', 'Nilai pernyataan PPK', 'rupiah'], ['no_kuitansi', 'Nomor kuitansi'],
+        ['kuitansi_ttd', 'Kuitansi ditandatangani Mitra?', 'yatidak'], ['ref_va', 'Referensi transaksi VA (maker Mitra, approver Kepala SPPG)']]} awal={editInsentif.insentif || {}}/>}
     {editRelawan && <RelawanForm tx={editRelawan} toast={toast} onClose={function() { setEditRelawan(null); }} onSaved={load}/>}
   </div>);
 }
@@ -1809,6 +1877,27 @@ function RelawanForm({ tx, toast, onClose, onSaved }) {
       {selisih !== 0 && <div className="text-xs mt-1" style={{ color: COLORS.danger }}>Selisih {fmt(selisih)} dari nilai transaksi — harus sama sebelum disimpan.</div>}
       <div className="flex gap-2 mt-2"><Btn kind="ghost" onClick={onClose}>Batal</Btn><Btn onClick={simpan} disabled={saving || selisih !== 0 || !rows.length}>{saving ? I.spinner : I.check} Simpan</Btn></div>
     </div>
+  </Modal>;
+}
+
+// Formulir kecil kelengkapan dokumen (top up / insentif)
+function LpdhDokForm({ judul, aksi, kunci, fields, awal, toast, onClose, onSaved }) {
+  const [f, setF] = useState(fields.reduce(function(o, x) { o[x[0]] = awal[x[0]] == null ? '' : String(awal[x[0]]); return o; }, {}));
+  const [saving, setSaving] = useState(false);
+  async function simpan() {
+    setSaving(true);
+    const r = await apiPost(aksi, Object.assign({}, kunci, f));
+    setSaving(false);
+    if (r.ok) { toast('Tersimpan'); onSaved(); onClose(); } else toast(r.error, 'error');
+  }
+  return <Modal title={judul} onClose={onClose}>
+    {fields.map(function(x) { const set = function(v) { const o = {}; o[x[0]] = v; setF(Object.assign({}, f, o)); };
+      return <Field key={x[0]} label={x[1]}>
+        {x[2] === 'rupiah' ? <RupiahInput value={f[x[0]]} onChange={set} label={x[1]}/>
+          : x[2] === 'yatidak' ? <select value={f[x[0]]} onChange={function(e) { set(e.target.value); }} style={inputStyle} aria-label={x[1]}><option value="">—</option><option>Ya</option><option>Tidak</option></select>
+          : <input value={f[x[0]]} inputMode={x[2] === 'url' ? 'url' : 'text'} onChange={function(e) { set(e.target.value); }} style={inputStyle} aria-label={x[1]}/>}
+      </Field>; })}
+    <div className="flex gap-2"><Btn kind="ghost" onClick={onClose}>Batal</Btn><Btn onClick={simpan} disabled={saving}>{saving ? I.spinner : I.check} Simpan</Btn></div>
   </Modal>;
 }
 
