@@ -239,6 +239,27 @@ async function isiBahanBaku(page, uraian, volume, harga) {
     assert(srv.log.relawan.length === 1 && srv.log.relawan[0].hari === 15, 'daftar relawan terkirim salah');
   });
 
+  all &= await run('Admin: mode uji peran (bertindak sebagai akuntan) lalu kembali', { role: 'admin' }, async (page, srv) => {
+    await login(page, 'siti');
+    await page.waitForSelector('header');
+    assert(await page.isVisible('nav:visible >> text=Pengguna'), 'menu admin tidak tampil');
+    await page.click('[aria-label="Mode peran"]');
+    await page.selectOption('[aria-label="Peran uji"]', 'akuntan');
+    await page.selectOption('[aria-label="Dapur uji"]', 'D1');
+    await page.click('.sheet >> text=Mulai');
+    await page.waitForSelector('text=Mode uji: bertindak sebagai');
+    await page.waitForSelector('nav:visible >> text=Realisasi');
+    assert(!(await page.isVisible('nav:visible >> text=Pengguna')), 'menu admin masih tampil saat sebagai akuntan');
+    const n0 = srv.log.urls.length + srv.log.posts.length;
+    await page.click('nav:visible >> text=Riwayat');
+    await page.waitForTimeout(800);
+    const baru = srv.log.urls.slice(-5).concat(srv.log.posts.slice(-5).map(p => JSON.stringify(p.params)));
+    assert(srv.log.urls.length + srv.log.posts.length > n0 && baru.some(u => /sebagai[=":]+"?akuntan/.test(u) && /sebagai_dapur[=":]+"?D1/.test(u)), 'permintaan tidak membawa mode peran: ' + baru.join(' || '));
+    await page.click('text=Kembali ke Admin');
+    await page.waitForSelector('nav:visible >> text=Pengguna');
+    assert(!(await page.isVisible('text=Mode uji: bertindak sebagai')), 'spanduk mode uji masih tampil');
+  });
+
   all &= await run('Setup: kartu sinkron saldo + form periode', { role: 'akuntan' }, async (page) => {
     await login(page, 'siti');
     await page.waitForSelector('header');

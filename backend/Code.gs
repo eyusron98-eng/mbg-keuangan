@@ -126,7 +126,7 @@ function handleRequest(e, method) {
     }
     let result;
     switch (action) {
-      case 'ping':              result = { ok: true, time: new Date().toISOString(), version: 'v6-ba-sec8' }; break;
+      case 'ping':              result = { ok: true, time: new Date().toISOString(), version: 'v6-ba-sec9' }; break;
       case 'login':             result = login(params); break;
       case 'getPeriodeList':    result = getPeriodeList(params); break;
       case 'getActivePeriode':  result = getActivePeriode(params); break;
@@ -1129,7 +1129,19 @@ function uploadBukti(p) {
 const SESI_ERR = 'Sesi tidak valid atau kedaluwarsa. Silakan keluar lalu masuk lagi.';
 const SESI_MAX_HARI = 30;
 
+// Admin dapat "bertindak sebagai" akuntan/PIC/yayasan/asisten (untuk menguji): semua aturan peran itu berlaku penuh.
+// Hanya akun yang di server benar-benar admin yang bisa; peran & dapur pengguna lain tidak terpengaruh. Log tetap memakai ID admin.
+const PERAN_SEBAGAI = ['akuntan', 'pic', 'yayasan', 'asisten'];
 function authUser(p) {
+  const me = authUserAsli(p);
+  if (!me || me.role !== 'admin' || !p.sebagai || PERAN_SEBAGAI.indexOf(String(p.sebagai)) < 0) return me;
+  const peran = String(p.sebagai);
+  const perluDapur = peran === 'akuntan' || peran === 'pic';
+  const dapur = perluDapur ? String(p.sebagai_dapur || '') : '';
+  if (perluDapur && !dapur) return me;
+  return Object.assign({}, me, { role: peran, dapur: dapur, sebagai: true });
+}
+function authUserAsli(p) {
   const token = String(p.token || '');
   if (!token) return null;
   const cache = CacheService.getScriptCache();

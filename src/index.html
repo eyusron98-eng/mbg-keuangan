@@ -149,6 +149,8 @@ const driveThumb = url => {
 
 // Token sesi dikirim otomatis; kalau server bilang sesi tidak valid → paksa login ulang
 let AUTH_TOKEN = null;
+let ACT_AS = null;   // admin "bertindak sebagai" { role, dapur } — dikirim ke server; server hanya menerimanya dari akun admin
+function paramSebagai() { return ACT_AS ? { sebagai: ACT_AS.role, sebagai_dapur: ACT_AS.dapur || '' } : {}; }
 let ON_SESSION_INVALID = null;
 const isSesiErr = j => !!(j && j.ok === false && /Sesi tidak valid/.test(j.error || ''));
 function checkSession(j, tokenDipakai) {
@@ -174,6 +176,7 @@ async function api(action, params) {
     const url = new URL(API_URL);
     url.searchParams.set('action', action);
     if (tok && !params.token) url.searchParams.set('token', tok);
+    const sb = paramSebagai(); Object.keys(sb).forEach(function(k) { url.searchParams.set(k, sb[k]); });
     Object.keys(params).forEach(function(k) {
       if (params[k] !== undefined && params[k] !== null) {
         url.searchParams.set(k, typeof params[k] === 'object' ? JSON.stringify(params[k]) : String(params[k]));
@@ -189,7 +192,7 @@ async function apiPost(action, params) {
     try {
       const res = await fetch(API_URL, { method: 'POST', redirect: 'follow',
         headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-        body: JSON.stringify(Object.assign({ action: action, token: tok }, params)) });
+        body: JSON.stringify(Object.assign({ action: action, token: tok }, paramSebagai(), params)) });
       return await res.json();
     } catch (e) { return { ok: false, error: 'Koneksi gagal: ' + e.message }; }
   });
@@ -199,7 +202,7 @@ async function apiUpload(action, params) {
     try {
       const res = await fetch(API_URL, { method: 'POST', redirect: 'follow',
         headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-        body: JSON.stringify(Object.assign({ action: action, token: tok }, params)) });
+        body: JSON.stringify(Object.assign({ action: action, token: tok }, paramSebagai(), params)) });
       return await res.json();
     } catch (e) { return { ok: false, error: 'Upload gagal: ' + e.message }; }
   });
@@ -4655,8 +4658,44 @@ function PerubahanAdminPage({ session, dapurList, toast }) {
 // ============================================================
 //  APP SHELL
 // ============================================================
+const ACTAS_KEY = 'mbg_actas_v1';
+function loadActAs() { try { return JSON.parse(sessionStorage.getItem(ACTAS_KEY) || 'null'); } catch (e) { return null; } }
+function saveActAs(v) { try { if (v) sessionStorage.setItem(ACTAS_KEY, JSON.stringify(v)); else sessionStorage.removeItem(ACTAS_KEY); } catch (e) {} }
+const PERAN_UJI = [['akuntan', 'Akuntan', true], ['pic', 'PIC Dapur', true], ['yayasan', 'Yayasan', false], ['asisten', 'Asisten Admin', false]];
+
+function ModePeranModal({ dapurList, nilai, onPilih, onClose }) {
+  const [peran, setPeran] = useState(nilai ? nilai.role : 'akuntan');
+  const [dapur, setDapur] = useState(nilai ? nilai.dapur : '');
+  const perluDapur = (PERAN_UJI.find(function(x) { return x[0] === peran; }) || [])[2];
+  return <Modal title="Bertindak sebagai (mode uji admin)" onClose={onClose}>
+    <div className="text-sm rounded-lg p-2.5 mb-3" style={{ background: '#FBF3E2', color: '#7A5408' }}>
+      Aplikasi & server memperlakukan Anda persis seperti peran yang dipilih. <b>Data yang dibuat masuk ke data asli</b> — sebaiknya pakai dapur uji.</div>
+    <Field label="Peran">
+      <select value={peran} onChange={function(e) { setPeran(e.target.value); }} style={inputStyle} aria-label="Peran uji">
+        {PERAN_UJI.map(function(x) { return <option key={x[0]} value={x[0]}>{x[1]}</option>; })}
+      </select>
+    </Field>
+    {perluDapur && <Field label="Dapur">
+      <select value={dapur} onChange={function(e) { setDapur(e.target.value); }} style={inputStyle} aria-label="Dapur uji">
+        <option value="">Pilih dapur…</option>
+        {dapurList.map(function(d) { return <option key={d.id} value={d.id}>{d.nama}</option>; })}
+      </select>
+    </Field>}
+    <div className="flex gap-2 flex-wrap">
+      {nilai && <Btn kind="ghost" onClick={function() { onPilih(null); }}>Kembali ke Admin</Btn>}
+      <Btn onClick={function() { onPilih({ role: peran, dapur: perluDapur ? dapur : '' }); }} disabled={perluDapur && !dapur}>{I.check} Mulai</Btn>
+    </div>
+  </Modal>;
+}
+
 function App() {
-  const [session, setSession] = useState(loadSession);
+  const [authSession, setSession] = useState(loadSession);
+  const [actAs, setActAsState] = useState(loadActAs);
+  const [modePeran, setModePeran] = useState(false);
+  const isAdminAsli = !!(authSession && authSession.user.role === 'admin');
+  const aktifSebagai = isAdminAsli && actAs ? actAs : null;
+  ACT_AS = aktifSebagai;
+  const session = aktifSebagai ? Object.assign({}, authSession, { user: Object.assign({}, authSession.user, { role: aktifSebagai.role, dapur: aktifSebagai.dapur || '' }) }) : authSession;
   const [view, setView] = useState('dash');
   const [scope, setScope] = useState('ALL');
   const [dapurList, setDapurList] = useState([]);
@@ -4664,7 +4703,8 @@ function App() {
   const [refreshKey, setRefreshKey] = useState(0);
 
   function toast(msg, type) { setToastData({ msg: msg, type: type || 'ok' }); }
-  AUTH_TOKEN = session ? session.token : null;
+  AUTH_TOKEN = authSession ? authSession.token : null;
+  function setActAs(v) { saveActAs(v); setActAsState(v); setView('dash'); setRefreshKey(function(k) { return k + 1; }); }
   ON_SESSION_INVALID = function(msg) { clearSession(); setSession(null); toast(msg || 'Sesi berakhir, silakan masuk lagi', 'error'); };
 
   useEffect(function() {
@@ -4672,7 +4712,7 @@ function App() {
       setScope(session.user.dapur || 'ALL');
       api('getDapur').then(function(r){ if (r.ok) setDapurList(r.data); });
     }
-  }, [session]);
+  }, [authSession, actAs]);
 
   if (!session) return (<>
     <Login onLogin={function(s){ saveSession(s); setSession(s); setView('dash'); }} toast={toast} />
@@ -4741,10 +4781,10 @@ function App() {
   const canPickScope = role === 'yayasan' || role === 'admin';
   if (navItems.length && !navItems.some(function(n){ return n[0] === view; })) setTimeout(function(){ setView(navItems[0][0]); }, 0);
   const effScope = canPickScope ? scope : session.user.dapur;
-  function logout() { clearSession(); setSession(null); }
+  function logout() { saveActAs(null); setActAsState(null); clearSession(); setSession(null); }
 
   function onProfileUpdated(patch) {
-    const newSession = Object.assign({}, session, { user: Object.assign({}, session.user, patch) });
+    const newSession = Object.assign({}, authSession, { user: Object.assign({}, authSession.user, patch) });
     saveSession(newSession); setSession(newSession);
   }
 
@@ -4756,7 +4796,7 @@ function App() {
           <div className="rounded-lg flex items-center justify-center shrink-0" style={{ width: 32, height: 32, background: COLORS.green, color: '#fff' }}>{I.wallet}</div>
           <div className="min-w-0">
             <div className="font-bold text-sm leading-tight truncate" style={{ color: COLORS.ink }}>Keuangan MBG</div>
-            <div className="text-[11px] leading-tight truncate" style={{ color: COLORS.muted }}>{session.user.nama} · {session.user.role}</div>
+            <div className="text-[11px] leading-tight truncate" style={{ color: COLORS.muted }}>{session.user.nama} · {aktifSebagai ? 'admin → ' + session.user.role : session.user.role}</div>
           </div>
         </div>
         <div className="flex items-center gap-2 shrink-0">
@@ -4767,10 +4807,20 @@ function App() {
               {dapurList.map(function(d){ return <option key={d.id} value={d.id}>{d.nama}</option>; })}
             </select>
           )}
+          {isAdminAsli && <button onClick={function() { setModePeran(true); }} title="Bertindak sebagai peran lain (uji)" aria-label="Mode peran"
+            className="text-xs font-semibold rounded-lg px-2.5 py-2 shrink-0" style={{ color: aktifSebagai ? '#fff' : COLORS.blue, background: aktifSebagai ? COLORS.amber : 'transparent', border: '1px solid ' + (aktifSebagai ? COLORS.amber : COLORS.line) }}>
+            {aktifSebagai ? (PERAN_UJI.find(function(x) { return x[0] === aktifSebagai.role; }) || [0, aktifSebagai.role])[1] : 'Uji peran'}</button>}
           <button onClick={logout} title="Keluar" className="inline-flex items-center gap-1.5 text-sm rounded-lg px-2.5 py-2 shrink-0"
             style={{ color: COLORS.muted, border: '1px solid ' + COLORS.line }}>{I.logout} <span className="hidden lg:inline">Keluar</span></button>
         </div>
       </header>
+
+      {aktifSebagai && <div className="no-print flex items-center justify-between gap-2 px-3 sm:px-6 py-2 text-xs" style={{ background: '#FBF3E2', color: '#7A5408', borderBottom: '1px solid #EAD9B0' }}>
+        <span>Mode uji: bertindak sebagai <b>{(PERAN_UJI.find(function(x) { return x[0] === aktifSebagai.role; }) || [0, aktifSebagai.role])[1]}</b>
+          {aktifSebagai.dapur ? ' · ' + ((dapurList.find(function(d) { return d.id === aktifSebagai.dapur; }) || {}).nama || aktifSebagai.dapur) : ''}. Data yang dibuat masuk ke data asli.</span>
+        <button onClick={function() { setActAs(null); }} className="font-semibold underline shrink-0">Kembali ke Admin</button>
+      </div>}
+      {modePeran && <ModePeranModal dapurList={dapurList} nilai={aktifSebagai} onClose={function() { setModePeran(false); }} onPilih={function(v) { setModePeran(false); setActAs(v); }}/>}
 
       <div className="flex flex-1">
         <nav className="hidden md:flex flex-col gap-1 p-3 w-56 shrink-0 no-print" style={{ borderRight: '1px solid ' + COLORS.line }}>

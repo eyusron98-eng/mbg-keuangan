@@ -199,6 +199,13 @@ try {
     return m ? 'https://drive.google.com/thumbnail?id=' + m[1] + '&sz=w1000' : url;
   };
   let AUTH_TOKEN = null;
+  let ACT_AS = null;
+  function paramSebagai() {
+    return ACT_AS ? {
+      sebagai: ACT_AS.role,
+      sebagai_dapur: ACT_AS.dapur || ''
+    } : {};
+  }
   let ON_SESSION_INVALID = null;
   const isSesiErr = j => !!(j && j.ok === false && /Sesi tidak valid/.test(j.error || ''));
   function checkSession(j, tokenDipakai) {
@@ -222,6 +229,10 @@ try {
       const url = new URL(API_URL);
       url.searchParams.set('action', action);
       if (tok && !params.token) url.searchParams.set('token', tok);
+      const sb = paramSebagai();
+      Object.keys(sb).forEach(function (k) {
+        url.searchParams.set(k, sb[k]);
+      });
       Object.keys(params).forEach(function (k) {
         if (params[k] !== undefined && params[k] !== null) {
           url.searchParams.set(k, typeof params[k] === 'object' ? JSON.stringify(params[k]) : String(params[k]));
@@ -253,7 +264,7 @@ try {
           body: JSON.stringify(Object.assign({
             action: action,
             token: tok
-          }, params))
+          }, paramSebagai(), params))
         });
         return await res.json();
       } catch (e) {
@@ -276,7 +287,7 @@ try {
           body: JSON.stringify(Object.assign({
             action: action,
             token: tok
-          }, params))
+          }, paramSebagai(), params))
         });
         return await res.json();
       } catch (e) {
@@ -11208,8 +11219,100 @@ try {
       onClick: decide
     }, saving ? I.spinner : I.check, " ", act.status === 'DISETUJUI' ? 'Setujui' : 'Tolak'))));
   }
+  const ACTAS_KEY = 'mbg_actas_v1';
+  function loadActAs() {
+    try {
+      return JSON.parse(sessionStorage.getItem(ACTAS_KEY) || 'null');
+    } catch (e) {
+      return null;
+    }
+  }
+  function saveActAs(v) {
+    try {
+      if (v) sessionStorage.setItem(ACTAS_KEY, JSON.stringify(v));else sessionStorage.removeItem(ACTAS_KEY);
+    } catch (e) {}
+  }
+  const PERAN_UJI = [['akuntan', 'Akuntan', true], ['pic', 'PIC Dapur', true], ['yayasan', 'Yayasan', false], ['asisten', 'Asisten Admin', false]];
+  function ModePeranModal({
+    dapurList,
+    nilai,
+    onPilih,
+    onClose
+  }) {
+    const [peran, setPeran] = useState(nilai ? nilai.role : 'akuntan');
+    const [dapur, setDapur] = useState(nilai ? nilai.dapur : '');
+    const perluDapur = (PERAN_UJI.find(function (x) {
+      return x[0] === peran;
+    }) || [])[2];
+    return React.createElement(Modal, {
+      title: "Bertindak sebagai (mode uji admin)",
+      onClose: onClose
+    }, React.createElement("div", {
+      className: "text-sm rounded-lg p-2.5 mb-3",
+      style: {
+        background: '#FBF3E2',
+        color: '#7A5408'
+      }
+    }, "Aplikasi & server memperlakukan Anda persis seperti peran yang dipilih. ", React.createElement("b", null, "Data yang dibuat masuk ke data asli"), " \u2014 sebaiknya pakai dapur uji."), React.createElement(Field, {
+      label: "Peran"
+    }, React.createElement("select", {
+      value: peran,
+      onChange: function (e) {
+        setPeran(e.target.value);
+      },
+      style: inputStyle,
+      "aria-label": "Peran uji"
+    }, PERAN_UJI.map(function (x) {
+      return React.createElement("option", {
+        key: x[0],
+        value: x[0]
+      }, x[1]);
+    }))), perluDapur && React.createElement(Field, {
+      label: "Dapur"
+    }, React.createElement("select", {
+      value: dapur,
+      onChange: function (e) {
+        setDapur(e.target.value);
+      },
+      style: inputStyle,
+      "aria-label": "Dapur uji"
+    }, React.createElement("option", {
+      value: ""
+    }, "Pilih dapur\u2026"), dapurList.map(function (d) {
+      return React.createElement("option", {
+        key: d.id,
+        value: d.id
+      }, d.nama);
+    }))), React.createElement("div", {
+      className: "flex gap-2 flex-wrap"
+    }, nilai && React.createElement(Btn, {
+      kind: "ghost",
+      onClick: function () {
+        onPilih(null);
+      }
+    }, "Kembali ke Admin"), React.createElement(Btn, {
+      onClick: function () {
+        onPilih({
+          role: peran,
+          dapur: perluDapur ? dapur : ''
+        });
+      },
+      disabled: perluDapur && !dapur
+    }, I.check, " Mulai")));
+  }
   function App() {
-    const [session, setSession] = useState(loadSession);
+    const [authSession, setSession] = useState(loadSession);
+    const [actAs, setActAsState] = useState(loadActAs);
+    const [modePeran, setModePeran] = useState(false);
+    const isAdminAsli = !!(authSession && authSession.user.role === 'admin');
+    const aktifSebagai = isAdminAsli && actAs ? actAs : null;
+    ACT_AS = aktifSebagai;
+    const session = aktifSebagai ? Object.assign({}, authSession, {
+      user: Object.assign({}, authSession.user, {
+        role: aktifSebagai.role,
+        dapur: aktifSebagai.dapur || ''
+      })
+    }) : authSession;
     const [view, setView] = useState('dash');
     const [scope, setScope] = useState('ALL');
     const [dapurList, setDapurList] = useState([]);
@@ -11221,7 +11324,15 @@ try {
         type: type || 'ok'
       });
     }
-    AUTH_TOKEN = session ? session.token : null;
+    AUTH_TOKEN = authSession ? authSession.token : null;
+    function setActAs(v) {
+      saveActAs(v);
+      setActAsState(v);
+      setView('dash');
+      setRefreshKey(function (k) {
+        return k + 1;
+      });
+    }
     ON_SESSION_INVALID = function (msg) {
       clearSession();
       setSession(null);
@@ -11234,7 +11345,7 @@ try {
           if (r.ok) setDapurList(r.data);
         });
       }
-    }, [session]);
+    }, [authSession, actAs]);
     if (!session) return React.createElement(React.Fragment, null, React.createElement(Login, {
       onLogin: function (s) {
         saveSession(s);
@@ -11265,12 +11376,14 @@ try {
     }, 0);
     const effScope = canPickScope ? scope : session.user.dapur;
     function logout() {
+      saveActAs(null);
+      setActAsState(null);
       clearSession();
       setSession(null);
     }
     function onProfileUpdated(patch) {
-      const newSession = Object.assign({}, session, {
-        user: Object.assign({}, session.user, patch)
+      const newSession = Object.assign({}, authSession, {
+        user: Object.assign({}, authSession.user, patch)
       });
       saveSession(newSession);
       setSession(newSession);
@@ -11310,7 +11423,7 @@ try {
       style: {
         color: COLORS.muted
       }
-    }, session.user.nama, " \xB7 ", session.user.role))), React.createElement("div", {
+    }, session.user.nama, " \xB7 ", aktifSebagai ? 'admin → ' + session.user.role : session.user.role))), React.createElement("div", {
       className: "flex items-center gap-2 shrink-0"
     }, canPickScope && (view === 'dash' || view === 'riwayat' || view === 'laporan' || view === 'lpdh' || view === 'bukubesar' || view === 'pengajuan' || view === 'persetujuan' || view === 'beritaacara') && React.createElement("select", {
       value: scope,
@@ -11330,7 +11443,21 @@ try {
         key: d.id,
         value: d.id
       }, d.nama);
-    })), React.createElement("button", {
+    })), isAdminAsli && React.createElement("button", {
+      onClick: function () {
+        setModePeran(true);
+      },
+      title: "Bertindak sebagai peran lain (uji)",
+      "aria-label": "Mode peran",
+      className: "text-xs font-semibold rounded-lg px-2.5 py-2 shrink-0",
+      style: {
+        color: aktifSebagai ? '#fff' : COLORS.blue,
+        background: aktifSebagai ? COLORS.amber : 'transparent',
+        border: '1px solid ' + (aktifSebagai ? COLORS.amber : COLORS.line)
+      }
+    }, aktifSebagai ? (PERAN_UJI.find(function (x) {
+      return x[0] === aktifSebagai.role;
+    }) || [0, aktifSebagai.role])[1] : 'Uji peran'), React.createElement("button", {
       onClick: logout,
       title: "Keluar",
       className: "inline-flex items-center gap-1.5 text-sm rounded-lg px-2.5 py-2 shrink-0",
@@ -11340,7 +11467,33 @@ try {
       }
     }, I.logout, " ", React.createElement("span", {
       className: "hidden lg:inline"
-    }, "Keluar")))), React.createElement("div", {
+    }, "Keluar")))), aktifSebagai && React.createElement("div", {
+      className: "no-print flex items-center justify-between gap-2 px-3 sm:px-6 py-2 text-xs",
+      style: {
+        background: '#FBF3E2',
+        color: '#7A5408',
+        borderBottom: '1px solid #EAD9B0'
+      }
+    }, React.createElement("span", null, "Mode uji: bertindak sebagai ", React.createElement("b", null, (PERAN_UJI.find(function (x) {
+      return x[0] === aktifSebagai.role;
+    }) || [0, aktifSebagai.role])[1]), aktifSebagai.dapur ? ' · ' + ((dapurList.find(function (d) {
+      return d.id === aktifSebagai.dapur;
+    }) || {}).nama || aktifSebagai.dapur) : '', ". Data yang dibuat masuk ke data asli."), React.createElement("button", {
+      onClick: function () {
+        setActAs(null);
+      },
+      className: "font-semibold underline shrink-0"
+    }, "Kembali ke Admin")), modePeran && React.createElement(ModePeranModal, {
+      dapurList: dapurList,
+      nilai: aktifSebagai,
+      onClose: function () {
+        setModePeran(false);
+      },
+      onPilih: function (v) {
+        setModePeran(false);
+        setActAs(v);
+      }
+    }), React.createElement("div", {
       className: "flex flex-1"
     }, React.createElement("nav", {
       className: "hidden md:flex flex-col gap-1 p-3 w-56 shrink-0 no-print",
