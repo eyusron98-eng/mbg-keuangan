@@ -126,7 +126,7 @@ function handleRequest(e, method) {
     }
     let result;
     switch (action) {
-      case 'ping':              result = { ok: true, time: new Date().toISOString(), version: 'v6-ba-sec8' }; break;
+      case 'ping':              result = { ok: true, time: new Date().toISOString(), version: 'v6-ba-sec9' }; break;
       case 'login':             result = login(params); break;
       case 'getPeriodeList':    result = getPeriodeList(params); break;
       case 'getActivePeriode':  result = getActivePeriode(params); break;
@@ -392,7 +392,7 @@ function addPeriode(p) {
     }
   }
   const nextNo = existing.reduce((m, r) => Math.max(m, r.periode_no), 0) + 1;
-  const id = 'PR' + Utilities.formatDate(new Date(), 'GMT+7', 'yyyyMMddHHmmss');
+  const id = idUnik('PR');
   getSheet(SHEETS.SETUP).appendRow([
     id, p.dapur, nextNo, p.tanggal_mulai, p.tanggal_akhir,
     Number(p.penerima) || 0, Number(p.saldoVA) || 0, Number(p.saldoPettyAwal) || 0,
@@ -550,7 +550,7 @@ function addPettyTopup(p) {
     return { ok: false, error: 'Saldo VA tidak cukup. Sisa VA: Rp ' + new Intl.NumberFormat('id-ID').format(sisaVA) };
   }
 
-  const id = 'PT' + Utilities.formatDate(new Date(), 'GMT+7', 'yyyyMMddHHmmss');
+  const id = idUnik('PT');
   getSheet(SHEETS.PETTY).appendRow([id, p.dapur, periode.id, p.tanggal,
     Number(p.jumlah) || 0, p.keterangan || '', new Date(), p.user_id || '']);
   logActivity(p.user_id, 'addPettyTopup', id);
@@ -590,7 +590,7 @@ function addVATopup(p) {
   if (!p.dapur || !p.tanggal || !p.jumlah) return { ok: false, error: 'Field wajib kosong' };
   const periode = findPeriodeCoveringDate(p.dapur, p.tanggal);
   if (!periode) return { ok: false, error: 'Tanggal di luar periode aktif' };
-  const id = 'VT' + Utilities.formatDate(new Date(), 'GMT+7', 'yyyyMMddHHmmss');
+  const id = idUnik('VT');
   const bukti = String(p.bukti_url || '').trim();
   if (bukti && !/^https:\/\//.test(bukti)) return { ok: false, error: 'Link bukti terima harus diawali https://' };
   getSheet(SHEETS.VA).appendRow([id, p.dapur, periode.id, p.tanggal,
@@ -652,7 +652,7 @@ function addTransaksi(p) {
 
   const nb = siapkanNoBukti(p.no_bukti, p.dapur, p.tanggal, null);
   if (nb.error) return { ok: false, error: nb.error };
-  const id = 'TX' + Utilities.formatDate(new Date(), 'GMT+7', 'yyyyMMddHHmmss') + '-' + Math.floor(Math.random() * 1000);
+  const id = idUnik('TX');
   getSheet(SHEETS.TRANSAKSI).appendRow([
     id, p.dapur, p.tanggal, teksSel(nb.value), p.jenis, p.kategori, p.uraian,
     p.sumber, Number(p.riil) || 0, Number(p.unriil) || Number(p.riil) || 0,
@@ -939,7 +939,7 @@ function addUser(p) {
   for (let i = 1; i < data.length; i++) {
     if (String(data[i][1]).toLowerCase() === uname) return { ok: false, error: 'Username sudah dipakai' };
   }
-  const id = 'U' + Utilities.formatDate(new Date(), 'GMT+7', 'yyyyMMddHHmmss');
+  const id = idUnik('U');
   sheet.appendRow([id, uname, pwMake(p.password), p.nama,
     String(p.target_role).toLowerCase(), p.dapur || '', 'YA']);
   logActivity(p.user_id, 'addUser', id);
@@ -1129,7 +1129,19 @@ function uploadBukti(p) {
 const SESI_ERR = 'Sesi tidak valid atau kedaluwarsa. Silakan keluar lalu masuk lagi.';
 const SESI_MAX_HARI = 30;
 
+// Admin dapat "bertindak sebagai" akuntan/PIC/yayasan/asisten (untuk menguji): semua aturan peran itu berlaku penuh.
+// Hanya akun yang di server benar-benar admin yang bisa; peran & dapur pengguna lain tidak terpengaruh. Log tetap memakai ID admin.
+const PERAN_SEBAGAI = ['akuntan', 'pic', 'yayasan', 'asisten'];
 function authUser(p) {
+  const me = authUserAsli(p);
+  if (!me || me.role !== 'admin' || !p.sebagai || PERAN_SEBAGAI.indexOf(String(p.sebagai)) < 0) return me;
+  const peran = String(p.sebagai);
+  const perluDapur = peran === 'akuntan' || peran === 'pic';
+  const dapur = perluDapur ? String(p.sebagai_dapur || '') : '';
+  if (perluDapur && !dapur) return me;
+  return Object.assign({}, me, { role: peran, dapur: dapur, sebagai: true });
+}
+function authUserAsli(p) {
   const token = String(p.token || '');
   if (!token) return null;
   const cache = CacheService.getScriptCache();
@@ -1166,6 +1178,8 @@ function withLock(fn) {
   try { return fn(); } finally { lock.releaseLock(); }
 }
 
+// ID unik: waktu (mudah diurutkan/dibaca) + 8 karakter acak UUID — dua permintaan di detik yang sama tidak bertabrakan
+function idUnik(awalan) { return awalan + nowStamp() + '-' + Utilities.getUuid().replace(/-/g, '').substring(0, 8); }
 function nowStamp() { return Utilities.formatDate(new Date(), 'GMT+7', 'yyyyMMddHHmmss'); }
 function todayStr() { return Utilities.formatDate(new Date(), 'GMT+7', 'yyyy-MM-dd'); }
 function rupiah(n) { return 'Rp ' + new Intl.NumberFormat('id-ID').format(Math.round(n || 0)); }
@@ -1220,7 +1234,7 @@ function savePenerima(p) {
         p.id + (rekBerubah ? ' (' + cur.bank + ' ' + cur.no_rek + ' → ' + bank + ' ' + noRek + ')' : ''));
       return { ok: true, data: { id: p.id, nama: nama, bank: bank, no_rek: noRek } };
     }
-    const id = 'PN' + nowStamp() + Math.floor(Math.random() * 100);
+    const id = idUnik('PN');
     sheet.appendRow([id, nama, bank, "'" + noRek, 'YA', new Date(), me.id, '', '']);
     logActivity(me.id, 'addPenerima', id);
     return { ok: true, data: { id: id, nama: nama, bank: bank, no_rek: noRek } };
@@ -1393,7 +1407,7 @@ function createPengajuan(p) {
       });
       nomor = prefix + String(maxNo + 1).padStart(3, '0');
     }
-    const pid = 'PA' + nowStamp() + Math.floor(Math.random() * 100);
+    const pid = idUnik('PA');
     const now = new Date();
     getSheet(SHEETS.PENGAJUAN).appendRow([pid, nomor, dapurId, periode.id, tanggal, 'MENUNGGU', now, me.id, '', '']);
 
@@ -1640,7 +1654,7 @@ function realisasiItem(p) {
     const nb = siapkanNoBukti(p.no_bukti, it.dapur, p.tanggal, null);
     if (nb.error) return { ok: false, error: nb.error };
     p.no_bukti = nb.value;
-    const txId = 'TX' + nowStamp() + '-' + Math.floor(Math.random() * 1000);
+    const txId = idUnik('TX');
     getSheet(SHEETS.TRANSAKSI).appendRow([
       txId, it.dapur, p.tanggal, teksSel(p.no_bukti), it.jenis, it.kategori, it.uraian,
       'VA', riil, it.nominal, p.bukti_url, new Date(), me.id, it.periode_id, it.id
@@ -1790,7 +1804,7 @@ function requestTxChange(p) {
       }
     }
 
-    const id = 'CH' + nowStamp() + Math.floor(Math.random() * 100);
+    const id = idUnik('CH');
     getSheet(SHEETS.PERUBAHAN).appendRow([id, tx.id, tx.dapur, tx.periode_id, aksi, JSON.stringify(lama), JSON.stringify(baru),
       String(p.alasan).trim(), 'MENUNGGU', new Date(), me.id, '', '', '']);
     logActivity(me.id, 'requestTxChange', id + ' ' + aksi + ' ' + tx.id);

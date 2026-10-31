@@ -80,7 +80,7 @@ const ok = (c, m) => { console.log((c ? 'PASS ' : 'FAIL ') + m); if (!c) fails++
     ['U3', 'off', 'xxxxxxx', 'Nonaktif', 'pic', 'D001', 'TIDAK'],
   ]);
   const B = env.__book;
-  ok(call(env, 'GET', { action: 'ping' }).version === 'v6-ba-sec8', 'ping menampilkan versi baru');
+  ok(call(env, 'GET', { action: 'ping' }).version === 'v6-ba-sec9', 'ping menampilkan versi baru');
 
   // 1. login lama (teks biasa) berhasil via POST dan password otomatis di-hash
   let r = call(env, 'POST', { action: 'login', username: 'AKUN1', password: 'RahasiaKu9' });
@@ -450,6 +450,34 @@ const ok = (c, m) => { console.log((c ? 'PASS ' : 'FAIL ') + m); if (!c) fails++
   call(e8, 'POST', { action: 'saveSaldoLPDH', token: tkA, tanggal: '2026-10-17', saldo_va: 1234000, penjelasan: '' });
   r = call(e8, 'POST', { action: 'getDataLPDH', token: tk8('adm'), dapur: 'D001', tanggal: '2026-10-17' });
   ok(r.data.saldoRekening.saldo_va === 1234000 && B8.LPDHSaldo.length === 2, 'saldo rekening tersimpan & diperbarui (tidak dobel)');
+
+  // ── Admin "bertindak sebagai" peran lain ──
+  const tkAdm = tk8('adm');
+  const sb = (peran, dapur, extra) => Object.assign({ token: tkAdm, sebagai: peran, sebagai_dapur: dapur || '' }, extra);
+  r = call(e8, 'POST', sb('akuntan', 'D001', { action: 'getRealisasiList' }));
+  ok(r.ok, 'admin sebagai akuntan D001 bisa membuka daftar realisasi: ' + (r.error || ''));
+  ok(!call(e8, 'POST', { action: 'getRealisasiList', token: tkAdm }).ok, 'tanpa mode uji, admin tetap admin (realisasi khusus akuntan)');
+  r = call(e8, 'POST', sb('akuntan', 'D001', { action: 'createPengajuan', tanggal: '2026-10-18', items: [{ jenis: 'Operasional', kategori: 'Gas', uraian: 'Gas uji', nominal: 50000, penerima_id: 'pn1' }] }));
+  ok(r.ok, 'admin sebagai akuntan bisa membuat pengajuan: ' + (r.error || ''));
+  const headUji = B8.Pengajuan[B8.Pengajuan.length - 1];
+  ok(headUji[2] === 'D001' && headUji[7] === 'U1', 'pengajuan masuk dapur yang dipilih, tercatat atas nama admin (U1)');
+  const itUji = B8.PengajuanItem[B8.PengajuanItem.length - 1][0];
+  r = call(e8, 'POST', sb('pic', 'D002', { action: 'decidePengajuan', pengajuan_id: headUji[0], keputusan: [{ item_id: itUji, status: 'DISETUJUI' }] }));
+  ok(!r.ok && /dapurnya sendiri/.test(r.error), 'sebagai PIC dapur lain: aturan PIC berlaku (ditolak)');
+  r = call(e8, 'POST', sb('yayasan', '', { action: 'getIdentitasLPDH', dapur: 'D001' }));
+  ok(r.ok, 'sebagai yayasan bisa melihat identitas LPDH');
+  ok(!call(e8, 'POST', sb('yayasan', '', { action: 'saveIdentitasLPDH', dapur: 'D001', yayasan: 'X' })).ok, 'sebagai yayasan: aturan yayasan berlaku (tidak bisa mengubah)');
+  r = call(e8, 'POST', sb('asisten', '', { action: 'getRealisasiList' }));
+  ok(!r.ok, 'sebagai asisten: tidak bisa realisasi');
+  ok(!call(e8, 'POST', sb('akuntan', '', { action: 'getRealisasiList' })).ok, 'peran berdapur tanpa dapur → tetap admin');
+  ok(!call(e8, 'POST', sb('superuser', 'D001', { action: 'getRealisasiList' })).ok, 'peran tak dikenal diabaikan');
+  // keamanan: non-admin tidak bisa menyamar
+  r = call(e8, 'POST', { action: 'decidePengajuan', token: tk8('akn'), sebagai: 'yayasan', pengajuan_id: headUji[0], keputusan: [{ item_id: itUji, status: 'DISETUJUI' }] });
+  ok(!r.ok && /tidak dapat menyetujui/.test(r.error), 'akuntan yang mengirim "sebagai yayasan" tetap akuntan (tidak bisa menyetujui)');
+  r = call(e8, 'POST', { action: 'getRealisasiList', token: tk8('pic'), sebagai: 'akuntan', sebagai_dapur: 'D001' });
+  ok(!r.ok, 'PIC yang mengirim "sebagai akuntan" ditolak');
+  r = call(e8, 'POST', { action: 'getRealisasiList', token: tkAst, sebagai: 'akuntan', sebagai_dapur: 'D001' });
+  ok(!r.ok && /Hanya akuntan/.test(r.error), 'asisten yang mengirim "sebagai akuntan" ditolak');
 
   ok(e8.teksSel('01-2026') === "'01-2026" && e8.teksSel('1/10') === "'1/10" && e8.teksSel('NT-001') === 'NT-001' && e8.teksSel('') === '', 'nomor bukti mirip tanggal/angka disimpan sebagai teks');
 
