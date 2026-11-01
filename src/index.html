@@ -3199,7 +3199,7 @@ function rincianKirim(rinc) { return (rinc || []).map(function(x) { return { nam
 function emptyRow() { return { key: Math.random().toString(36).slice(2), jenis: '', kategori: '', uraian: '', nominal: '', penerima_id: '', susulan: false, rincian: [], nota_url: '', notaFile: null }; }
 function rowError(r) {
   if (!r.jenis) return 'jenis'; if (!r.kategori) return 'kategori'; if (!String(r.uraian).trim()) return 'uraian';
-  if (r.jenis === 'Bahan Baku') { const e = rincianError(r.rincian); if (e) return e; }
+  if (r.jenis === 'Bahan Baku') { const e = rincianError(r.rincian); if (e) return e; if (!r.notaFile && !r.nota_url) return 'foto nota'; }
   if (!(Number(r.nominal) > 0)) return 'nominal'; if (!r.penerima_id) return 'penerima'; return null;
 }
 function RincianBahan({ rows, onChange }) {
@@ -3262,7 +3262,7 @@ function ItemFields({ row, onChange, kategoriMap, penerima, upsertPenerima, toas
     <Field label="Uraian *"><input value={row.uraian} onChange={function(e){ set('uraian', e.target.value); }} style={inputStyle} placeholder={isBB ? 'cth. Belanja sayur menu Kamis' : 'cth. Beras 50 kg'}/></Field>
     <Field label="Nominal *" hint={isBB ? 'Otomatis = jumlah rincian bahan' : null}><RupiahInput value={row.nominal} onChange={function(v){ set('nominal', v); }} disabled={isBB}/></Field>
     {isBB && <RincianBahan rows={row.rincian && row.rincian.length ? row.rincian : [{ nama: '', kategori: '', volume: '', satuan: '', harga: '' }]} onChange={function(v){ set('rincian', v); }}/>}
-    {isBB && <div className="sm:col-span-2"><Field label="Nota / bukti belanja" hint="Foto nota dari toko. Dipakai sebagai bukti autentik di LPDH; bila kosong, LPDH memakai bukti transfer.">
+    {isBB && <div className="sm:col-span-2"><Field label="Nota / bukti belanja *" hint="Foto nota dari toko. Menjadi bukti realisasi (akuntan tinggal klik) dan bukti autentik di LPDH.">
       <BuktiPicker bukti={row.notaFile} setBukti={function(f){ set('notaFile', f); }} existing={row.nota_url}/>
     </Field></div>}
     <div className="sm:col-span-2">
@@ -4348,26 +4348,39 @@ function PersetujuanPage({ session, scope, dapurList, toast }) {
 }
 
 // ---------- Realisasi (akuntan) ----------
+// Kategori yang bukti pembayarannya (kuitansi) dibuat otomatis oleh server saat realisasi
+const KATEGORI_KUITANSI = ['Insentif Guru/PIC Sekolah', 'Insentif Kader Posyandu', 'Sewa Kendaraan'];
+function pakaiKuitansi(it) { return it.jenis === 'Fasilitas SPPG' || (it.jenis === 'Operasional' && KATEGORI_KUITANSI.indexOf(it.kategori) >= 0); }
 function RealisasiForm({ item, periode, toast, onClose, onSaved }) {
   const isOps = item.jenis === 'Operasional';
+  const viaNota = item.jenis === 'Bahan Baku' && !!item.nota_url;
+  const viaKuitansi = pakaiKuitansi(item);
+  const otomatis = viaNota || viaKuitansi;
   const today = todayISO();
-  const [f, setF] = useState({ tanggal: periode && today >= periode.tanggal_mulai && today <= periode.tanggal_akhir ? today : (periode ? periode.tanggal_mulai : today), no_bukti: '', riil: isOps ? '' : String(item.nominal), adaAdmin: false, biaya: String(BIAYA_ADMIN_DEFAULT) });
+  const [f, setF] = useState({ tanggal: periode && today >= periode.tanggal_mulai && today <= periode.tanggal_akhir ? today : (periode ? periode.tanggal_mulai : today), no_bukti: '', riil: isOps && !viaKuitansi ? '' : String(item.nominal), adaAdmin: false, biaya: String(BIAYA_ADMIN_DEFAULT) });
   const [bukti, setBukti] = useState(null);
   const [saving, setSaving] = useState(false);
   const outRange = periode && (f.tanggal < periode.tanggal_mulai || f.tanggal > periode.tanggal_akhir);
   const err = !f.tanggal ? 'Tanggal wajib' : outRange ? 'Tanggal di luar periode' : /^[\s\-\u2013\u2014_.\/]+$/.test(f.no_bukti) ? 'No bukti tidak boleh "' + f.no_bukti.trim() + '" — kosongkan bila nota tidak bernomor' :
     (isOps && !(Number(f.riil) > 0)) ? 'Realisasi aktual wajib' : (f.adaAdmin && !(Number(f.biaya) > 0 && Number(f.biaya) <= 50000)) ? 'Biaya admin Rp 1 – Rp 50.000' :
-    !bukti ? 'Bukti transfer wajib diunggah' : null;
+    (!bukti && !otomatis) ? 'Bukti transfer wajib diunggah' : null;
   const keluarVA = (isOps ? Number(f.riil || 0) : item.nominal) + (f.adaAdmin ? Number(f.biaya || 0) : 0);
   async function submit() {
     setSaving(true);
-    const b64 = await fileToBase64(bukti);
-    const up = await apiUpload('uploadBukti', { fileData: b64, fileName: buktiFileName(bukti, f.tanggal, f.no_bukti), mimeType: bukti.type });
-    if (!up.ok) { setSaving(false); toast('Gagal upload bukti: ' + up.error, 'error'); return; }
-    const res = await api('realisasiItem', { item_id: item.id, tanggal: f.tanggal, no_bukti: f.no_bukti.trim(), riil: isOps ? f.riil : item.nominal, bukti_url: up.data.url,
+    let url = '';
+    if (bukti) {
+      const b64 = await fileToBase64(bukti);
+      const up = await apiUpload('uploadBukti', { fileData: b64, fileName: buktiFileName(bukti, f.tanggal, f.no_bukti), mimeType: bukti.type });
+      if (!up.ok) { setSaving(false); toast('Gagal upload bukti: ' + up.error, 'error'); return; }
+      url = up.data.url;
+    }
+    const res = await api('realisasiItem', { item_id: item.id, tanggal: f.tanggal, no_bukti: f.no_bukti.trim(), riil: isOps ? f.riil : item.nominal, bukti_url: url,
       biaya_admin: f.adaAdmin ? f.biaya : 0 });
     setSaving(false);
-    if (res.ok) { toast(!f.no_bukti.trim() && res.data && res.data.no_bukti ? 'Realisasi tersimpan · nomor bukti otomatis ' + res.data.no_bukti : 'Realisasi tersimpan'); onSaved(); onClose(); } else toast(res.error || 'Gagal menyimpan', 'error');
+    if (res.ok) {
+      const ket = res.data && res.data.bukti === 'kuitansi' ? ' · kuitansi dibuat otomatis' : res.data && res.data.bukti === 'nota' ? ' · bukti: nota pengajuan' : '';
+      toast('Realisasi tersimpan' + (!f.no_bukti.trim() && res.data && res.data.no_bukti ? ' · nomor ' + res.data.no_bukti : '') + ket); onSaved(); onClose();
+    } else toast(res.error || 'Gagal menyimpan', 'error');
   }
   return <Modal title={'Realisasi #' + item.urut + ' · ' + item.uraian} size="lg" onClose={onClose}>
     <div className="rounded-lg p-3 mb-3 text-sm" style={{ background: COLORS.paper }}>
@@ -4390,7 +4403,12 @@ function RealisasiForm({ item, periode, toast, onClose, onSaved }) {
       </> : <Field label="Nominal" hint="Terkunci = nominal disetujui"><RupiahInput value={String(item.nominal)} onChange={function(){}} disabled/></Field>}
     </div>
     <BiayaAdminField ada={f.adaAdmin} biaya={f.biaya} onChange={function(patch){ setF(Object.assign({}, f, patch)); }}/>
-    <Field label="Bukti transfer *" hint="Nama file otomatis: {Tanggal}_{No Bukti}"><BuktiPicker bukti={bukti} setBukti={setBukti}/></Field>
+    {otomatis ? <div className="rounded-lg p-3 mb-3 text-sm" style={{ background: '#E8F1EC', color: COLORS.deep }}>
+      {viaNota ? <>{I.check} Bukti memakai <a href={item.nota_url} target="_blank" rel="noopener" className="underline font-semibold">nota dari pengajuan</a> — tidak perlu unggah.</>
+        : <>{I.check} <b>Kuitansi / bukti pembayaran dibuat otomatis</b> (PDF, berisi penerima, nominal, terbilang, kolom tanda tangan). Cetak & mintakan tanda tangan penerima.</>}
+      <details className="mt-1.5 text-xs"><summary style={{ cursor: 'pointer', color: COLORS.muted }}>Tetap ingin unggah bukti transfer?</summary><div className="mt-2"><BuktiPicker bukti={bukti} setBukti={setBukti}/></div></details>
+    </div>
+    : <Field label="Bukti transfer *" hint="Nama file otomatis: {Tanggal}_{No Bukti}"><BuktiPicker bukti={bukti} setBukti={setBukti}/></Field>}
     {f.adaAdmin && <div className="text-xs mb-2" style={{ color: COLORS.muted }}>Total keluar dari VA: <b className="num" style={{ color: COLORS.ink }}>{fmt(keluarVA)}</b> (transfer + biaya admin, dicatat sebagai 2 transaksi)</div>}
     {err && <div className="text-xs mb-2" style={{ color: COLORS.danger }}>• {err}</div>}
     <Btn full disabled={!!err || saving} onClick={submit}>{saving ? I.spinner : I.check} {saving ? 'Menyimpan…' : 'Simpan realisasi'}</Btn>

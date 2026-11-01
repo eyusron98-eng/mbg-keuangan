@@ -126,7 +126,7 @@ function handleRequest(e, method) {
     }
     let result;
     switch (action) {
-      case 'ping':              result = { ok: true, time: new Date().toISOString(), version: 'v6-ba-sec9' }; break;
+      case 'ping':              result = { ok: true, time: new Date().toISOString(), version: 'v6-ba-sec10' }; break;
       case 'login':             result = login(params); break;
       case 'getPeriodeList':    result = getPeriodeList(params); break;
       case 'getActivePeriode':  result = getActivePeriode(params); break;
@@ -1378,6 +1378,7 @@ function createPengajuan(p) {
     }
     const nota = cekNotaUrl(items[k].nota_url);
     if (nota === null) return { ok: false, error: 'Baris ' + (k + 1) + ': link nota tidak valid' };
+    if (items[k].jenis === 'Bahan Baku' && !nota) return { ok: false, error: 'Baris ' + (k + 1) + ': foto nota Bahan Baku wajib diunggah' };
     tambahan.push([rinc, nota]);
   }
 
@@ -1527,6 +1528,7 @@ function updatePengajuanItem(p) {
     }
     const nota = p.nota_url === undefined ? it.nota_url : cekNotaUrl(p.nota_url);
     if (nota === null) return { ok: false, error: 'Link nota tidak valid' };
+    if (p.jenis === 'Bahan Baku' && !nota) return { ok: false, error: 'Foto nota Bahan Baku wajib diunggah' };
     const pn = penerimaMap[p.penerima_id];
     const sh = getSheet(SHEETS.PITEM);
     const wasRevisi = it.status === 'REVISI';
@@ -1635,7 +1637,7 @@ function realisasiItem(p) {
   const me = authUser(p);
   if (!me) return { ok: false, error: SESI_ERR };
   if (me.role !== 'akuntan') return { ok: false, error: 'Hanya akuntan' };
-  if (!p.item_id || !p.tanggal || !p.bukti_url) return { ok: false, error: 'Tanggal dan bukti transfer wajib' };
+  if (!p.item_id || !p.tanggal) return { ok: false, error: 'Tanggal realisasi wajib' };
 
   return withLock(function() {
     const it = findItem(p.item_id);
@@ -1645,6 +1647,11 @@ function realisasiItem(p) {
     const periode = findPeriodeCoveringDate(me.dapur, p.tanggal);
     if (!periode || periode.id !== it.periode_id) return { ok: false, error: 'Tanggal realisasi harus di dalam periode pengajuan' };
 
+    // Bukti: unggahan akuntan; bila kosong → nota pengajuan (Bahan Baku) atau kuitansi otomatis (kategori tertentu)
+    let buktiUrl = String(p.bukti_url || '').trim();
+    const sumberBukti = buktiUrl ? 'unggah' : (it.jenis === 'Bahan Baku' && it.nota_url) ? 'nota' : pakaiKuitansi(it) ? 'kuitansi' : '';
+    if (!sumberBukti) return { ok: false, error: 'Bukti transfer / nota wajib diunggah untuk ' + it.jenis + ' · ' + it.kategori };
+    if (sumberBukti === 'nota') buktiUrl = it.nota_url;
     const isOps = it.jenis === 'Operasional';
     const riil = isOps ? Number(p.riil) : it.nominal;
     if (!(riil > 0)) return { ok: false, error: 'Realisasi aktual wajib diisi' };
@@ -1655,18 +1662,72 @@ function realisasiItem(p) {
     if (nb.error) return { ok: false, error: nb.error };
     p.no_bukti = nb.value;
     const txId = idUnik('TX');
+    if (sumberBukti === 'kuitansi') {
+      try { buktiUrl = buatKuitansi(it, p.tanggal, p.no_bukti, riil, me); }
+      catch (e) { logError(e); return { ok: false, error: 'Gagal membuat kuitansi otomatis: ' + pesanGangguan(e.message) + ' — coba lagi atau unggah bukti manual.' }; }
+    }
     getSheet(SHEETS.TRANSAKSI).appendRow([
       txId, it.dapur, p.tanggal, teksSel(p.no_bukti), it.jenis, it.kategori, it.uraian,
-      'VA', riil, it.nominal, p.bukti_url, new Date(), me.id, it.periode_id, it.id
+      'VA', riil, it.nominal, buktiUrl, new Date(), me.id, it.periode_id, it.id
     ]);
-    if (fee > 0) getSheet(SHEETS.TRANSAKSI).appendRow(feeRowFor(it, txId, p.tanggal, p.no_bukti, p.bukti_url, fee, me.id));
+    if (fee > 0) getSheet(SHEETS.TRANSAKSI).appendRow(feeRowFor(it, txId, p.tanggal, p.no_bukti, buktiUrl, fee, me.id));
     const sh = getSheet(SHEETS.PITEM);
     sh.getRange(it._row, 15).setValue('TEREALISASI');
     sh.getRange(it._row, 20).setValue(txId);
     sh.getRange(it._row, 22).setValue(new Date());
     logActivity(me.id, 'realisasiItem', it.id + ' → ' + txId + (fee > 0 ? ' + biaya admin ' + fee : ''));
-    return { ok: true, data: { transaksi_id: txId, no_bukti: p.no_bukti } };
+    return { ok: true, data: { transaksi_id: txId, no_bukti: p.no_bukti, bukti: sumberBukti, bukti_url: buktiUrl } };
   });
+}
+
+// ── Kuitansi / bukti pembayaran otomatis (PDF di folder bukti) untuk pembayaran tanpa nota toko ──
+const KATEGORI_KUITANSI = ['Insentif Guru/PIC Sekolah', 'Insentif Kader Posyandu', 'Sewa Kendaraan'];
+function pakaiKuitansi(it) { return it.jenis === 'Fasilitas SPPG' || (it.jenis === 'Operasional' && KATEGORI_KUITANSI.indexOf(it.kategori) >= 0); }
+function terbilang(n) {
+  n = Math.floor(Math.abs(Number(n) || 0));
+  const s = ['', 'satu', 'dua', 'tiga', 'empat', 'lima', 'enam', 'tujuh', 'delapan', 'sembilan', 'sepuluh', 'sebelas'];
+  function t(x) {
+    if (x < 12) return s[x];
+    if (x < 20) return t(x - 10) + ' belas';
+    if (x < 100) return t(Math.floor(x / 10)) + ' puluh' + (x % 10 ? ' ' + t(x % 10) : '');
+    if (x < 200) return 'seratus' + (x > 100 ? ' ' + t(x - 100) : '');
+    if (x < 1000) return t(Math.floor(x / 100)) + ' ratus' + (x % 100 ? ' ' + t(x % 100) : '');
+    if (x < 2000) return 'seribu' + (x > 1000 ? ' ' + t(x - 1000) : '');
+    if (x < 1e6) return t(Math.floor(x / 1000)) + ' ribu' + (x % 1000 ? ' ' + t(x % 1000) : '');
+    if (x < 1e9) return t(Math.floor(x / 1e6)) + ' juta' + (x % 1e6 ? ' ' + t(x % 1e6) : '');
+    if (x < 1e12) return t(Math.floor(x / 1e9)) + ' miliar' + (x % 1e9 ? ' ' + t(x % 1e9) : '');
+    return t(Math.floor(x / 1e12)) + ' triliun' + (x % 1e12 ? ' ' + t(x % 1e12) : '');
+  }
+  const h = n === 0 ? 'nol' : t(n);
+  return (h.charAt(0).toUpperCase() + h.slice(1) + ' rupiah').replace(/\s+/g, ' ');
+}
+function escHtml(v) { return String(v == null ? '' : v).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); }
+function htmlKuitansi(d) {
+  const baris = function(k, v) { return '<tr><td style="width:34%;padding:4px 0;vertical-align:top">' + k + '</td><td style="padding:4px 0">: ' + v + '</td></tr>'; };
+  return '<html><head><meta charset="utf-8"></head><body style="font-family:Arial,sans-serif;font-size:12px;color:#111;margin:28px">' +
+    '<div style="text-align:center;font-weight:bold;font-size:14px">' + escHtml(d.dapur) + '</div>' +
+    (d.alamat ? '<div style="text-align:center;font-size:11px">' + escHtml(d.alamat) + '</div>' : '') +
+    '<hr style="margin:10px 0 14px"/><div style="text-align:center;font-weight:bold;font-size:16px;letter-spacing:1px">KUITANSI / BUKTI PEMBAYARAN</div>' +
+    '<div style="text-align:center;margin-bottom:16px">Nomor: ' + escHtml(d.nomor) + '</div><table style="width:100%;border-collapse:collapse">' +
+    baris('Telah terima dari', escHtml(d.dapur)) + baris('Uang sejumlah', '<b>' + escHtml(d.rupiah) + '</b>') + baris('Terbilang', '<i>' + escHtml(d.terbilang) + '</i>') +
+    baris('Untuk pembayaran', escHtml(d.untuk)) + baris('Dibayarkan kepada', escHtml(d.penerima)) + baris('Rekening tujuan', escHtml(d.rekening)) +
+    baris('Tanggal pembayaran', escHtml(d.tanggal)) + baris('Referensi', escHtml(d.ref)) + '</table>' +
+    '<table style="width:100%;margin-top:36px;text-align:center"><tr><td style="width:50%">Yang menyerahkan,<br/>Pengawas Keuangan</td><td>Yang menerima,</td></tr>' +
+    '<tr><td style="height:70px"></td><td></td></tr><tr><td>( ' + escHtml(d.penyerah || '................................') + ' )</td><td>( ' + escHtml(d.penerima) + ' )</td></tr></table>' +
+    '<div style="margin-top:24px;font-size:10px;color:#555">Dibuat otomatis oleh aplikasi Keuangan MBG saat realisasi. Sah sebagai bukti autentik setelah ditandatangani kedua pihak.</div></body></html>';
+}
+function buatKuitansi(it, tanggal, noBukti, nominal, me) {
+  const dapur = getDapur().data.find(function(x) { return x.id === it.dapur; }) || {};
+  const ident = readIdentitasLPDH(it.dapur) || {};
+  const head = readAllPengajuan().find(function(h) { return h.id === it.pengajuan_id; }) || {};
+  const html = htmlKuitansi({ dapur: dapur.nama || it.dapur, alamat: dapur.alamat || '', nomor: noBukti, rupiah: rupiah(nominal), terbilang: terbilang(nominal),
+    untuk: it.kategori + ' — ' + it.uraian, penerima: it.penerima_nama, rekening: it.bank + ' ' + it.no_rek, tanggal: tanggal,
+    ref: (head.nomor || '') + ' #' + it.urut, penyerah: ident.pengawas_nama || me.nama || '' });
+  const nama = 'KUITANSI_' + tanggal + '_' + String(noBukti).replace(/[^a-zA-Z0-9_-]+/g, '-');
+  const pdf = Utilities.newBlob(html, 'text/html', nama + '.html').getAs('application/pdf').setName(nama + '.pdf');
+  const file = DriveApp.getFolderById(DRIVE_FOLDER_ID).createFile(pdf);
+  file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+  return file.getUrl();
 }
 
 // Dipanggil saat transaksi hasil realisasi dihapus → item kembali DISETUJUI
