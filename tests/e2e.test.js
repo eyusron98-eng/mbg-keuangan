@@ -72,7 +72,7 @@ function makeServer(opts) {
       case 'saveRelawanBayar': log.relawan = p.rows; return { ok: true };
       case 'uploadBukti': log.upload = (log.upload || 0) + 1; return { ok: true, data: { url: 'https://drive.google.com/up' + log.upload, id: 'F' + log.upload } };
       case 'getRealisasiList': return { ok: true, data: [
-        { id: 'RB', urut: 1, nomor: 'BA-PA/S1/2026/10/001', jenis: 'Bahan Baku', kategori: 'Beras', uraian: 'Beras 50 kg', nominal: 600000, penerima_nama: 'Toko A', bank: 'BCA', no_rek: '123', status: 'DISETUJUI', nota_url: 'https://drive.google.com/nota-rb', rincian: [] },
+        { id: 'RB', urut: 1, nomor: 'BA-PA/S1/2026/10/001', jenis: 'Bahan Baku', kategori: 'Beras', uraian: 'Beras 50 kg', nominal: 600000, penerima_nama: 'Toko A', bank: 'BCA', no_rek: '123', status: 'DISETUJUI', nota_url: 'https://drive.google.com/nota-rb', nota_no: 'NT-RB77', rincian: [] },
         { id: 'RS', urut: 2, nomor: 'BA-PA/S1/2026/10/001', jenis: 'Operasional', kategori: 'Sewa Kendaraan', uraian: 'Sewa mobil antar', nominal: 750000, penerima_nama: 'Pak Ujang', bank: 'BRI', no_rek: '456', status: 'DISETUJUI', nota_url: '' },
         { id: 'RG', urut: 3, nomor: 'BA-PA/S1/2026/10/001', jenis: 'Operasional', kategori: 'Gas', uraian: 'Gas 3 kg', nominal: 40000, penerima_nama: 'Toko Gas', bank: 'BRI', no_rek: '789', status: 'DISETUJUI', nota_url: '' }] };
       case 'realisasiItem': (log.real = log.real || []).push(p); return { ok: true, data: { transaksi_id: 'TX1', no_bukti: 'S1-20261030-001', bukti: p.bukti_url ? 'unggah' : (p.item_id === 'RB' ? 'nota' : 'kuitansi') } };
@@ -135,6 +135,7 @@ async function isiBahanBaku(page, uraian, volume, harga) {
   await page.fill('[aria-label="Volume 1"]', String(volume));
   await page.fill('[aria-label="Satuan 1"]', 'kg');
   await page.fill('[aria-label="Harga satuan 1"]', String(harga));
+  await page.fill('[aria-label="Nomor nota"]', 'NT-' + uraian.slice(0, 4).toUpperCase());
   await page.setInputFiles('input[type=file] >> nth=0', { name: 'nota.jpg', mimeType: 'image/jpeg', buffer: Buffer.from('foto-nota') });
 }
 
@@ -275,6 +276,8 @@ async function isiBahanBaku(page, uraian, volume, harga) {
     await page.click('nav:visible >> text=Realisasi');
     await page.click('text=Beras 50 kg');
     await page.waitForSelector('text=nota dari pengajuan');
+    await page.waitForSelector('.sheet >> text=NT-RB77');
+    assert(!(await page.isVisible('.sheet input[placeholder="kosong = otomatis"]')), 'kolom nomor bukti seharusnya tidak tampil untuk Bahan Baku bernota');
     await page.click('text=Simpan realisasi');
     await page.waitForSelector('text=bukti: nota pengajuan');
     assert(srv.log.real[0].item_id === 'RB' && srv.log.real[0].bukti_url === '' && !srv.log.upload, 'Bahan Baku: tidak boleh ada unggahan');
@@ -341,6 +344,7 @@ async function isiBahanBaku(page, uraian, volume, harga) {
     assert(srv.log.createCount === 1, 'Tetap kirim harus mengirim tepat 1x');
     assert(srv.log.posts.find(p => p.action === 'createPengajuan').params.request_id, 'request_id tidak terkirim');
     const it0 = srv.log.posts.find(p => p.action === 'createPengajuan').params.items[0];
+    assert(it0.nota_no === 'NT-BERA', 'nomor nota tidak terkirim: ' + it0.nota_no);
     assert(it0.nominal === 600000 && it0.rincian && it0.rincian[0].volume === 50 && it0.rincian[0].harga === 12000 && it0.rincian[0].kategori === 'Karbohidrat', 'rincian bahan tidak terkirim / nominal tidak dihitung: ' + JSON.stringify(it0));
   });
 

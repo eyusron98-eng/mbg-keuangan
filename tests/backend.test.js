@@ -85,7 +85,7 @@ const ok = (c, m) => { console.log((c ? 'PASS ' : 'FAIL ') + m); if (!c) fails++
     ['U3', 'off', 'xxxxxxx', 'Nonaktif', 'pic', 'D001', 'TIDAK'],
   ]);
   const B = env.__book;
-  ok(call(env, 'GET', { action: 'ping' }).version === 'v6-ba-sec10', 'ping menampilkan versi baru');
+  ok(call(env, 'GET', { action: 'ping' }).version === 'v6-ba-sec11', 'ping menampilkan versi baru');
 
   // 1. login lama (teks biasa) berhasil via POST dan password otomatis di-hash
   let r = call(env, 'POST', { action: 'login', username: 'AKUN1', password: 'RahasiaKu9' });
@@ -489,7 +489,7 @@ const ok = (c, m) => { console.log((c ? 'PASS ' : 'FAIL ') + m); if (!c) fails++
   r = pa([bb({ nota_url: '', rincian: [{ nama: 'Wortel', kategori: 'Sayuran', volume: 10, satuan: 'kg', harga: 15000 }] })]);
   ok(!r.ok && /nota Bahan Baku wajib/.test(r.error), 'pengajuan Bahan Baku tanpa nota ditolak');
   const itemDisetujui = (id, jenis, kategori, nominal, extra) => { B8.PengajuanItem.push([id, 'PA1', 'D001', 'P1', 9, jenis, kategori, 'Uraian ' + id, nominal, 'pn1', 'Bu Siti', 'BRI', '0099', 'TIDAK', 'DISETUJUI',
-    '', 1, '', '', '', '', '', (extra || {}).rincian || '', (extra || {}).nota || '']); };
+    '', 1, '', '', '', '', '', (extra || {}).rincian || '', (extra || {}).nota || '', (extra || {}).notaNo || '']); };
   const real1 = (id, extra) => call(e8, 'POST', Object.assign({ action: 'realisasiItem', token: tkA, item_id: id, tanggal: '2026-10-19' }, extra || {}));
   itemDisetujui('K-BB', 'Bahan Baku', 'Semua Kategori', 300000, { nota: 'https://drive.google.com/nota-kbb' });
   r = real1('K-BB');
@@ -522,6 +522,32 @@ const ok = (c, m) => { console.log((c ? 'PASS ' : 'FAIL ') + m); if (!c) fails++
   e8.__driveGagal = false;
   ok(!r.ok && /kuitansi/.test(r.error) && B8.Transaksi.length === nTx && B8.PengajuanItem.find(x => x[0] === 'K-GAGAL')[14] === 'DISETUJUI', 'Drive gagal → tidak ada transaksi setengah jadi, baris tetap Disetujui');
   ok(e8.terbilang(0) === 'Nol rupiah' && e8.terbilang(1001000) === 'Satu juta seribu rupiah' && e8.terbilang(115000) === 'Seratus lima belas ribu rupiah' && e8.terbilang(2000000000) === 'Dua miliar rupiah', 'terbilang: ' + e8.terbilang(115000));
+
+  // ── Nomor nota diisi saat pengajuan; realisasi tidak perlu mengisi nomor ──
+  const rincNN = [{ nama: 'Telur', kategori: 'Protein hewani', volume: 10, satuan: 'kg', harga: 15000 }];
+  r = pa([bb({ nota_no: '-', rincian: rincNN })]); ok(!r.ok && /tidak boleh/.test(r.error), 'nomor nota "-" ditolak saat pengajuan');
+  r = pa([bb({ nota_no: '01-2026', rincian: rincNN })]); ok(!r.ok && /sudah dipakai transaksi/.test(r.error), 'nomor nota yang sudah dipakai transaksi ditolak saat pengajuan');
+  r = pa([bb({ nota_no: 'NT-TELUR', rincian: rincNN }), bb({ uraian: 'b2', nota_no: 'nt-telur', rincian: rincNN })]); ok(!r.ok && /dua kali/.test(r.error), 'nomor nota kembar dalam satu pengajuan ditolak');
+  r = pa([bb({ nota_no: 'NT-TELUR', rincian: rincNN })]); ok(r.ok, 'nomor nota unik diterima: ' + (r.error || ''));
+  const itNN = B8.PengajuanItem[B8.PengajuanItem.length - 1];
+  ok(itNN[24] === 'NT-TELUR', 'nomor nota tersimpan di baris pengajuan');
+  r = pa([bb({ uraian: 'lain', nota_no: 'NT-TELUR ', rincian: rincNN })]); ok(!r.ok && /pengajuan lain/.test(r.error), 'nomor nota yang dipakai pengajuan lain yang masih berjalan ditolak');
+  B8.VATopup.push(['V9', 'D001', 'P1', '2026-10-19', 100000000, 'tambah saldo uji', '', 'U2', '', '', '']);   // saldo uji sudah terpakai uji sebelumnya
+  call(e8, 'POST', { action: 'decidePengajuan', token: tk8('adm'), pengajuan_id: itNN[1], keputusan: [{ item_id: itNN[0], status: 'DISETUJUI' }] });
+  r = call(e8, 'POST', { action: 'realisasiItem', token: tkA, item_id: itNN[0], tanggal: '2026-10-19' });
+  ok(r.ok && r.data.no_bukti === 'NT-TELUR' && r.data.bukti === 'nota', 'realisasi sekali klik: nomor bukti = nomor nota pengajuan: ' + (r.error || r.data.no_bukti));
+  r = pa([bb({ uraian: 'tanpa nomor', rincian: rincNN })]); ok(r.ok, 'nota tanpa nomor boleh (kosong)');
+  const itTN = B8.PengajuanItem[B8.PengajuanItem.length - 1];
+  call(e8, 'POST', { action: 'decidePengajuan', token: tk8('adm'), pengajuan_id: itTN[1], keputusan: [{ item_id: itTN[0], status: 'DISETUJUI' }] });
+  r = call(e8, 'POST', { action: 'realisasiItem', token: tkA, item_id: itTN[0], tanggal: '2026-10-19' });
+  ok(r.ok && /^S1-20261019-\d{3}$/.test(r.data.no_bukti), 'nota tak bernomor → nomor otomatis saat realisasi: ' + (r.data && r.data.no_bukti));
+  // edit baris: nomor nota ikut diperiksa
+  r = pa([bb({ uraian: 'edit', nota_no: 'NT-EDIT', rincian: rincNN })]);
+  const itED = B8.PengajuanItem[B8.PengajuanItem.length - 1][0];
+  r = call(e8, 'POST', { action: 'updatePengajuanItem', token: tkAst, item_id: itED, jenis: 'Bahan Baku', kategori: 'Semua Kategori', uraian: 'edit', nominal: 150000, penerima_id: 'pn1', rincian: rincNN, nota_no: 'NT-TELUR' });
+  ok(!r.ok && /sudah dipakai/.test(r.error), 'edit ke nomor nota yang sudah dipakai ditolak');
+  r = call(e8, 'POST', { action: 'updatePengajuanItem', token: tkAst, item_id: itED, jenis: 'Bahan Baku', kategori: 'Semua Kategori', uraian: 'edit', nominal: 150000, penerima_id: 'pn1', rincian: rincNN, nota_no: 'NT-EDIT' });
+  ok(r.ok, 'edit dengan nomor notanya sendiri tetap boleh: ' + (r.error || ''));
 
   ok(e8.teksSel('01-2026') === "'01-2026" && e8.teksSel('1/10') === "'1/10" && e8.teksSel('NT-001') === 'NT-001' && e8.teksSel('') === '', 'nomor bukti mirip tanggal/angka disimpan sebagai teks');
 
