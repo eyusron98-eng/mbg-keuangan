@@ -53,7 +53,8 @@ function makeEnv(usersInit, transform) {
     Utilities: {
       DigestAlgorithm: { SHA_256: 'sha256' },
       computeDigest: (alg, bytes) => Array.from(crypto.createHash('sha256').update(Buffer.from(bytes.map(b => b & 255))).digest()).map(b => (b > 127 ? b - 256 : b)),
-      newBlob: s => ({ getBytes: () => Array.from(Buffer.from(s, 'utf8')).map(b => (b > 127 ? b - 256 : b)) }),
+      newBlob: (s, mime, nama) => ({ getBytes: () => Array.from(Buffer.from(s, 'utf8')).map(b => (b > 127 ? b - 256 : b)),
+        getAs: () => ({ _html: s, setName(n) { this._nama = n; return this; } }) }),
       base64EncodeWebSafe: bytes => Buffer.from(bytes.map(b => b & 255)).toString('base64').replace(/\+/g, '-').replace(/\//g, '_'),
       getUuid: () => crypto.randomUUID(),
       sleep() {},
@@ -61,6 +62,10 @@ function makeEnv(usersInit, transform) {
         return f.replace('yyyy', x.getFullYear()).replace('MM', p(x.getMonth() + 1)).replace('dd', p(x.getDate())).replace('HH', p(x.getHours())).replace('mm', p(x.getMinutes())).replace('ss', p(x.getSeconds())); },
     },
     Date, JSON, Math, Number, String, parseInt, Intl, Array, Object, Error,
+    __kuitansi: [], __driveGagal: false,
+    DriveApp: { Access: { ANYONE_WITH_LINK: 1 }, Permission: { VIEW: 1 },
+      getFolderById: () => ({ createFile: blob => { if (sandbox.__driveGagal) throw new Error('Kesalahan layanan: Drive');
+        sandbox.__kuitansi.push(blob); const n = sandbox.__kuitansi.length; return { setSharing() {}, getUrl: () => 'https://drive.google.com/kuitansi/' + n, getId: () => 'K' + n }; } }) },
   };
   vm.createContext(sandbox);
   vm.runInContext(transform ? transform(fs.readFileSync(FILE, 'utf8')) : fs.readFileSync(FILE, 'utf8'), sandbox, { filename: 'Code.gs' });
@@ -80,7 +85,7 @@ const ok = (c, m) => { console.log((c ? 'PASS ' : 'FAIL ') + m); if (!c) fails++
     ['U3', 'off', 'xxxxxxx', 'Nonaktif', 'pic', 'D001', 'TIDAK'],
   ]);
   const B = env.__book;
-  ok(call(env, 'GET', { action: 'ping' }).version === 'v6-ba-sec9', 'ping menampilkan versi baru');
+  ok(call(env, 'GET', { action: 'ping' }).version === 'v6-ba-sec10', 'ping menampilkan versi baru');
 
   // 1. login lama (teks biasa) berhasil via POST dan password otomatis di-hash
   let r = call(env, 'POST', { action: 'login', username: 'AKUN1', password: 'RahasiaKu9' });
@@ -153,6 +158,7 @@ const ok = (c, m) => { console.log((c ? 'PASS ' : 'FAIL ') + m); if (!c) fails++
   const JK = vm.runInContext('JENIS_KATEGORI', env);
   const jenis = Object.keys(JK)[0]; items[0].jenis = jenis; items[0].kategori = JK[jenis][0];
   items[0].rincian = [{ nama: 'Beras', kategori: 'Karbohidrat', volume: 50, satuan: 'kg', harga: 12000 }];
+  items[0].nota_url = 'https://drive.google.com/nota-beras';
   const a = call(env, 'POST', { action: 'createPengajuan', token: tk, tanggal: '2026-10-15', items, request_id: 'rq-abc' });
   ok(a.ok && a.data.nomor, 'createPengajuan pertama berhasil: ' + (a.error || a.data.nomor));
   const n1 = B.Pengajuan.length;
@@ -173,7 +179,7 @@ const ok = (c, m) => { console.log((c ? 'PASS ' : 'FAIL ') + m); if (!c) fails++
   e6.__book.Dapur.push(['D002', 'SPPG Dua', '', 'S2']);
   const tok = u => call(e6, 'POST', { action: 'login', username: u, password: { adm: 'passwd1', yay: 'passwd2', akn: 'passwd3', pic1: 'passwd4', pic2: 'passwd5' }[u] }).data.token;
   const JK2 = vm.runInContext('JENIS_KATEGORI', e6); const j2 = Object.keys(JK2)[0];
-  const it2 = [{ jenis: j2, kategori: JK2[j2][0], uraian: 'Beras', nominal: 100000, penerima_id: 'pn1', rincian: [{ nama: 'Beras', kategori: 'Karbohidrat', volume: 10, satuan: 'kg', harga: 10000 }] }];
+  const it2 = [{ jenis: j2, kategori: JK2[j2][0], uraian: 'Beras', nominal: 100000, penerima_id: 'pn1', nota_url: 'https://drive.google.com/n2', rincian: [{ nama: 'Beras', kategori: 'Karbohidrat', volume: 10, satuan: 'kg', harga: 10000 }] }];
   function baru(n) {
     const r = call(e6, 'POST', { action: 'createPengajuan', token: tok('akn'), tanggal: '2026-10-15', items: it2.map(x => Object.assign({}, x, { uraian: 'Beras ' + n })), request_id: 'k' + n });
     const itemId = e6.__book.PengajuanItem[e6.__book.PengajuanItem.length - 1][0];
@@ -361,7 +367,7 @@ const ok = (c, m) => { console.log((c ? 'PASS ' : 'FAIL ') + m); if (!c) fails++
   // rincian per bahan wajib & harus sama dengan nominal
   const tkAst = tk8('ast');
   const pa = (items) => call(e8, 'POST', { action: 'createPengajuan', token: tkAst, dapur: 'D001', tanggal: '2026-10-15', items });
-  const bb = (extra) => Object.assign({ jenis: 'Bahan Baku', kategori: 'Semua Kategori', uraian: 'Belanja sayur', nominal: 150000, penerima_id: 'pn1' }, extra);
+  const bb = (extra) => Object.assign({ jenis: 'Bahan Baku', kategori: 'Semua Kategori', uraian: 'Belanja sayur', nominal: 150000, penerima_id: 'pn1', nota_url: 'https://drive.google.com/nota-x' }, extra);
   r = pa([bb({})]); ok(!r.ok && /Rincian bahan wajib/.test(r.error), 'Bahan Baku tanpa rincian ditolak');
   r = pa([bb({ rincian: [{ nama: 'Wortel', kategori: 'Sayuran', volume: 10, satuan: 'kg', harga: 10000 }] })]);
   ok(!r.ok && /harus sama dengan nominal/.test(r.error), 'jumlah rincian ≠ nominal ditolak');
@@ -478,6 +484,44 @@ const ok = (c, m) => { console.log((c ? 'PASS ' : 'FAIL ') + m); if (!c) fails++
   ok(!r.ok, 'PIC yang mengirim "sebagai akuntan" ditolak');
   r = call(e8, 'POST', { action: 'getRealisasiList', token: tkAst, sebagai: 'akuntan', sebagai_dapur: 'D001' });
   ok(!r.ok && /Hanya akuntan/.test(r.error), 'asisten yang mengirim "sebagai akuntan" ditolak');
+
+  // ── Realisasi sekali klik: nota pengajuan / kuitansi otomatis ──
+  r = pa([bb({ nota_url: '', rincian: [{ nama: 'Wortel', kategori: 'Sayuran', volume: 10, satuan: 'kg', harga: 15000 }] })]);
+  ok(!r.ok && /nota Bahan Baku wajib/.test(r.error), 'pengajuan Bahan Baku tanpa nota ditolak');
+  const itemDisetujui = (id, jenis, kategori, nominal, extra) => { B8.PengajuanItem.push([id, 'PA1', 'D001', 'P1', 9, jenis, kategori, 'Uraian ' + id, nominal, 'pn1', 'Bu Siti', 'BRI', '0099', 'TIDAK', 'DISETUJUI',
+    '', 1, '', '', '', '', '', (extra || {}).rincian || '', (extra || {}).nota || '']); };
+  const real1 = (id, extra) => call(e8, 'POST', Object.assign({ action: 'realisasiItem', token: tkA, item_id: id, tanggal: '2026-10-19' }, extra || {}));
+  itemDisetujui('K-BB', 'Bahan Baku', 'Semua Kategori', 300000, { nota: 'https://drive.google.com/nota-kbb' });
+  r = real1('K-BB');
+  const txBB = B8.Transaksi.find(t => t[14] === 'K-BB');
+  ok(r.ok && r.data.bukti === 'nota' && txBB && txBB[10] === 'https://drive.google.com/nota-kbb', 'Bahan Baku: realisasi tanpa unggah memakai nota pengajuan: ' + (r.error || ''));
+  itemDisetujui('K-BB0', 'Bahan Baku', 'Semua Kategori', 100000);
+  r = real1('K-BB0');
+  ok(!r.ok && /wajib diunggah/.test(r.error), 'Bahan Baku lama tanpa nota: tetap wajib unggah bukti');
+  const nK = e8.__kuitansi.length;
+  itemDisetujui('K-PIC', 'Operasional', 'Insentif Guru/PIC Sekolah', 1250000);
+  r = real1('K-PIC', { riil: 1250000 });
+  const txK = B8.Transaksi.find(t => t[14] === 'K-PIC');
+  const html = (e8.__kuitansi[nK] || {})._html || '';
+  ok(r.ok && r.data.bukti === 'kuitansi' && txK && /^https:\/\/drive\.google\.com\/kuitansi\//.test(txK[10]), 'Insentif PIC Sekolah: kuitansi PDF dibuat otomatis & ditautkan: ' + (r.error || ''));
+  ok(/KUITANSI/.test(html) && /Bu Siti/.test(html) && /Satu juta dua ratus lima puluh ribu rupiah/.test(html) && html.includes(r.data.no_bukti) && /Rp/.test(html), 'isi kuitansi: penerima, nominal, terbilang, nomor bukti');
+  ok(/Peng/.test(html), 'kuitansi memakai nama Pengawas Keuangan dari identitas LPDH');
+  itemDisetujui('K-POS', 'Operasional', 'Insentif Kader Posyandu', 500000);
+  itemDisetujui('K-SEWA', 'Operasional', 'Sewa Kendaraan', 750000);
+  itemDisetujui('K-FAS', 'Fasilitas SPPG', 'Sewa Gedung', 5000000);
+  ok(real1('K-POS', { riil: 500000 }).ok && real1('K-SEWA', { riil: 750000 }).ok && real1('K-FAS').ok, 'kader posyandu, sewa kendaraan, fasilitas ke Yayasan: sekali klik');
+  itemDisetujui('K-GAS', 'Operasional', 'Gas', 200000);
+  r = real1('K-GAS', { riil: 200000 });
+  ok(!r.ok && /wajib diunggah/.test(r.error), 'operasional lain (Gas): tetap wajib unggah nota');
+  r = real1('K-GAS', { riil: 200000, bukti_url: 'https://drive.google.com/gas' });
+  ok(r.ok && r.data.bukti === 'unggah', 'operasional lain dengan unggahan berjalan seperti biasa');
+  itemDisetujui('K-GAGAL', 'Operasional', 'Sewa Kendaraan', 300000);
+  e8.__driveGagal = true;
+  const nTx = B8.Transaksi.length;
+  r = real1('K-GAGAL', { riil: 300000 });
+  e8.__driveGagal = false;
+  ok(!r.ok && /kuitansi/.test(r.error) && B8.Transaksi.length === nTx && B8.PengajuanItem.find(x => x[0] === 'K-GAGAL')[14] === 'DISETUJUI', 'Drive gagal → tidak ada transaksi setengah jadi, baris tetap Disetujui');
+  ok(e8.terbilang(0) === 'Nol rupiah' && e8.terbilang(1001000) === 'Satu juta seribu rupiah' && e8.terbilang(115000) === 'Seratus lima belas ribu rupiah' && e8.terbilang(2000000000) === 'Dua miliar rupiah', 'terbilang: ' + e8.terbilang(115000));
 
   ok(e8.teksSel('01-2026') === "'01-2026" && e8.teksSel('1/10') === "'1/10" && e8.teksSel('NT-001') === 'NT-001' && e8.teksSel('') === '', 'nomor bukti mirip tanggal/angka disimpan sebagai teks');
 

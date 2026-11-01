@@ -24,6 +24,7 @@ const P2 = { id: 'P2', periode_no: 2, dapur: 'D1', status: 'AKTIF', tanggal_mula
   sisaVA: 7000000, sisaPetty: 0, totalVATopup: 0, totalPettyTopup: 0, pengeluaranVA: 0, pengeluaranPetty: 0 };
 const ITEM = { id: 'i1', urut: 1, jenis: 'Bahan Baku', kategori: 'Beras', uraian: 'Beras 50 kg', nominal: 600000, penerima_id: 'pn1', status: 'DIAJUKAN', susulan: false };
 
+const JAM_UJI = '2026-10-30T10:00:00';   // tanggal tetap untuk browser & data tiruan (periode tiruan P2: Oktober 2026)
 function makeServer(opts) {
   const log = { urls: [], posts: [], createCount: 0, lazy: [] };
   function handle(action, p, isPost) {
@@ -43,12 +44,12 @@ function makeServer(opts) {
       case 'getKategori': return { ok: true, data: opts.riwayat ? { 'Bahan Baku': ['Beras'], 'Operasional': ['Gas', 'Listrik'] } : { 'Bahan Baku': ['Beras'] } };
       case 'getPenerima': return { ok: true, data: [{ id: 'pn1', nama: 'Toko A', bank: 'BCA', no_rek: '123', aktif: true }] };
       case 'getBADaftar': {
-        const d = new Date(), pd = n => (n < 10 ? '0' : '') + n, today = d.getFullYear() + '-' + pd(d.getMonth() + 1) + '-' + pd(d.getDate());
+        const d = new Date(JAM_UJI), pd = n => (n < 10 ? '0' : '') + n, today = d.getFullYear() + '-' + pd(d.getMonth() + 1) + '-' + pd(d.getDate());
         const g = (nomor, tanggal, periode_id, st) => ({ dapur: 'D1', tanggal, nomor, periode_id, periode_no: periode_id === 'P1' ? 1 : 2, periode_status: st, periode_mulai: '', periode_akhir: '', pengajuan: 1, menunggu: 0, disetujui: 1, total: 100000 });
         return { ok: true, data: [g('BA-HARIINI', today, 'P2', 'AKTIF'), g('BA-AKTIF-LAIN', '2026-10-02', 'P2', 'AKTIF'), g('BA-LAMA', '2026-09-10', 'P1', 'DITUTUP')] };
       }
       case 'getPengajuan': {
-        const d = new Date(), pd = n => (n < 10 ? '0' : '') + n, today = d.getFullYear() + '-' + pd(d.getMonth() + 1) + '-' + pd(d.getDate());
+        const d = new Date(JAM_UJI), pd = n => (n < 10 ? '0' : '') + n, today = d.getFullYear() + '-' + pd(d.getMonth() + 1) + '-' + pd(d.getDate());
         const head = (id, nomor, dapur, tanggal, status, items) => ({ id, nomor, dapur, tanggal, status, created_at: tanggal + 'T08:00:00', created_by_nama: 'Siti', total_diajukan: 600000, total_disetujui: status === 'SELESAI' ? 600000 : 0, items });
         const rng = { D1: { mulai: '2026-10-01', akhir: '2026-10-31' }, D2: { mulai: '2026-10-05', akhir: '2026-10-25' } };
         if (p.periode_id === 'P1') return { ok: true, data: { pengajuan: [head('gold', 'BA-LAMA-PJ', 'D1', '2026-09-10', 'MENUNGGU', [Object.assign({}, ITEM, { id: 'iold', uraian: 'Gula lama' })])], va: {}, periodeAktif: { D1: 'P2' }, periodeRange: rng } };
@@ -69,6 +70,12 @@ function makeServer(opts) {
       case 'saveHarianLPDH': log.harian = p.data; return { ok: true };
       case 'getRelawanBayar': return { ok: true, data: { rows: [{ nama: 'Ani', tugas: 'Masak', hari: 10, upah: 100000, metode: 'Transfer' }], sumber: 'disalin dari daftar terakhir', total: 1500000 } };
       case 'saveRelawanBayar': log.relawan = p.rows; return { ok: true };
+      case 'uploadBukti': log.upload = (log.upload || 0) + 1; return { ok: true, data: { url: 'https://drive.google.com/up' + log.upload, id: 'F' + log.upload } };
+      case 'getRealisasiList': return { ok: true, data: [
+        { id: 'RB', urut: 1, nomor: 'BA-PA/S1/2026/10/001', jenis: 'Bahan Baku', kategori: 'Beras', uraian: 'Beras 50 kg', nominal: 600000, penerima_nama: 'Toko A', bank: 'BCA', no_rek: '123', status: 'DISETUJUI', nota_url: 'https://drive.google.com/nota-rb', rincian: [] },
+        { id: 'RS', urut: 2, nomor: 'BA-PA/S1/2026/10/001', jenis: 'Operasional', kategori: 'Sewa Kendaraan', uraian: 'Sewa mobil antar', nominal: 750000, penerima_nama: 'Pak Ujang', bank: 'BRI', no_rek: '456', status: 'DISETUJUI', nota_url: '' },
+        { id: 'RG', urut: 3, nomor: 'BA-PA/S1/2026/10/001', jenis: 'Operasional', kategori: 'Gas', uraian: 'Gas 3 kg', nominal: 40000, penerima_nama: 'Toko Gas', bank: 'BRI', no_rek: '789', status: 'DISETUJUI', nota_url: '' }] };
+      case 'realisasiItem': (log.real = log.real || []).push(p); return { ok: true, data: { transaksi_id: 'TX1', no_bukti: 'S1-20261030-001', bukti: p.bukti_url ? 'unggah' : (p.item_id === 'RB' ? 'nota' : 'kuitansi') } };
       case 'saveSaldoLPDH': log.saldo = p; return { ok: true };
       case 'saveIdentitasLPDH': log.ident = Object.assign({}, p); log.identPost = isPost; return { ok: true };
       case 'getUsers': return { ok: true, data: [{ id: 'u1', nama: 'Siti', username: 'siti', password: 'RAHASIA-PLAINTEXT', role: 'admin', dapur: '', aktif: 'YA' }] };
@@ -83,6 +90,7 @@ async function run(name, opts, fn) {
   const browser = await chromium.launch({ executablePath: process.env.CHROMIUM_PATH || undefined, args: ['--no-sandbox'] });
   const ctx = await browser.newContext({ viewport: { width: 420, height: 900 } });
   const page = await ctx.newPage();
+  await page.clock.setFixedTime(new Date(JAM_UJI));   // uji tidak bergantung tanggal hari ini
   const srv = makeServer(opts);
   const errors = [];
   page.on('pageerror', e => errors.push('pageerror: ' + e.message));
@@ -127,6 +135,7 @@ async function isiBahanBaku(page, uraian, volume, harga) {
   await page.fill('[aria-label="Volume 1"]', String(volume));
   await page.fill('[aria-label="Satuan 1"]', 'kg');
   await page.fill('[aria-label="Harga satuan 1"]', String(harga));
+  await page.setInputFiles('input[type=file] >> nth=0', { name: 'nota.jpg', mimeType: 'image/jpeg', buffer: Buffer.from('foto-nota') });
 }
 
 (async () => {
@@ -260,6 +269,30 @@ async function isiBahanBaku(page, uraian, volume, harga) {
     assert(!(await page.isVisible('text=Mode uji: bertindak sebagai')), 'spanduk mode uji masih tampil');
   });
 
+  all &= await run('Realisasi sekali klik: Bahan Baku pakai nota, sewa kendaraan kuitansi otomatis, gas tetap unggah', { role: 'akuntan' }, async (page, srv) => {
+    await login(page, 'siti');
+    await page.waitForSelector('header');
+    await page.click('nav:visible >> text=Realisasi');
+    await page.click('text=Beras 50 kg');
+    await page.waitForSelector('text=nota dari pengajuan');
+    await page.click('text=Simpan realisasi');
+    await page.waitForSelector('text=bukti: nota pengajuan');
+    assert(srv.log.real[0].item_id === 'RB' && srv.log.real[0].bukti_url === '' && !srv.log.upload, 'Bahan Baku: tidak boleh ada unggahan');
+    await page.waitForSelector('.sheet', { state: 'detached' });
+    await page.click('text=Sewa mobil antar');
+    await page.waitForSelector('text=Kuitansi / bukti pembayaran dibuat otomatis');
+    assert((await page.inputValue('.sheet input[inputmode=numeric] >> nth=1')).replace(/\D/g, '') === '750000', 'realisasi aktual tidak terisi otomatis');
+    await page.click('text=Simpan realisasi');
+    await page.waitForSelector('text=kuitansi dibuat otomatis');
+    assert(srv.log.real[1].item_id === 'RS' && srv.log.real[1].bukti_url === '' && Number(srv.log.real[1].riil) === 750000, 'sewa kendaraan: kirim tanpa unggah, riil = nominal');
+    await page.waitForSelector('.sheet', { state: 'detached' });
+    await page.click('text=Gas 3 kg');
+    await page.waitForSelector('text=Realisasi aktual wajib');
+    await page.fill('.sheet input[inputmode=numeric] >> nth=1', '40000');
+    await page.waitForSelector('text=Bukti transfer wajib diunggah');
+    assert(await page.isDisabled('text=Simpan realisasi'), 'gas tanpa unggahan seharusnya belum bisa disimpan');
+  });
+
   all &= await run('Setup: kartu sinkron saldo + form periode', { role: 'akuntan' }, async (page) => {
     await login(page, 'siti');
     await page.waitForSelector('header');
@@ -296,7 +329,7 @@ async function isiBahanBaku(page, uraian, volume, harga) {
     await page.click('text=Kirim untuk persetujuan');
     await page.click('.sheet button:text-is("Kirim")');
   };
-  const today = new Date(); const pad = n => (n < 10 ? '0' : '') + n;
+  const today = new Date(JAM_UJI); const pad = n => (n < 10 ? '0' : '') + n;
   const tgl = today.getFullYear() + '-' + pad(today.getMonth() + 1) + '-' + pad(today.getDate());
 
   all &= await run('Pengajuan: kiriman identik tertangkap sebagai duplikat', { role: 'akuntan', existing: true, tanggal: tgl }, async (page, srv) => {

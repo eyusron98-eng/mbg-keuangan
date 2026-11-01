@@ -7390,6 +7390,7 @@ try {
     if (r.jenis === 'Bahan Baku') {
       const e = rincianError(r.rincian);
       if (e) return e;
+      if (!r.notaFile && !r.nota_url) return 'foto nota';
     }
     if (!(Number(r.nominal) > 0)) return 'nominal';
     if (!r.penerima_id) return 'penerima';
@@ -7627,8 +7628,8 @@ try {
     }), isBB && React.createElement("div", {
       className: "sm:col-span-2"
     }, React.createElement(Field, {
-      label: "Nota / bukti belanja",
-      hint: "Foto nota dari toko. Dipakai sebagai bukti autentik di LPDH; bila kosong, LPDH memakai bukti transfer."
+      label: "Nota / bukti belanja *",
+      hint: "Foto nota dari toko. Menjadi bukti realisasi (akuntan tinggal klik) dan bukti autentik di LPDH."
     }, React.createElement(BuktiPicker, {
       bukti: row.notaFile,
       setBukti: function (f) {
@@ -10330,6 +10331,10 @@ try {
       }), grp.list.map(kartu));
     }) : list.map(kartu));
   }
+  const KATEGORI_KUITANSI = ['Insentif Guru/PIC Sekolah', 'Insentif Kader Posyandu', 'Sewa Kendaraan'];
+  function pakaiKuitansi(it) {
+    return it.jenis === 'Fasilitas SPPG' || it.jenis === 'Operasional' && KATEGORI_KUITANSI.indexOf(it.kategori) >= 0;
+  }
   function RealisasiForm({
     item,
     periode,
@@ -10338,43 +10343,51 @@ try {
     onSaved
   }) {
     const isOps = item.jenis === 'Operasional';
+    const viaNota = item.jenis === 'Bahan Baku' && !!item.nota_url;
+    const viaKuitansi = pakaiKuitansi(item);
+    const otomatis = viaNota || viaKuitansi;
     const today = todayISO();
     const [f, setF] = useState({
       tanggal: periode && today >= periode.tanggal_mulai && today <= periode.tanggal_akhir ? today : periode ? periode.tanggal_mulai : today,
       no_bukti: '',
-      riil: isOps ? '' : String(item.nominal),
+      riil: isOps && !viaKuitansi ? '' : String(item.nominal),
       adaAdmin: false,
       biaya: String(BIAYA_ADMIN_DEFAULT)
     });
     const [bukti, setBukti] = useState(null);
     const [saving, setSaving] = useState(false);
     const outRange = periode && (f.tanggal < periode.tanggal_mulai || f.tanggal > periode.tanggal_akhir);
-    const err = !f.tanggal ? 'Tanggal wajib' : outRange ? 'Tanggal di luar periode' : /^[\s\-\u2013\u2014_.\/]+$/.test(f.no_bukti) ? 'No bukti tidak boleh "' + f.no_bukti.trim() + '" — kosongkan bila nota tidak bernomor' : isOps && !(Number(f.riil) > 0) ? 'Realisasi aktual wajib' : f.adaAdmin && !(Number(f.biaya) > 0 && Number(f.biaya) <= 50000) ? 'Biaya admin Rp 1 – Rp 50.000' : !bukti ? 'Bukti transfer wajib diunggah' : null;
+    const err = !f.tanggal ? 'Tanggal wajib' : outRange ? 'Tanggal di luar periode' : /^[\s\-\u2013\u2014_.\/]+$/.test(f.no_bukti) ? 'No bukti tidak boleh "' + f.no_bukti.trim() + '" — kosongkan bila nota tidak bernomor' : isOps && !(Number(f.riil) > 0) ? 'Realisasi aktual wajib' : f.adaAdmin && !(Number(f.biaya) > 0 && Number(f.biaya) <= 50000) ? 'Biaya admin Rp 1 – Rp 50.000' : !bukti && !otomatis ? 'Bukti transfer wajib diunggah' : null;
     const keluarVA = (isOps ? Number(f.riil || 0) : item.nominal) + (f.adaAdmin ? Number(f.biaya || 0) : 0);
     async function submit() {
       setSaving(true);
-      const b64 = await fileToBase64(bukti);
-      const up = await apiUpload('uploadBukti', {
-        fileData: b64,
-        fileName: buktiFileName(bukti, f.tanggal, f.no_bukti),
-        mimeType: bukti.type
-      });
-      if (!up.ok) {
-        setSaving(false);
-        toast('Gagal upload bukti: ' + up.error, 'error');
-        return;
+      let url = '';
+      if (bukti) {
+        const b64 = await fileToBase64(bukti);
+        const up = await apiUpload('uploadBukti', {
+          fileData: b64,
+          fileName: buktiFileName(bukti, f.tanggal, f.no_bukti),
+          mimeType: bukti.type
+        });
+        if (!up.ok) {
+          setSaving(false);
+          toast('Gagal upload bukti: ' + up.error, 'error');
+          return;
+        }
+        url = up.data.url;
       }
       const res = await api('realisasiItem', {
         item_id: item.id,
         tanggal: f.tanggal,
         no_bukti: f.no_bukti.trim(),
         riil: isOps ? f.riil : item.nominal,
-        bukti_url: up.data.url,
+        bukti_url: url,
         biaya_admin: f.adaAdmin ? f.biaya : 0
       });
       setSaving(false);
       if (res.ok) {
-        toast(!f.no_bukti.trim() && res.data && res.data.no_bukti ? 'Realisasi tersimpan · nomor bukti otomatis ' + res.data.no_bukti : 'Realisasi tersimpan');
+        const ket = res.data && res.data.bukti === 'kuitansi' ? ' · kuitansi dibuat otomatis' : res.data && res.data.bukti === 'nota' ? ' · bukti: nota pengajuan' : '';
+        toast('Realisasi tersimpan' + (!f.no_bukti.trim() && res.data && res.data.no_bukti ? ' · nomor ' + res.data.no_bukti : '') + ket);
         onSaved();
         onClose();
       } else toast(res.error || 'Gagal menyimpan', 'error');
@@ -10464,7 +10477,30 @@ try {
       onChange: function (patch) {
         setF(Object.assign({}, f, patch));
       }
-    }), React.createElement(Field, {
+    }), otomatis ? React.createElement("div", {
+      className: "rounded-lg p-3 mb-3 text-sm",
+      style: {
+        background: '#E8F1EC',
+        color: COLORS.deep
+      }
+    }, viaNota ? React.createElement(React.Fragment, null, I.check, " Bukti memakai ", React.createElement("a", {
+      href: item.nota_url,
+      target: "_blank",
+      rel: "noopener",
+      className: "underline font-semibold"
+    }, "nota dari pengajuan"), " \u2014 tidak perlu unggah.") : React.createElement(React.Fragment, null, I.check, " ", React.createElement("b", null, "Kuitansi / bukti pembayaran dibuat otomatis"), " (PDF, berisi penerima, nominal, terbilang, kolom tanda tangan). Cetak & mintakan tanda tangan penerima."), React.createElement("details", {
+      className: "mt-1.5 text-xs"
+    }, React.createElement("summary", {
+      style: {
+        cursor: 'pointer',
+        color: COLORS.muted
+      }
+    }, "Tetap ingin unggah bukti transfer?"), React.createElement("div", {
+      className: "mt-2"
+    }, React.createElement(BuktiPicker, {
+      bukti: bukti,
+      setBukti: setBukti
+    })))) : React.createElement(Field, {
       label: "Bukti transfer *",
       hint: "Nama file otomatis: {Tanggal}_{No Bukti}"
     }, React.createElement(BuktiPicker, {
