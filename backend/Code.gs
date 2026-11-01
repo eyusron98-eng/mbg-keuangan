@@ -126,7 +126,7 @@ function handleRequest(e, method) {
     }
     let result;
     switch (action) {
-      case 'ping':              result = { ok: true, time: new Date().toISOString(), version: 'v6-ba-sec10' }; break;
+      case 'ping':              result = { ok: true, time: new Date().toISOString(), version: 'v6-ba-sec11' }; break;
       case 'login':             result = login(params); break;
       case 'getPeriodeList':    result = getPeriodeList(params); break;
       case 'getActivePeriode':  result = getActivePeriode(params); break;
@@ -1274,7 +1274,7 @@ function readAllItems() {
       susulan: String(r[13]).toUpperCase() === 'YA', status: String(r[14] || ''), catatan: r[15] || '',
       putaran: Number(r[16]) || 1, decided_at: formatTimestamp(r[17]), decided_by: r[18] || '',
       transaksi_id: r[19] || '', created_at: formatTimestamp(r[20]),
-      rincian: bacaRincian(r[22]), nota_url: String(r[23] || '') });
+      rincian: bacaRincian(r[22]), nota_url: String(r[23] || ''), nota_no: String(r[24] || '') });
   }
   return rows;
 }
@@ -1329,6 +1329,20 @@ function cekRincian(raw, nominal) {
   if (Math.abs(Math.round(total) - Number(nominal)) > 1) return { error: 'Jumlah rincian bahan (' + rupiah(total) + ') harus sama dengan nominal (' + rupiah(nominal) + ')' };
   return { value: JSON.stringify(bersih) };
 }
+// Nomor nota Bahan Baku diisi saat pengajuan: kosong = nota tak bernomor (dibuat otomatis saat realisasi);
+// "-" ditolak; tidak boleh sama dengan nomor bukti transaksi mana pun atau nomor nota pengajuan lain yang masih berjalan.
+function cekNotaNo(raw, kecualiItemId, itemsSemua) {
+  const s = String(raw == null ? '' : raw).trim();
+  if (!s) return { value: '' };
+  if (/^[\s\-\u2013\u2014_.\/]*$/.test(s)) return { error: 'Nomor nota tidak boleh "' + s + '". Kosongkan bila nota tidak bernomor.' };
+  const n = normNB(s);
+  const sh = getSheet(SHEETS.TRANSAKSI);
+  const tampil = sh.getRange(1, 4, Math.max(sh.getLastRow(), 1), 1).getDisplayValues();
+  for (let i = 1; i < tampil.length; i++) if (normNB(tampil[i][0]) === n) return { error: 'Nomor nota "' + s + '" sudah dipakai transaksi lain. Bila notanya berbeda (toko lain), tambahkan kode toko, cth. ' + s + '-TOKOA.' };
+  const lain = (itemsSemua || readAllItems()).find(function(it) { return it.id !== kecualiItemId && it.nota_no && normNB(it.nota_no) === n && ['DITOLAK', 'DIBATALKAN', 'TEREALISASI'].indexOf(it.status) < 0; });
+  if (lain) return { error: 'Nomor nota "' + s + '" sudah dipakai pengajuan lain yang masih berjalan. Tambahkan kode toko bila notanya berbeda.' };
+  return { value: s };
+}
 function cekNotaUrl(u) { u = String(u || '').trim(); return !u || /^https:\/\//.test(u) ? u : null; }
 
 function validateItemInput(it, penerimaMap) {
@@ -1367,6 +1381,7 @@ function createPengajuan(p) {
   const penerimaMap = {};
   readPenerima().forEach(r => { penerimaMap[r.id] = r; });
   const tambahan = [];
+  const semuaItem = readAllItems();
   for (let k = 0; k < items.length; k++) {
     const err = validateItemInput(items[k], penerimaMap);
     if (err) return { ok: false, error: 'Baris ' + (k + 1) + ': ' + err };
@@ -1379,7 +1394,14 @@ function createPengajuan(p) {
     const nota = cekNotaUrl(items[k].nota_url);
     if (nota === null) return { ok: false, error: 'Baris ' + (k + 1) + ': link nota tidak valid' };
     if (items[k].jenis === 'Bahan Baku' && !nota) return { ok: false, error: 'Baris ' + (k + 1) + ': foto nota Bahan Baku wajib diunggah' };
-    tambahan.push([rinc, nota]);
+    let notaNo = '';
+    if (items[k].jenis === 'Bahan Baku') {
+      const c2 = cekNotaNo(items[k].nota_no, null, semuaItem);
+      if (c2.error) return { ok: false, error: 'Baris ' + (k + 1) + ': ' + c2.error };
+      notaNo = c2.value;
+      if (notaNo && tambahan.some(function(t) { return t[2] && normNB(t[2]) === normNB(notaNo); })) return { ok: false, error: 'Baris ' + (k + 1) + ': nomor nota "' + notaNo + '" dipakai dua kali di pengajuan ini' };
+    }
+    tambahan.push([rinc, nota, notaNo ? teksSel(notaNo) : '']);
   }
 
   const dapurRow = getDapur().data.find(d => d.id === dapurId);
@@ -1419,7 +1441,7 @@ function createPengajuan(p) {
         '', '', '', now, now].concat(tambahan[idx]);
     });
     const sh = getSheet(SHEETS.PITEM);
-    sh.getRange(1, 23, 1, 2).setValues([['rincian_bahan', 'nota_url']]);
+    sh.getRange(1, 23, 1, 3).setValues([['rincian_bahan', 'nota_url', 'nota_no']]);
     sh.getRange(sh.getLastRow() + 1, 1, rows.length, rows[0].length).setValues(rows);
     logActivity(me.id, 'createPengajuan', nomor + ' (' + rows.length + ' baris)');
     const hasil = { ok: true, data: { id: pid, nomor: nomor } };
@@ -1529,10 +1551,16 @@ function updatePengajuanItem(p) {
     const nota = p.nota_url === undefined ? it.nota_url : cekNotaUrl(p.nota_url);
     if (nota === null) return { ok: false, error: 'Link nota tidak valid' };
     if (p.jenis === 'Bahan Baku' && !nota) return { ok: false, error: 'Foto nota Bahan Baku wajib diunggah' };
+    let notaNo = '';
+    if (p.jenis === 'Bahan Baku') {
+      const c2 = cekNotaNo(p.nota_no === undefined ? it.nota_no : p.nota_no, it.id);
+      if (c2.error) return { ok: false, error: c2.error };
+      notaNo = c2.value;
+    }
     const pn = penerimaMap[p.penerima_id];
     const sh = getSheet(SHEETS.PITEM);
     const wasRevisi = it.status === 'REVISI';
-    sh.getRange(it._row, 23, 1, 2).setValues([[rinc, nota]]);
+    sh.getRange(it._row, 23, 1, 3).setValues([[rinc, nota, notaNo ? teksSel(notaNo) : '']]);
     sh.getRange(it._row, 6, 1, 12).setValues([[p.jenis, p.kategori, String(p.uraian).trim(), Number(p.nominal),
       pn.id, pn.nama, pn.bank, "'" + pn.no_rek, String(p.susulan) === 'true' || p.susulan === true ? 'YA' : 'TIDAK',
       'DIAJUKAN', it.catatan, wasRevisi ? it.putaran + 1 : it.putaran]]);
@@ -1658,8 +1686,9 @@ function realisasiItem(p) {
     const fee = parseFee(p.biaya_admin);
     if (fee < 0) return { ok: false, error: 'Biaya admin harus antara Rp 1 dan ' + rupiah(BIAYA_ADMIN_MAX) };
 
+    if (!String(p.no_bukti || '').trim() && it.jenis === 'Bahan Baku' && it.nota_no) p.no_bukti = it.nota_no;   // nomor nota dari pengajuan
     const nb = siapkanNoBukti(p.no_bukti, it.dapur, p.tanggal, null);
-    if (nb.error) return { ok: false, error: nb.error };
+    if (nb.error) return { ok: false, error: nb.error + (it.nota_no && p.no_bukti === it.nota_no ? ' Ubah nomor nota di baris pengajuan.' : '') };
     p.no_bukti = nb.value;
     const txId = idUnik('TX');
     if (sumberBukti === 'kuitansi') {

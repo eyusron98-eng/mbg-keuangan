@@ -3196,10 +3196,10 @@ function rincianError(rinc) {
   return null;
 }
 function rincianKirim(rinc) { return (rinc || []).map(function(x) { return { nama: String(x.nama).trim(), kategori: x.kategori, volume: angkaDesimal(x.volume), satuan: String(x.satuan).trim(), harga: Number(x.harga) }; }); }
-function emptyRow() { return { key: Math.random().toString(36).slice(2), jenis: '', kategori: '', uraian: '', nominal: '', penerima_id: '', susulan: false, rincian: [], nota_url: '', notaFile: null }; }
+function emptyRow() { return { key: Math.random().toString(36).slice(2), jenis: '', kategori: '', uraian: '', nominal: '', penerima_id: '', susulan: false, rincian: [], nota_url: '', notaFile: null, nota_no: '' }; }
 function rowError(r) {
   if (!r.jenis) return 'jenis'; if (!r.kategori) return 'kategori'; if (!String(r.uraian).trim()) return 'uraian';
-  if (r.jenis === 'Bahan Baku') { const e = rincianError(r.rincian); if (e) return e; if (!r.notaFile && !r.nota_url) return 'foto nota'; }
+  if (r.jenis === 'Bahan Baku') { const e = rincianError(r.rincian); if (e) return e; if (!r.notaFile && !r.nota_url) return 'foto nota'; if (/^[\s\-\u2013\u2014_.\/]+$/.test(r.nota_no || '')) return 'nomor nota (tidak boleh "-")'; }
   if (!(Number(r.nominal) > 0)) return 'nominal'; if (!r.penerima_id) return 'penerima'; return null;
 }
 function RincianBahan({ rows, onChange }) {
@@ -3262,6 +3262,9 @@ function ItemFields({ row, onChange, kategoriMap, penerima, upsertPenerima, toas
     <Field label="Uraian *"><input value={row.uraian} onChange={function(e){ set('uraian', e.target.value); }} style={inputStyle} placeholder={isBB ? 'cth. Belanja sayur menu Kamis' : 'cth. Beras 50 kg'}/></Field>
     <Field label="Nominal *" hint={isBB ? 'Otomatis = jumlah rincian bahan' : null}><RupiahInput value={row.nominal} onChange={function(v){ set('nominal', v); }} disabled={isBB}/></Field>
     {isBB && <RincianBahan rows={row.rincian && row.rincian.length ? row.rincian : [{ nama: '', kategori: '', volume: '', satuan: '', harga: '' }]} onChange={function(v){ set('rincian', v); }}/>}
+    {isBB && <div className="sm:col-span-2"><Field label="Nomor nota" hint='Sesuai yang tertulis di nota; wajib unik. Nota tak bernomor → kosongkan (dibuat otomatis). Nomor sama dari toko lain → tambahkan kode toko, cth. 001/2026-TMB'>
+      <input value={row.nota_no || ''} onChange={function(e){ set('nota_no', e.target.value); }} style={inputStyle} placeholder="cth. NT-0012" aria-label="Nomor nota"/>
+    </Field></div>}
     {isBB && <div className="sm:col-span-2"><Field label="Nota / bukti belanja *" hint="Foto nota dari toko. Menjadi bukti realisasi (akuntan tinggal klik) dan bukti autentik di LPDH.">
       <BuktiPicker bukti={row.notaFile} setBukti={function(f){ set('notaFile', f); }} existing={row.nota_url}/>
     </Field></div>}
@@ -3313,7 +3316,7 @@ function PengajuanForm({ kategoriMap, penerima, upsertPenerima, toast, onCreated
     lockRef.current = true; setSaving(true);
     try {
       const items = rows.map(function(r){ return { jenis: r.jenis, kategori: r.kategori, uraian: r.uraian.trim(), nominal: Number(r.nominal), penerima_id: r.penerima_id, susulan: !!r.susulan,
-        rincian: r.jenis === 'Bahan Baku' ? rincianKirim(r.rincian) : undefined }; });
+        rincian: r.jenis === 'Bahan Baku' ? rincianKirim(r.rincian) : undefined, nota_no: r.jenis === 'Bahan Baku' ? String(r.nota_no || '').trim() : undefined }; });
       if (!force) {
         const d = await cariDuplikatPengajuan(items, needDapur ? dapur : ownDapur, tanggal);
         if (d) { setConfirm(false); setDup(d); return; }
@@ -3394,7 +3397,7 @@ function PengajuanForm({ kategoriMap, penerima, upsertPenerima, toast, onCreated
 
 function ItemEditModal({ item, kategoriMap, penerima, upsertPenerima, toast, onClose, onSaved }) {
   const [row, setRow] = useState({ jenis: item.jenis, kategori: item.kategori, uraian: item.uraian, nominal: String(item.nominal), penerima_id: item.penerima_id, susulan: item.susulan,
-    rincian: (item.rincian || []).map(function(x) { return { nama: x.nama, kategori: x.kategori, volume: String(x.volume), satuan: x.satuan, harga: String(x.harga) }; }), nota_url: item.nota_url || '', notaFile: null });
+    rincian: (item.rincian || []).map(function(x) { return { nama: x.nama, kategori: x.kategori, volume: String(x.volume), satuan: x.satuan, harga: String(x.harga) }; }), nota_url: item.nota_url || '', notaFile: null, nota_no: item.nota_no || '' });
   const [saving, setSaving] = useState(false);
   const err = rowError(row);
   const revisi = item.status === 'REVISI';
@@ -3407,7 +3410,7 @@ function ItemEditModal({ item, kategoriMap, penerima, upsertPenerima, toast, onC
     }
     const res = await apiPost('updatePengajuanItem', { item_id: item.id, jenis: row.jenis, kategori: row.kategori, uraian: row.uraian.trim(),
       nominal: row.nominal, penerima_id: row.penerima_id, susulan: row.susulan ? 'true' : 'false',
-      rincian: row.jenis === 'Bahan Baku' ? rincianKirim(row.rincian) : undefined, nota_url: nota });
+      rincian: row.jenis === 'Bahan Baku' ? rincianKirim(row.rincian) : undefined, nota_url: nota, nota_no: row.jenis === 'Bahan Baku' ? String(row.nota_no || '').trim() : undefined });
     setSaving(false);
     if (res.ok) { toast(revisi ? 'Baris diajukan ulang' : 'Baris diperbarui'); onSaved(); onClose(); }
     else toast(res.error || 'Gagal menyimpan', 'error');
@@ -3462,7 +3465,7 @@ function ItemRow({ it, actions, children }) {
         <div className="text-[11px] mt-0.5" style={{ color: COLORS.muted }}>{it.jenis} · {it.kategori}</div>
         {(it.rincian || []).length > 0 && <div className="text-[11px] mt-1" style={{ color: COLORS.ink }}>
           {it.rincian.map(function(x, i) { return <span key={i}>{i ? ' · ' : ''}{x.nama} {String(x.volume).replace('.', ',')} {x.satuan} × {fmtNoRp(x.harga)}</span>; })}</div>}
-        {it.nota_url && <a href={it.nota_url} target="_blank" rel="noopener" className="text-[11px] underline" style={{ color: COLORS.blue }}>Lihat nota</a>}
+        {it.nota_url && <a href={it.nota_url} target="_blank" rel="noopener" className="text-[11px] underline" style={{ color: COLORS.blue }}>Lihat nota{it.nota_no ? ' ' + it.nota_no : ''}</a>}
         <div className="text-xs mt-1" style={{ color: COLORS.ink }}>→ <b>{it.penerima_nama}</b> <span style={{ color: COLORS.muted }}>· {it.bank} {it.no_rek}</span></div>
         <div className="flex flex-wrap gap-1 mt-1.5"><StatusBadge status={it.status}/><ItemFlags it={it}/>{it.putaran > 1 && <MiniBadge bg={COLORS.paper} fg={COLORS.muted}>Putaran {it.putaran}</MiniBadge>}</div>
         {pendingSt(it) && it.rek_berubah && <div className="text-[11px] mt-1.5 rounded p-1.5" style={{ background: '#F8E9E5', color: COLORS.danger }}>
@@ -4394,9 +4397,10 @@ function RealisasiForm({ item, periode, toast, onClose, onSaved }) {
         <input type="date" value={f.tanggal} min={periode && periode.tanggal_mulai} max={periode && periode.tanggal_akhir}
           onChange={function(e){ setF(Object.assign({}, f, { tanggal: e.target.value })); }} style={inputStyle}/>
       </Field>
-      <Field label="No Bukti / Nota" hint='Wajib unik (syarat LPDH). Kosongkan bila nota tidak bernomor → nomor dibuat otomatis. Nomor sama dari toko lain? tambahkan kode toko, cth. 001/2026-TMB'>
+      {otomatis ? <Field label="No Bukti"><div className="text-sm py-2.5" style={{ color: COLORS.ink }}>{viaNota ? (item.nota_no || 'dibuat otomatis (nota tak bernomor)') : 'dibuat otomatis (nomor kuitansi)'}</div></Field>
+      : <Field label="No Bukti / Nota" hint='Wajib unik (syarat LPDH). Kosongkan bila nota tidak bernomor → nomor dibuat otomatis. Nomor sama dari toko lain? tambahkan kode toko, cth. 001/2026-TMB'>
         <input value={f.no_bukti} onChange={function(e){ setF(Object.assign({}, f, { no_bukti: e.target.value })); }} style={inputStyle} placeholder="kosong = otomatis"/>
-      </Field>
+      </Field>}
       {isOps ? <>
         <Field label="Realisasi Anggaran" hint="Terkunci = nominal disetujui"><RupiahInput value={String(item.nominal)} onChange={function(){}} disabled/></Field>
         <Field label="Realisasi Aktual *" hint="Yang benar-benar ditransfer"><RupiahInput value={f.riil} onChange={function(v){ setF(Object.assign({}, f, { riil: v })); }}/></Field>
