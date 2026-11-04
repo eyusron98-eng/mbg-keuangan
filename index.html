@@ -4206,6 +4206,28 @@ try {
       disabled: saving
     }, saving ? I.spinner : I.check, " Simpan")));
   }
+  function bacaTempelRelawan(teks) {
+    return String(teks || '').split(/\r?\n/).map(function (l) {
+      return l.trim();
+    }).filter(Boolean).map(function (l) {
+      const k = (l.indexOf('\t') >= 0 ? l.split('\t') : l.split(/[;|]/)).map(function (x) {
+        return x.trim();
+      });
+      const angka = function (v) {
+        return String(v || '').replace(/[^0-9]/g, '');
+      };
+      const metode = /tunai|cash/i.test(k[4] || '') ? 'Tunai' : 'Transfer';
+      return {
+        nama: k[0] || '',
+        tugas: k[1] || '',
+        hari: angka(k[2]) || '1',
+        upah: angka(k[3]),
+        metode: metode
+      };
+    }).filter(function (x) {
+      return x.nama && !/^nama$/i.test(x.nama) && Number(x.upah) > 0;
+    });
+  }
   function RelawanForm({
     tx,
     toast,
@@ -4215,6 +4237,7 @@ try {
     const [rows, setRows] = useState(null);
     const [sumber, setSumber] = useState('');
     const [saving, setSaving] = useState(false);
+    const [tempel, setTempel] = useState(null);
     useEffect(function () {
       api('getRelawanBayar', {
         transaksi_id: tx.id
@@ -4251,6 +4274,22 @@ try {
         }) : x;
       }));
     }
+    const tambahKosong = function () {
+      setRows(rows.concat([{
+        nama: '',
+        tugas: '',
+        hari: '1',
+        upah: '',
+        metode: 'Transfer'
+      }]));
+    };
+    const hasilTempel = tempel ? bacaTempelRelawan(tempel) : [];
+    function pakaiTempel() {
+      setRows(rows.filter(function (x) {
+        return x.nama.trim();
+      }).concat(hasilTempel));
+      setTempel(null);
+    }
     async function simpan() {
       setSaving(true);
       const r = await apiPost('saveRelawanBayar', {
@@ -4277,11 +4316,69 @@ try {
       size: "lg",
       onClose: onClose
     }, React.createElement("div", {
-      className: "text-sm mb-2",
+      className: "text-sm mb-1",
       style: {
         color: COLORS.ink
       }
-    }, tx.uraian, " \xB7 ", React.createElement("b", null, fmt(tx.riil))), sumber.indexOf('disalin') === 0 && React.createElement("div", {
+    }, tx.uraian, " \xB7 ", React.createElement("b", null, fmt(tx.riil))), React.createElement("div", {
+      className: "text-xs mb-3",
+      style: {
+        color: COLORS.muted
+      }
+    }, "Isi satu baris per relawan yang dibayar di transaksi ini: nama, tugas, hari kerja, upah per hari. Jumlah semua baris harus sama dengan ", fmt(tx.riil), ". Cukup sekali \u2014 pembayaran berikutnya tersalin otomatis."), React.createElement("div", {
+      className: "flex gap-2 flex-wrap mb-3"
+    }, React.createElement(Btn, {
+      size: "sm",
+      onClick: tambahKosong
+    }, I.plusSm, " Tambah relawan"), React.createElement(Btn, {
+      size: "sm",
+      kind: "ghost",
+      onClick: function () {
+        setTempel(tempel === null ? '' : null);
+      }
+    }, I.file, " Tempel daftar")), tempel !== null && React.createElement("div", {
+      className: "rounded-lg p-2.5 mb-3",
+      style: {
+        border: '1px solid ' + COLORS.line,
+        background: COLORS.paper
+      }
+    }, React.createElement("div", {
+      className: "text-xs mb-1.5",
+      style: {
+        color: COLORS.muted
+      }
+    }, "Salin dari Excel (kolom: Nama \xB7 Tugas \xB7 Hari kerja \xB7 Upah per hari) lalu tempel di sini. Dari WhatsApp/catatan: pisahkan dengan titik koma, cth. ", React.createElement("i", null, "Ani; Juru masak; 1; 120000")), React.createElement("textarea", {
+      value: tempel,
+      onChange: function (e) {
+        setTempel(e.target.value);
+      },
+      rows: 5,
+      style: Object.assign({}, inputStyle, {
+        minHeight: 110,
+        fontFamily: 'inherit'
+      }),
+      "aria-label": "Tempel daftar relawan",
+      placeholder: 'Ani; Juru masak; 1; 120000\nBudi; Pengemudi; 1; 120000'
+    }), React.createElement("div", {
+      className: "flex items-center justify-between gap-2 mt-2"
+    }, React.createElement("span", {
+      className: "text-xs",
+      style: {
+        color: COLORS.ink
+      }
+    }, hasilTempel.length, " relawan terbaca \xB7 ", fmt(hasilTempel.reduce(function (a, x) {
+      return a + Number(x.hari) * Number(x.upah);
+    }, 0))), React.createElement(Btn, {
+      size: "sm",
+      onClick: pakaiTempel,
+      disabled: !hasilTempel.length
+    }, I.check, " Masukkan"))), !rows.length && tempel === null && React.createElement("div", {
+      className: "text-sm rounded-lg p-3 mb-3 text-center",
+      style: {
+        border: '1.5px dashed ' + COLORS.line,
+        color: COLORS.muted
+      }
+    }, "Belum ada relawan. Ketuk ", React.createElement("b", null, "Tambah relawan"), " atau ", React.createElement("b", null, "Tempel daftar"), "."), sumber.indexOf('disalin') === 0 && React.createElement("div", {
       className: "text-sm rounded-lg p-2.5 mb-3",
       style: {
         background: '#EAF0F8',
@@ -4357,20 +4454,15 @@ try {
           color: COLORS.danger
         }
       }, "Hapus")));
-    }), React.createElement(Btn, {
+    }), rows.length > 0 && React.createElement(Btn, {
       size: "sm",
       kind: "ghost",
-      onClick: function () {
-        setRows(rows.concat([{
-          nama: '',
-          tugas: '',
-          hari: '1',
-          upah: '',
-          metode: 'Transfer'
-        }]));
-      }
+      onClick: tambahKosong
     }, I.plusSm, " Tambah relawan"), React.createElement("div", {
-      className: "sticky-bar"
+      className: "mt-3 pt-3",
+      style: {
+        borderTop: '1px solid ' + COLORS.line
+      }
     }, React.createElement("div", {
       className: "flex justify-between text-sm"
     }, React.createElement("span", {
