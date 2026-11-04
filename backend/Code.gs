@@ -126,7 +126,7 @@ function handleRequest(e, method) {
     }
     let result;
     switch (action) {
-      case 'ping':              result = { ok: true, time: new Date().toISOString(), version: 'v6-ba-sec13' }; break;
+      case 'ping':              result = { ok: true, time: new Date().toISOString(), version: 'v6-ba-sec14' }; break;
       case 'login':             result = login(params); break;
       case 'getPeriodeList':    result = getPeriodeList(params); break;
       case 'getActivePeriode':  result = getActivePeriode(params); break;
@@ -2411,6 +2411,8 @@ function bagiRupiah(total, bobot) {
   r[iMax] += total - r.reduce(function(a, b) { return a + b; }, 0);
   return r;
 }
+// LPDH memakai nilai anggaran pengajuan (unriil); data tanpa anggaran → realisasi aktual
+function nilaiLPDH(t) { return Number(t.unriil) > 0 ? Number(t.unriil) : (Number(t.riil) || 0); }
 function komponenLPDH(dapurId, tgl) {
   const per = readAllPeriode(dapurId).filter(function(r) { return r.tanggal_mulai <= tgl; })
     .sort(function(a, b) { return a.tanggal_mulai < b.tanggal_mulai ? -1 : 1; });
@@ -2424,7 +2426,7 @@ function komponenLPDH(dapurId, tgl) {
     bal = bagiRupiah(total0, riwayat[0] + riwayat[1] + riwayat[2] > 0 ? riwayat : LPDH_RASIO);
     const hari = {};
     const akhir = pr.tanggal_akhir < tgl ? pr.tanggal_akhir : tgl;
-    allTx.forEach(function(t) { if (t.periode_id === pr.id && t.tanggal <= akhir) { const h = hari[t.tanggal] = hari[t.tanggal] || { sp: [0, 0, 0], tu: [] }; h.sp[lpdhKompIdx(t.jenis)] += t.riil; } });
+    allTx.forEach(function(t) { if (t.periode_id === pr.id && t.tanggal <= akhir) { const h = hari[t.tanggal] = hari[t.tanggal] || { sp: [0, 0, 0], tu: [] }; h.sp[lpdhKompIdx(t.jenis)] += nilaiLPDH(t); } });
     allTu.forEach(function(t) { if (t.periode_id === pr.id && t.tanggal <= akhir) { const h = hari[t.tanggal] = hari[t.tanggal] || { sp: [0, 0, 0], tu: [] }; h.tu.push(t); } });
     Object.keys(hari).sort().forEach(function(d) {
       const h = hari[d], sp = h.sp;
@@ -2497,7 +2499,7 @@ function getDataLPDH(p) {
   const sebelum = function(t) { return t.tanggal < tgl; };
   const saldoAwal = periode.saldoVA + periode.saldoPettyAwal
     + topups.filter(sebelum).reduce(function(s, t) { return s + t.jumlah; }, 0)
-    - tx.filter(sebelum).reduce(function(s, t) { return s + t.riil; }, 0);
+    - tx.filter(sebelum).reduce(function(s, t) { return s + nilaiLPDH(t); }, 0);
 
   const items = {};
   readAllItems().forEach(function(i) { items[i.id] = i; });
@@ -2511,7 +2513,7 @@ function getDataLPDH(p) {
     const link = String(t.pengajuan_item_id || '');
     const it = items[isFeeLink(link) ? link.substring(BIAYA_ADMIN_PREFIX.length) : link];
     return { id: t.id, tanggal: t.tanggal, no_bukti: String((tampil[t.seq] && tampil[t.seq][0]) || t.no_bukti || ''), jenis: t.jenis, kategori: t.kategori,
-      uraian: t.uraian, sumber: t.sumber, riil: t.riil, bukti_url: String(t.bukti_url || ''),
+      uraian: t.uraian, sumber: t.sumber, riil: nilaiLPDH(t), aktual: t.riil, bukti_url: String(t.bukti_url || ''),
       pemasok: it ? (isFeeLink(link) ? it.bank : it.penerima_nama) : '', seq: t.seq,
       rincian: it && !isFeeLink(link) && t.jenis === 'Bahan Baku' ? it.rincian : [], nota_url: it && !isFeeLink(link) ? it.nota_url : '',
       relawan: isHonorRelawan(t) && relawan[t.id] ? relawan[t.id].rows.filter(function(r) { return r.hadir !== false; }) : null,

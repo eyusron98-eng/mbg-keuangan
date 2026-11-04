@@ -85,7 +85,7 @@ const ok = (c, m) => { console.log((c ? 'PASS ' : 'FAIL ') + m); if (!c) fails++
     ['U3', 'off', 'xxxxxxx', 'Nonaktif', 'pic', 'D001', 'TIDAK'],
   ]);
   const B = env.__book;
-  ok(call(env, 'GET', { action: 'ping' }).version === 'v6-ba-sec13', 'ping menampilkan versi baru');
+  ok(call(env, 'GET', { action: 'ping' }).version === 'v6-ba-sec14', 'ping menampilkan versi baru');
 
   // 1. login lama (teks biasa) berhasil via POST dan password otomatis di-hash
   let r = call(env, 'POST', { action: 'login', username: 'AKUN1', password: 'RahasiaKu9' });
@@ -302,6 +302,7 @@ const ok = (c, m) => { console.log((c ? 'PASS ' : 'FAIL ') + m); if (!c) fails++
     tx('T3', '2026-10-10', 'NB-ADM', 'Operasional', 'Biaya Admin Bank', 'Admin', 6500, 'ADMIN:IT1'),
     tx('T4', '2026-10-10', 'NB-9', 'Bahan Baku', 'Semua Kategori', 'Dapur lain', 999, '', 'D002'),
     tx('T5', '2026-10-11', 'NB-5', 'Operasional', 'Gas', 'Gas', 50000)];
+  B8.Transaksi[1][8] = 80000; B8.Transaksi[5][8] = 40000;   // realisasi aktual < anggaran: LPDH tetap pakai anggaran
   const lp = (u, extra) => call(e8, 'POST', Object.assign({ action: 'getDataLPDH', token: tk8(u), dapur: 'D001', tanggal: '2026-10-10' }, extra || {}));
   r = lp('adm');
   ok(r.ok, 'admin bisa membuat data LPDH: ' + (r.error || ''));
@@ -309,6 +310,8 @@ const ok = (c, m) => { console.log((c ? 'PASS ' : 'FAIL ') + m); if (!c) fails++
   ok(r.ok && r.data.transaksi.map(t => t.id).join(',') === 'T2,T3', 'hanya transaksi dapur ini bertanggal hari itu');
   ok(r.ok && r.data.transaksi[0].pemasok === 'Toko A' && r.data.transaksi[1].pemasok === 'BCA', 'pemasok dari pengajuan; biaya admin → bank');
   ok(r.ok && r.data.topups.length === 1 && r.data.topups[0].jumlah === 700000, 'top up hari itu ikut');
+  { const r11 = lp('adm', { tanggal: '2026-10-11' }); const g = r11.ok && r11.data.transaksi.find(t => t.id === 'T5');
+    ok(g && g.riil === 50000 && g.aktual === 40000, 'LPDH memakai anggaran pengajuan (50.000), bukan realisasi aktual (40.000)'); }
   ok(r.ok && r.data.transaksi[0].no_bukti === '01-2026', 'nomor bukti dibaca sesuai tampilan sheet');
   r = call(e8, 'POST', { action: 'getDataLPDH', token: tk8('akn'), dapur: 'D002', tanggal: '2026-10-10' });
   ok(r.ok && r.data.dapur.id === 'D001', 'akuntan dipaksa ke dapurnya sendiri walau minta dapur lain');
