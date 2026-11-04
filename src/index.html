@@ -1434,6 +1434,7 @@ function isiLPDH(wb, data, opsi) {
   set(I, 'B36', id.pengawas_nama); set(I, 'D36', id.pengawas_nik);
   set(I, 'B37', id.kepala_nama);   set(I, 'D37', id.kepala_nip);
   set(I, 'B38', id.wakil_nama);    set(I, 'D38', id.wakil_nik);
+  ['F36', 'F37', 'F38'].forEach(function(a) { set(I, a, 'Ya'); });   // lembar J_Pengesahan ditandatangani sebelum diunggah
 
   // 3. Transaksi hari itu per bagian
   const grup = { bb: [], op: [], rl: [], ins: [] };
@@ -1485,9 +1486,14 @@ function isiLPDH(wb, data, opsi) {
   if (h) {
     const A = S('A_PM'), pm = {};
     (h.pm || []).forEach(function(x) { pm[x.kode] = x; });
+    const ymd = String(data.tanggal).replace(/-/g, '');
     LPDH_KELOMPOK.forEach(function(k, i) { const x = pm[k[0]]; if (!x) return; const r = 6 + i;
+      const ada = Number(x.diterima) > 0;
+      // nomor BAST otomatis bertanggal; link = folder BAST dapur (satu folder untuk semua BAST)
+      const bast = x.bast || (ada ? 'BAST/' + (data.dapur.kode || data.dapur.id) + '/' + ymd + '/' + k[0] : '');
+      const link = x.link || (ada ? id.bast_folder : '');
       set(A, 'E' + r, x.target); set(A, 'F' + r, x.distribusi); set(A, 'G' + r, x.diterima); set(A, 'H' + r, x.tidak);
-      set(A, 'I' + r, x.alasan); set(A, 'K' + r, x.bnba); set(A, 'L' + r, x.bast); set(A, 'M' + r, x.link); });
+      set(A, 'I' + r, x.alasan); set(A, 'K' + r, x.bnba || (ada ? 'Ya' : '')); set(A, 'L' + r, bast); set(A, 'M' + r, link); });
     const pr = h.produksi || {};
     set(A, 'C19', pr.total); set(A, 'C21', pr.organoleptik); set(A, 'C22', pr.sampel); set(A, 'C23', pr.tidak_terdistribusi); set(A, 'C24', pr.buffer);
     LPDH_SYARAT.forEach(function(x, i) { set(D, 'B' + (6 + i), (h.syarat || {})[x[0]]); });
@@ -1497,15 +1503,19 @@ function isiLPDH(wb, data, opsi) {
   const ins = grup.ins;
   if (ins.length) {
     const ki = ins.map(function(t) { return t.insentif || {}; });
-    set(D, 'C19', lpdhGabung(ki.map(function(x) { return x.no_ppk; }), '; '));
-    const adaNilai = ki.every(function(x) { return x.nilai_ppk !== '' && x.nilai_ppk != null; });
-    set(D, 'C20', adaNilai ? ki.reduce(function(s2, x) { return s2 + Number(x.nilai_ppk); }, 0) : null);
+    // nomor pernyataan PPK: yang diketik untuk pembayaran ini, atau nomor terakhir yang diketik untuk dapur ini
+    set(D, 'C19', lpdhGabung(ki.map(function(x) { return x.no_ppk || data.ppkTerakhir || ''; }), '; '));
+    // nilai pernyataan PPK = nominal yang dibayarkan (kecuali diketik lain)
+    set(D, 'C20', ins.reduce(function(s2, t, i) { const v = ki[i].nilai_ppk; return s2 + (v !== '' && v != null ? Number(v) : t.riil); }, 0));
     set(D, 'C21', jml(ins)); set(D, 'C22', tgl);
     set(D, 'C23', lpdhGabung(ins.map(function(t) { return t.no_bukti; }), '; '));
-    set(D, 'C24', lpdhGabung(ki.map(function(x) { return x.no_kuitansi; }), '; '));
-    set(D, 'C25', ki.every(function(x) { return x.kuitansi_ttd === 'Ya'; }) ? 'Ya' : ki.some(function(x) { return x.kuitansi_ttd === 'Tidak'; }) ? 'Tidak' : null);
-    set(D, 'C26', ins.map(function(t) { return t.bukti_url; }).filter(Boolean).join(' | '));
-    set(D, 'C27', lpdhGabung(ki.map(function(x) { return x.ref_va; }), '; '));
+    // nomor kuitansi = nomor kuitansi otomatis (nomor bukti realisasi)
+    set(D, 'C24', lpdhGabung(ins.map(function(t, i) { return ki[i].no_kuitansi || t.no_bukti; }), '; '));
+    // ditandatangani Mitra = kuitansi bertanda tangan sudah diunggah PIC
+    set(D, 'C25', ki.every(function(x) { return x.ttd_url || x.kuitansi_ttd === 'Ya'; }) ? 'Ya' : 'Tidak');
+    set(D, 'C26', ins.map(function(t, i) { return ki[i].ttd_url || t.bukti_url; }).filter(Boolean).join(' | '));
+    // referensi = referensi yang tertulis di kuitansi (nomor Berita Acara pengajuan #baris)
+    set(D, 'C27', lpdhGabung(ins.map(function(t, i) { return ki[i].ref_va || t.ref || ''; }), '; '));
   }
 
   // 4. Saldo per komponen (dihitung server, bersambung dari hari ke hari)
@@ -1561,6 +1571,7 @@ const LPDH_STATUS_HARI = ['HPE', 'Libur nasional/cuti bersama', 'Libur sekolah/l
 const LPDH_IDENT = [
   ['SPPG', [['id_sppg', 'ID SPPG resmi (BGN)', 'cth. 32.04.XX.XXXX'], ['desa', 'Desa/Kelurahan'], ['kecamatan', 'Kecamatan'], ['kabupaten', 'Kabupaten/Kota', 'Tulis sama persis dengan daftar indeks kemahalan PPK'], ['provinsi', 'Provinsi']]],
   ['Rekening', [['yayasan', 'Nama Mitra/Yayasan'], ['no_va', 'Nomor VA', '', 'numeric'], ['bank', 'Bank Himbara', 'cth. BRI']]],
+  ['BAST', [['bast_folder', 'Link folder BAST (Cloud SIPGN / Drive)', 'Satu folder untuk semua BAST; dipakai otomatis di A_PM', 'url']]],
   ['Penanda tangan', [['pengawas_nama', 'Pengawas Keuangan (Disusun oleh)'], ['pengawas_nik', 'NIK Pengawas Keuangan', '16 digit', 'numeric'],
     ['kepala_nama', 'Kepala SPPG (Mengetahui)'], ['kepala_nip', 'NIP Kepala SPPG', '18 digit', 'numeric'],
     ['wakil_nama', 'Perwakilan Mitra/Yayasan (Menyetujui)'], ['wakil_nik', 'NIK Perwakilan Yayasan', '16 digit', 'numeric']]],
@@ -1581,6 +1592,7 @@ function LpdhPage({ session, scope, toast }) {
   const [editRelawan, setEditRelawan] = useState(null);
   const [editTopup, setEditTopup] = useState(null);
   const [editInsentif, setEditInsentif] = useState(null);
+  const [unggahTtd, setUnggahTtd] = useState('');
   const [saldoRek, setSaldoRek] = useState({ saldo_va: '', penjelasan: '' });
   const [simpanSaldo, setSimpanSaldo] = useState(false);
   const bisaLengkapi = role === 'admin' || role === 'akuntan';
@@ -1619,6 +1631,18 @@ function LpdhPage({ session, scope, toast }) {
   if (nBarisBB > LPDH_KAP.bb) lebih.push(LPDH_KAP.bb + ' baris bahan (hari ini ' + nBarisBB + ')');
   if (nBarisRL > LPDH_KAP.rl) lebih.push(LPDH_KAP.rl + ' baris relawan (hari ini ' + nBarisRL + ')');
   const saldoAkhirApp = data ? Math.round(data.saldoAwal + data.topups.reduce(function(s2, t) { return s2 + t.jumlah; }, 0) - (data.transaksi || []).reduce(function(s2, t) { return s2 + t.riil; }, 0)) : 0;
+  async function kirimTtd(t, file) {
+    setUnggahTtd(t.id);
+    try {
+      const ext = (String(file.name).split('.').pop() || 'jpg').toLowerCase();
+      const up = await apiUpload('uploadBukti', { fileData: await fileToBase64(file), fileName: 'KUITANSI-TTD_' + t.tanggal + '_' + String(t.no_bukti || t.id).replace(/[^a-zA-Z0-9_-]+/g, '-') + '.' + ext, mimeType: file.type });
+      if (!up.ok) throw new Error(up.error);
+      const r = await apiPost('saveTtdInsentif', { transaksi_id: t.id, ttd_url: up.data.url });
+      if (!r.ok) throw new Error(r.error);
+      toast('Kuitansi bertanda tangan tersimpan'); load();
+    } catch (e) { toast('Gagal unggah kuitansi: ' + e.message, 'error'); }
+    setUnggahTtd('');
+  }
   async function simpanSaldoRek() {
     setSimpanSaldo(true);
     const r = await api('saveSaldoLPDH', { dapur: dapurId, tanggal: tanggal, saldo_va: saldoRek.saldo_va, penjelasan: saldoRek.penjelasan });
@@ -1723,10 +1747,19 @@ function LpdhPage({ session, scope, toast }) {
               <div className="text-xs" style={{ color: lengkap ? COLORS.green : '#9A6A0B' }}>{lengkap ? 'SP2D ' + t.no_sp2d + ' · kuitansi ' + t.no_kuitansi : 'SP2D / kuitansi / link bukti terima belum lengkap'}</div></div>
             {bisaLengkapi && <Btn size="sm" kind={lengkap ? 'ghost' : 'solid'} onClick={function() { setEditTopup(t); }}>{lengkap ? 'Ubah' : 'Lengkapi'}</Btn>}
           </div>; })}
-          {grup.ins.map(function(t) { const k = t.insentif || {}; const lengkap = k.no_ppk && k.nilai_ppk !== '' && k.nilai_ppk != null && k.no_kuitansi && k.kuitansi_ttd; return <div key={t.id} className="flex items-center justify-between gap-2 py-1.5 text-sm">
-            <div className="min-w-0"><div className="truncate" style={{ color: COLORS.ink }}>Insentif {fmt(t.riil)}</div>
-              <div className="text-xs" style={{ color: lengkap ? COLORS.green : '#9A6A0B' }}>{lengkap ? 'Pernyataan PPK ' + k.no_ppk + ' · ' + fmt(k.nilai_ppk) : 'Pernyataan PPK / kuitansi belum lengkap'}</div></div>
-            {bisaLengkapi && <Btn size="sm" kind={lengkap ? 'ghost' : 'solid'} onClick={function() { setEditInsentif(t); }}>{lengkap ? 'Ubah' : 'Lengkapi'}</Btn>}
+          {grup.ins.map(function(t) { const k = t.insentif || {}; const ppk = k.no_ppk || data.ppkTerakhir; const ttd = !!(k.ttd_url || k.kuitansi_ttd === 'Ya');
+            return <div key={t.id} className="py-1.5 text-sm" style={{ borderTop: '1px solid ' + COLORS.line }}>
+            <div className="flex items-center justify-between gap-2">
+              <div className="min-w-0"><div className="truncate" style={{ color: COLORS.ink }}>Insentif {fmt(t.riil)}{t.no_bukti ? ' · kuitansi ' + t.no_bukti : ''}</div>
+                <div className="text-xs" style={{ color: ppk ? COLORS.green : '#9A6A0B' }}>{ppk ? 'Pernyataan PPK ' + ppk + (k.no_ppk ? '' : ' (nomor terakhir)') : 'Nomor pernyataan PPK belum pernah diketik'}</div>
+                <div className="text-xs" style={{ color: ttd ? COLORS.green : '#9A6A0B' }}>{ttd ? <>Kuitansi bertanda tangan Mitra ✓ {k.ttd_url && <a href={k.ttd_url} target="_blank" rel="noopener" className="underline">lihat</a>}</> : 'Kuitansi bertanda tangan belum diunggah'}</div></div>
+              <div className="flex flex-col gap-1 shrink-0">
+                {bisaIsi && <label className="inline-flex items-center justify-center gap-1 rounded-lg px-3 py-2 text-xs font-semibold cursor-pointer" style={{ background: ttd ? 'transparent' : COLORS.green, color: ttd ? COLORS.green : '#fff', border: '1px solid ' + (ttd ? COLORS.line : COLORS.green), minHeight: 36 }}>
+                  {unggahTtd === t.id ? I.spinner : I.camera} {ttd ? 'Ganti ttd' : 'Unggah ttd'}
+                  <input type="file" accept="image/*,application/pdf" className="hidden" aria-label={'Unggah kuitansi ttd ' + t.id} onChange={function(e) { if (e.target.files[0]) kirimTtd(t, e.target.files[0]); e.target.value = ''; }}/></label>}
+                {bisaLengkapi && <Btn size="sm" kind="ghost" onClick={function() { setEditInsentif(Object.assign({}, t, { insentif: Object.assign({ no_ppk: data.ppkTerakhir || '', nilai_ppk: t.riil }, k) })); }}>{ppk ? 'Ubah PPK' : 'Isi PPK'}</Btn>}
+              </div>
+            </div>
           </div>; })}
         </div>}
         {grup.rl.length > 0 && <div className="mt-3 pt-3" style={{ borderTop: '1px solid ' + COLORS.line }}>
@@ -1753,7 +1786,7 @@ function LpdhPage({ session, scope, toast }) {
       </div>}
       <ul className="text-sm list-disc pl-5 space-y-1" style={{ color: COLORS.ink }}>
         {!hasil.adaHarian && <li><b>A_PM</b> & syarat insentif: belum diisi PIC untuk tanggal ini.</li>}
-        <li><b>Identitas</b>: kolom "Sudah tanda tangan" (Ya) setelah lembar J_Pengesahan ditandatangani.</li>
+        <li>Kolom "Sudah tanda tangan" terisi <b>Ya</b> — tandatangani & cap lembar <b>J_Pengesahan</b> sebelum diunggah.</li>
         <li>Tanggal & jam unggah terisi waktu unduh ({new Date().toTimeString().slice(0, 5)}) — unggah ke SIPGN segera, atau ubah bila diunggah belakangan.</li>
       </ul>
       <div className="text-xs mt-2" style={{ color: COLORS.muted }}>Operasional digabung per kategori ke 15 baris tetap template. Saldo per komponen bersambung dari hari sebelumnya: top up menutup komponen yang kurang lebih dulu, sisanya sesuai porsi pengeluaran hari itu. Angka memakai nilai riil (uang keluar).</div>

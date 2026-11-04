@@ -3041,6 +3041,9 @@ try {
     set(I, 'D37', id.kepala_nip);
     set(I, 'B38', id.wakil_nama);
     set(I, 'D38', id.wakil_nik);
+    ['F36', 'F37', 'F38'].forEach(function (a) {
+      set(I, a, 'Ya');
+    });
     const grup = {
       bb: [],
       op: [],
@@ -3188,18 +3191,22 @@ try {
       (h.pm || []).forEach(function (x) {
         pm[x.kode] = x;
       });
+      const ymd = String(data.tanggal).replace(/-/g, '');
       LPDH_KELOMPOK.forEach(function (k, i) {
         const x = pm[k[0]];
         if (!x) return;
         const r = 6 + i;
+        const ada = Number(x.diterima) > 0;
+        const bast = x.bast || (ada ? 'BAST/' + (data.dapur.kode || data.dapur.id) + '/' + ymd + '/' + k[0] : '');
+        const link = x.link || (ada ? id.bast_folder : '');
         set(A, 'E' + r, x.target);
         set(A, 'F' + r, x.distribusi);
         set(A, 'G' + r, x.diterima);
         set(A, 'H' + r, x.tidak);
         set(A, 'I' + r, x.alasan);
-        set(A, 'K' + r, x.bnba);
-        set(A, 'L' + r, x.bast);
-        set(A, 'M' + r, x.link);
+        set(A, 'K' + r, x.bnba || (ada ? 'Ya' : ''));
+        set(A, 'L' + r, bast);
+        set(A, 'M' + r, link);
       });
       const pr = h.produksi || {};
       set(A, 'C19', pr.total);
@@ -3217,32 +3224,28 @@ try {
         return t.insentif || {};
       });
       set(D, 'C19', lpdhGabung(ki.map(function (x) {
-        return x.no_ppk;
+        return x.no_ppk || data.ppkTerakhir || '';
       }), '; '));
-      const adaNilai = ki.every(function (x) {
-        return x.nilai_ppk !== '' && x.nilai_ppk != null;
-      });
-      set(D, 'C20', adaNilai ? ki.reduce(function (s2, x) {
-        return s2 + Number(x.nilai_ppk);
-      }, 0) : null);
+      set(D, 'C20', ins.reduce(function (s2, t, i) {
+        const v = ki[i].nilai_ppk;
+        return s2 + (v !== '' && v != null ? Number(v) : t.riil);
+      }, 0));
       set(D, 'C21', jml(ins));
       set(D, 'C22', tgl);
       set(D, 'C23', lpdhGabung(ins.map(function (t) {
         return t.no_bukti;
       }), '; '));
-      set(D, 'C24', lpdhGabung(ki.map(function (x) {
-        return x.no_kuitansi;
+      set(D, 'C24', lpdhGabung(ins.map(function (t, i) {
+        return ki[i].no_kuitansi || t.no_bukti;
       }), '; '));
       set(D, 'C25', ki.every(function (x) {
-        return x.kuitansi_ttd === 'Ya';
-      }) ? 'Ya' : ki.some(function (x) {
-        return x.kuitansi_ttd === 'Tidak';
-      }) ? 'Tidak' : null);
-      set(D, 'C26', ins.map(function (t) {
-        return t.bukti_url;
+        return x.ttd_url || x.kuitansi_ttd === 'Ya';
+      }) ? 'Ya' : 'Tidak');
+      set(D, 'C26', ins.map(function (t, i) {
+        return ki[i].ttd_url || t.bukti_url;
       }).filter(Boolean).join(' | '));
-      set(D, 'C27', lpdhGabung(ki.map(function (x) {
-        return x.ref_va;
+      set(D, 'C27', lpdhGabung(ins.map(function (t, i) {
+        return ki[i].ref_va || t.ref || '';
       }), '; '));
     }
     const E = S('E_Saldo'),
@@ -3337,7 +3340,7 @@ try {
   const EXCELJS_URL = 'https://unpkg.com/exceljs@4.4.0/dist/exceljs.min.js';
   const LPDH_TEMPLATE_URL = (location.protocol === 'file:' ? 'https://eyusron98-eng.github.io/mbg-keuangan/' : '') + 'templates/LPDH_SPPG.xlsx?v=4';
   const LPDH_STATUS_HARI = ['HPE', 'Libur nasional/cuti bersama', 'Libur sekolah/libur khusus daerah', 'Tanpa pembelajaran tatap muka', 'Kondisi tertentu (pemda/BGN)', 'Melebihi 5 hari dalam seminggu'];
-  const LPDH_IDENT = [['SPPG', [['id_sppg', 'ID SPPG resmi (BGN)', 'cth. 32.04.XX.XXXX'], ['desa', 'Desa/Kelurahan'], ['kecamatan', 'Kecamatan'], ['kabupaten', 'Kabupaten/Kota', 'Tulis sama persis dengan daftar indeks kemahalan PPK'], ['provinsi', 'Provinsi']]], ['Rekening', [['yayasan', 'Nama Mitra/Yayasan'], ['no_va', 'Nomor VA', '', 'numeric'], ['bank', 'Bank Himbara', 'cth. BRI']]], ['Penanda tangan', [['pengawas_nama', 'Pengawas Keuangan (Disusun oleh)'], ['pengawas_nik', 'NIK Pengawas Keuangan', '16 digit', 'numeric'], ['kepala_nama', 'Kepala SPPG (Mengetahui)'], ['kepala_nip', 'NIP Kepala SPPG', '18 digit', 'numeric'], ['wakil_nama', 'Perwakilan Mitra/Yayasan (Menyetujui)'], ['wakil_nik', 'NIK Perwakilan Yayasan', '16 digit', 'numeric']]]];
+  const LPDH_IDENT = [['SPPG', [['id_sppg', 'ID SPPG resmi (BGN)', 'cth. 32.04.XX.XXXX'], ['desa', 'Desa/Kelurahan'], ['kecamatan', 'Kecamatan'], ['kabupaten', 'Kabupaten/Kota', 'Tulis sama persis dengan daftar indeks kemahalan PPK'], ['provinsi', 'Provinsi']]], ['Rekening', [['yayasan', 'Nama Mitra/Yayasan'], ['no_va', 'Nomor VA', '', 'numeric'], ['bank', 'Bank Himbara', 'cth. BRI']]], ['BAST', [['bast_folder', 'Link folder BAST (Cloud SIPGN / Drive)', 'Satu folder untuk semua BAST; dipakai otomatis di A_PM', 'url']]], ['Penanda tangan', [['pengawas_nama', 'Pengawas Keuangan (Disusun oleh)'], ['pengawas_nik', 'NIK Pengawas Keuangan', '16 digit', 'numeric'], ['kepala_nama', 'Kepala SPPG (Mengetahui)'], ['kepala_nip', 'NIP Kepala SPPG', '18 digit', 'numeric'], ['wakil_nama', 'Perwakilan Mitra/Yayasan (Menyetujui)'], ['wakil_nik', 'NIK Perwakilan Yayasan', '16 digit', 'numeric']]]];
   const LPDH_BAGIAN = {
     bb: 'Bahan Baku',
     op: 'Operasional',
@@ -3367,6 +3370,7 @@ try {
     const [editRelawan, setEditRelawan] = useState(null);
     const [editTopup, setEditTopup] = useState(null);
     const [editInsentif, setEditInsentif] = useState(null);
+    const [unggahTtd, setUnggahTtd] = useState('');
     const [saldoRek, setSaldoRek] = useState({
       saldo_va: '',
       penjelasan: ''
@@ -3447,6 +3451,28 @@ try {
     }, 0) - (data.transaksi || []).reduce(function (s2, t) {
       return s2 + t.riil;
     }, 0)) : 0;
+    async function kirimTtd(t, file) {
+      setUnggahTtd(t.id);
+      try {
+        const ext = (String(file.name).split('.').pop() || 'jpg').toLowerCase();
+        const up = await apiUpload('uploadBukti', {
+          fileData: await fileToBase64(file),
+          fileName: 'KUITANSI-TTD_' + t.tanggal + '_' + String(t.no_bukti || t.id).replace(/[^a-zA-Z0-9_-]+/g, '-') + '.' + ext,
+          mimeType: file.type
+        });
+        if (!up.ok) throw new Error(up.error);
+        const r = await apiPost('saveTtdInsentif', {
+          transaksi_id: t.id,
+          ttd_url: up.data.url
+        });
+        if (!r.ok) throw new Error(r.error);
+        toast('Kuitansi bertanda tangan tersimpan');
+        load();
+      } catch (e) {
+        toast('Gagal unggah kuitansi: ' + e.message, 'error');
+      }
+      setUnggahTtd('');
+    }
     async function simpanSaldoRek() {
       setSimpanSaldo(true);
       const r = await api('saveSaldoLPDH', {
@@ -3762,10 +3788,16 @@ try {
       }, lengkap ? 'Ubah' : 'Lengkapi'));
     }), grup.ins.map(function (t) {
       const k = t.insentif || {};
-      const lengkap = k.no_ppk && k.nilai_ppk !== '' && k.nilai_ppk != null && k.no_kuitansi && k.kuitansi_ttd;
+      const ppk = k.no_ppk || data.ppkTerakhir;
+      const ttd = !!(k.ttd_url || k.kuitansi_ttd === 'Ya');
       return React.createElement("div", {
         key: t.id,
-        className: "flex items-center justify-between gap-2 py-1.5 text-sm"
+        className: "py-1.5 text-sm",
+        style: {
+          borderTop: '1px solid ' + COLORS.line
+        }
+      }, React.createElement("div", {
+        className: "flex items-center justify-between gap-2"
       }, React.createElement("div", {
         className: "min-w-0"
       }, React.createElement("div", {
@@ -3773,18 +3805,52 @@ try {
         style: {
           color: COLORS.ink
         }
-      }, "Insentif ", fmt(t.riil)), React.createElement("div", {
+      }, "Insentif ", fmt(t.riil), t.no_bukti ? ' · kuitansi ' + t.no_bukti : ''), React.createElement("div", {
         className: "text-xs",
         style: {
-          color: lengkap ? COLORS.green : '#9A6A0B'
+          color: ppk ? COLORS.green : '#9A6A0B'
         }
-      }, lengkap ? 'Pernyataan PPK ' + k.no_ppk + ' · ' + fmt(k.nilai_ppk) : 'Pernyataan PPK / kuitansi belum lengkap')), bisaLengkapi && React.createElement(Btn, {
+      }, ppk ? 'Pernyataan PPK ' + ppk + (k.no_ppk ? '' : ' (nomor terakhir)') : 'Nomor pernyataan PPK belum pernah diketik'), React.createElement("div", {
+        className: "text-xs",
+        style: {
+          color: ttd ? COLORS.green : '#9A6A0B'
+        }
+      }, ttd ? React.createElement(React.Fragment, null, "Kuitansi bertanda tangan Mitra \u2713 ", k.ttd_url && React.createElement("a", {
+        href: k.ttd_url,
+        target: "_blank",
+        rel: "noopener",
+        className: "underline"
+      }, "lihat")) : 'Kuitansi bertanda tangan belum diunggah')), React.createElement("div", {
+        className: "flex flex-col gap-1 shrink-0"
+      }, bisaIsi && React.createElement("label", {
+        className: "inline-flex items-center justify-center gap-1 rounded-lg px-3 py-2 text-xs font-semibold cursor-pointer",
+        style: {
+          background: ttd ? 'transparent' : COLORS.green,
+          color: ttd ? COLORS.green : '#fff',
+          border: '1px solid ' + (ttd ? COLORS.line : COLORS.green),
+          minHeight: 36
+        }
+      }, unggahTtd === t.id ? I.spinner : I.camera, " ", ttd ? 'Ganti ttd' : 'Unggah ttd', React.createElement("input", {
+        type: "file",
+        accept: "image/*,application/pdf",
+        className: "hidden",
+        "aria-label": 'Unggah kuitansi ttd ' + t.id,
+        onChange: function (e) {
+          if (e.target.files[0]) kirimTtd(t, e.target.files[0]);
+          e.target.value = '';
+        }
+      })), bisaLengkapi && React.createElement(Btn, {
         size: "sm",
-        kind: lengkap ? 'ghost' : 'solid',
+        kind: "ghost",
         onClick: function () {
-          setEditInsentif(t);
+          setEditInsentif(Object.assign({}, t, {
+            insentif: Object.assign({
+              no_ppk: data.ppkTerakhir || '',
+              nilai_ppk: t.riil
+            }, k)
+          }));
         }
-      }, lengkap ? 'Ubah' : 'Lengkapi'));
+      }, ppk ? 'Ubah PPK' : 'Isi PPK'))));
     })), grup.rl.length > 0 && React.createElement("div", {
       className: "mt-3 pt-3",
       style: {
@@ -3863,7 +3929,7 @@ try {
       style: {
         color: COLORS.ink
       }
-    }, !hasil.adaHarian && React.createElement("li", null, React.createElement("b", null, "A_PM"), " & syarat insentif: belum diisi PIC untuk tanggal ini."), React.createElement("li", null, React.createElement("b", null, "Identitas"), ": kolom \"Sudah tanda tangan\" (Ya) setelah lembar J_Pengesahan ditandatangani."), React.createElement("li", null, "Tanggal & jam unggah terisi waktu unduh (", new Date().toTimeString().slice(0, 5), ") \u2014 unggah ke SIPGN segera, atau ubah bila diunggah belakangan.")), React.createElement("div", {
+    }, !hasil.adaHarian && React.createElement("li", null, React.createElement("b", null, "A_PM"), " & syarat insentif: belum diisi PIC untuk tanggal ini."), React.createElement("li", null, "Kolom \"Sudah tanda tangan\" terisi ", React.createElement("b", null, "Ya"), " \u2014 tandatangani & cap lembar ", React.createElement("b", null, "J_Pengesahan"), " sebelum diunggah."), React.createElement("li", null, "Tanggal & jam unggah terisi waktu unduh (", new Date().toTimeString().slice(0, 5), ") \u2014 unggah ke SIPGN segera, atau ubah bila diunggah belakangan.")), React.createElement("div", {
       className: "text-xs mt-2",
       style: {
         color: COLORS.muted

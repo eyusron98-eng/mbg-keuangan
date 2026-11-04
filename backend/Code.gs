@@ -126,7 +126,7 @@ function handleRequest(e, method) {
     }
     let result;
     switch (action) {
-      case 'ping':              result = { ok: true, time: new Date().toISOString(), version: 'v6-ba-sec12' }; break;
+      case 'ping':              result = { ok: true, time: new Date().toISOString(), version: 'v6-ba-sec13' }; break;
       case 'login':             result = login(params); break;
       case 'getPeriodeList':    result = getPeriodeList(params); break;
       case 'getActivePeriode':  result = getActivePeriode(params); break;
@@ -185,6 +185,7 @@ function handleRequest(e, method) {
       case 'saveRelawanBayar':  result = saveRelawanBayar(params); break;
       case 'saveTopupLPDH':     result = saveTopupLPDH(params); break;
       case 'saveInsentifLPDH':  result = saveInsentifLPDH(params); break;
+      case 'saveTtdInsentif':   result = saveTtdInsentif(params); break;
       case 'saveSaldoLPDH':     result = saveSaldoLPDH(params); break;
       case 'getPenandatangan':  result = getPenandatangan(params); break;
       case 'getLogoKop':        result = getLogoKop(params); break;
@@ -2094,7 +2095,7 @@ function logActivity(userId, action, ref) {
 //    | no_va | bank | pengawas_nama | pengawas_nik | kepala_nama | kepala_nip | wakil_nama | wakil_nik | updated_at | updated_by
 // ============================================================
 const LPDH_FIELDS = ['id_sppg', 'desa', 'kecamatan', 'kabupaten', 'provinsi', 'yayasan', 'no_va', 'bank',
-  'pengawas_nama', 'pengawas_nik', 'kepala_nama', 'kepala_nip', 'wakil_nama', 'wakil_nik'];
+  'pengawas_nama', 'pengawas_nik', 'kepala_nama', 'kepala_nip', 'wakil_nama', 'wakil_nik', 'bast_folder'];
 
 function lpdhSheet() {
   const ss = getSS();
@@ -2117,6 +2118,8 @@ function readIdentitasLPDH(dapurId) {
     if (d[i][0] === dapurId) {
       const o = { _row: i + 1 };
       LPDH_FIELDS.forEach(function(f, k) { o[f] = String(d[i][k + 1] == null ? '' : d[i][k + 1]).replace(/^'/, ''); });
+      // baris lama (sebelum ada kolom folder BAST) berisi tanggal di kolom ini
+      if (!/^https:\/\//.test(o.bast_folder)) o.bast_folder = '';
       return o;
     }
   }
@@ -2140,6 +2143,7 @@ function saveIdentitasLPDH(p) {
   const v = {};
   LPDH_FIELDS.forEach(function(f) { v[f] = String(p[f] == null ? '' : p[f]).trim(); });
   const cekAngka = function(val, n, label) { return !val || new RegExp('^\\d{' + n + '}$').test(val) ? null : label + ' harus ' + n + ' digit angka'; };
+  if (v.bast_folder && !/^https:\/\//.test(v.bast_folder)) return { ok: false, error: 'Link folder BAST harus diawali https://' };
   const err = cekAngka(v.pengawas_nik, 16, 'NIK Pengawas Keuangan') || cekAngka(v.kepala_nip, 18, 'NIP Kepala SPPG') || cekAngka(v.wakil_nik, 16, 'NIK Perwakilan Yayasan');
   if (err) return { ok: false, error: err };
   return withLock(function() {
@@ -2327,12 +2331,39 @@ function saveInsentifLPDH(p) {
     kuitansi_ttd: p.kuitansi_ttd === 'Ya' ? 'Ya' : p.kuitansi_ttd === 'Tidak' ? 'Tidak' : '', ref_va: String(p.ref_va || '').trim() };
   return withLock(function() {
     const sh = insentifSheet(), ada = bacaInsentifSemua(tx.dapur)[tx.id];
+    if (ada && ada.data.ttd_url) d.ttd_url = ada.data.ttd_url;
     const row = [tx.id, tx.dapur, JSON.stringify(d), new Date(), me.id];
     if (ada) sh.getRange(ada._row, 1, 1, row.length).setValues([row]); else sh.appendRow(row);
     logActivity(me.id, 'saveInsentifLPDH', tx.id);
     return { ok: true };
   });
 }
+// Kuitansi insentif yang sudah ditandatangani Mitra/Yayasan, diunggah PIC (atau akuntan/admin)
+function saveTtdInsentif(p) {
+  const me = authUser(p);
+  if (!me) return { ok: false, error: SESI_ERR };
+  if (!bisaIsiLPDH(me)) return { ok: false, error: 'Hanya PIC, akuntan, atau admin' };
+  const tx = findTx(p.transaksi_id);
+  if (!tx || tx.jenis !== 'Fasilitas SPPG') return { ok: false, error: 'Transaksi insentif (Fasilitas SPPG) tidak ditemukan' };
+  if (lpdhDapur(me, tx.dapur) !== tx.dapur) return { ok: false, error: 'Bukan dapur Anda' };
+  const url = String(p.ttd_url || '').trim();
+  if (!/^https:\/\//.test(url)) return { ok: false, error: 'File kuitansi bertanda tangan belum terunggah' };
+  return withLock(function() {
+    const sh = insentifSheet(), ada = bacaInsentifSemua(tx.dapur)[tx.id];
+    const d = Object.assign({}, ada ? ada.data : {}, { ttd_url: url, kuitansi_ttd: 'Ya' });
+    const row = [tx.id, tx.dapur, JSON.stringify(d), new Date(), me.id];
+    if (ada) sh.getRange(ada._row, 1, 1, row.length).setValues([row]); else sh.appendRow(row);
+    logActivity(me.id, 'saveTtdInsentif', tx.id);
+    return { ok: true };
+  });
+}
+// Nomor pernyataan PPK terakhir yang diketik untuk dapur ini (dipakai lagi sampai diganti)
+function ppkTerakhir(dapurId, semua) {
+  let akhir = null;
+  Object.keys(semua).forEach(function(k) { const x = semua[k]; if (x.data && x.data.no_ppk && (!akhir || x._row > akhir._row)) akhir = x; });
+  return akhir ? akhir.data.no_ppk : '';
+}
+
 // Saldo VA menurut mutasi rekening (diketik dari mobile banking/rekening koran) + penjelasan selisih, per dapur per hari
 //  LPDHSaldo: dapur_id | tanggal | saldo_va | penjelasan | updated_at | updated_by
 function saldoSheet() { return sheetOtomatis(SHEETS.LPDH_SALDO, ['dapur_id', 'tanggal', 'saldo_va', 'penjelasan', 'updated_at', 'updated_by']); }
@@ -2475,6 +2506,7 @@ function getDataLPDH(p) {
   const tampil = txSh.getRange(1, 4, Math.max(txSh.getLastRow(), 1), 1).getDisplayValues();
   const relawan = bacaRelawanSemua(dapurId);
   const insentif = bacaInsentifSemua(dapurId);
+  const heads = {}; readAllPengajuan().forEach(function(h) { heads[h.id] = h; });
   const hari = tx.filter(function(t) { return t.tanggal === tgl; }).map(function(t) {
     const link = String(t.pengajuan_item_id || '');
     const it = items[isFeeLink(link) ? link.substring(BIAYA_ADMIN_PREFIX.length) : link];
@@ -2483,7 +2515,8 @@ function getDataLPDH(p) {
       pemasok: it ? (isFeeLink(link) ? it.bank : it.penerima_nama) : '', seq: t.seq,
       rincian: it && !isFeeLink(link) && t.jenis === 'Bahan Baku' ? it.rincian : [], nota_url: it && !isFeeLink(link) ? it.nota_url : '',
       relawan: isHonorRelawan(t) && relawan[t.id] ? relawan[t.id].rows.filter(function(r) { return r.hadir !== false; }) : null,
-      insentif: t.jenis === 'Fasilitas SPPG' ? (insentif[t.id] ? insentif[t.id].data : {}) : null };
+      insentif: t.jenis === 'Fasilitas SPPG' ? (insentif[t.id] ? insentif[t.id].data : {}) : null,
+      ref: it && heads[it.pengajuan_id] ? heads[it.pengajuan_id].nomor + ' #' + it.urut : '' };
   }).sort(function(a, b) { return a.seq - b.seq; });
 
   const ident = readIdentitasLPDH(dapurId) || {};
@@ -2495,6 +2528,7 @@ function getDataLPDH(p) {
     harian: (function() { const h = bacaHarian(dapurId, tgl).tepat; return h ? h.data : null; })(),
     topups: topups.filter(function(t) { return t.tanggal === tgl; }).map(function(t) { return { id: t.id, tanggal: t.tanggal, jumlah: t.jumlah, keterangan: t.keterangan,
       no_sp2d: t.no_sp2d, no_kuitansi: t.no_kuitansi, bukti_url: t.bukti_url }; }),
+    ppkTerakhir: ppkTerakhir(dapurId, insentif),
     saldoRekening: (function() { const x = bacaSaldoRek(dapurId, tgl); return x ? { saldo_va: x.saldo_va, penjelasan: x.penjelasan } : null; })(),
   } };
 }
