@@ -2937,7 +2937,7 @@ try {
     topup: 5
   };
   const LPDH_BULAN_ROMAWI = ['I', 'II', 'III', 'IV', 'V', 'VI', 'VII', 'VIII', 'IX', 'X', 'XI', 'XII'];
-  const LPDH_OPS_BARIS = [[7, 'Insentif penanggung jawab satuan pendidikan', ['Insentif Guru/PIC Sekolah']], [8, 'Insentif kader posyandu', ['Insentif Kader Posyandu']], [9, 'BPJS Ketenagakerjaan', ['Asuransi kecelakaan kerja (BPJS) relawan']], [10, 'Listrik', ['Listrik']], [11, 'Air PDAM', ['Air Bersih (Sumur)']], [12, 'Air minum/galon', ['Air Galon Masak', 'Air Minum']], [13, 'Gas', ['Gas']], [14, 'Sewa kendaraan', ['Sewa Kendaraan']], [15, 'BBM', ['BBM Operasional Kendaraan']], [16, 'Pulsa dan internet', ['Pulsa', 'Internet/Telepon']], [17, 'ATK', ['ATK']], [18, 'Alat kebersihan', ['Alat Kebersihan']], [19, 'APD (masker, sarung tangan, penutup kepala)', ['APD']], [20, 'Biaya rapat koordinasi', []], [21, 'Lain-lain', []]];
+  const LPDH_OPS_BARIS = [[7, 'Insentif penanggung jawab satuan pendidikan', ['Insentif Guru/PIC Sekolah']], [8, 'Insentif kader posyandu', ['Insentif Kader Posyandu']], [9, 'BPJS Ketenagakerjaan', ['Asuransi kecelakaan kerja (BPJS) relawan']], [10, 'Listrik', ['Listrik']], [11, 'Air PDAM', ['Air Bersih (Sumur)']], [12, 'Air minum/galon', ['Air Galon Masak', 'Air Minum']], [13, 'Gas', ['Gas']], [14, 'Sewa kendaraan', ['Sewa Kendaraan']], [15, 'BBM', ['BBM Operasional Kendaraan']], [16, 'Pulsa dan internet', ['Pulsa', 'Internet/Telepon']], [17, 'ATK', ['ATK']], [18, 'Alat kebersihan', ['Alat Kebersihan']], [19, 'APD (masker, sarung tangan, penutup kepala)', ['APD']], [20, 'Biaya rapat koordinasi', ['Biaya Rapat Koordinasi']], [21, 'Lain-lain', []]];
   const LPDH_KELOMPOK = [['KS-01', 'PAUD/TK/RA'], ['KS-02', 'SD/MI Kelas 1–3'], ['KS-03', 'SD/MI Kelas 4–6'], ['KS-04', 'SMP/MTs'], ['KS-05', 'SMA/MA/SMK/SLB'], ['KS-06', 'Santri'], ['KS-07', 'Ibu Hamil'], ['KS-08', 'Ibu Menyusui'], ['KS-09', 'Anak Balita (6–59 bulan)'], ['PTK', 'Pendidik & Tenaga Kependidikan']];
   const LPDH_ALASAN = ['Kualitas tidak layak/tidak standar', 'Kemasan rusak/tumpah', 'PM tidak hadir', 'Libur/kegiatan mendadak', 'Keterlambatan pengiriman', 'Kelebihan kirim/dikembalikan', 'Lainnya'];
   const LPDH_SYARAT = [['kontaminasi', 'Terjadi kontaminasi makanan/gagal penyaluran', 'Tidak'], ['fatal', 'Terjadi kejadian fatal (keracunan)', 'Tidak'], ['suspend', 'SPPG dalam status suspend', 'Tidak'], ['verifikasi', 'Hasil verifikasi ketersediaan & mutu layanan memenuhi', 'Ya'], ['sipgn', 'Data penerima manfaat sudah diinput di SIPGN', 'Ya']];
@@ -10626,17 +10626,19 @@ try {
     const viaKuitansi = pakaiKuitansi(item);
     const otomatis = viaNota || viaKuitansi;
     const today = todayISO();
+    const perluSub = item.kategori === 'Barang Habis Pakai';
     const [f, setF] = useState({
       tanggal: periode && today >= periode.tanggal_mulai && today <= periode.tanggal_akhir ? today : periode ? periode.tanggal_mulai : today,
       no_bukti: '',
       riil: isOps && !viaKuitansi ? '' : String(item.nominal),
       adaAdmin: false,
-      biaya: String(BIAYA_ADMIN_DEFAULT)
+      biaya: String(BIAYA_ADMIN_DEFAULT),
+      sub: perluSub ? tebakSubBHP(item.uraian) : ''
     });
     const [bukti, setBukti] = useState(null);
     const [saving, setSaving] = useState(false);
     const outRange = periode && (f.tanggal < periode.tanggal_mulai || f.tanggal > periode.tanggal_akhir);
-    const err = !f.tanggal ? 'Tanggal wajib' : outRange ? 'Tanggal di luar periode' : /^[\s\-\u2013\u2014_.\/]+$/.test(f.no_bukti) ? 'No bukti tidak boleh "' + f.no_bukti.trim() + '" — kosongkan bila nota tidak bernomor' : isOps && !(Number(f.riil) > 0) ? 'Realisasi aktual wajib' : f.adaAdmin && !(Number(f.biaya) > 0 && Number(f.biaya) <= 50000) ? 'Biaya admin Rp 1 – Rp 50.000' : !bukti && !otomatis ? 'Bukti transfer wajib diunggah' : null;
+    const err = !f.tanggal ? 'Tanggal wajib' : outRange ? 'Tanggal di luar periode' : /^[\s\-\u2013\u2014_.\/]+$/.test(f.no_bukti) ? 'No bukti tidak boleh "' + f.no_bukti.trim() + '" — kosongkan bila nota tidak bernomor' : perluSub && !f.sub ? 'Pilih sub-kategori (baris LPDH)' : isOps && !(Number(f.riil) > 0) ? 'Realisasi aktual wajib' : f.adaAdmin && !(Number(f.biaya) > 0 && Number(f.biaya) <= 50000) ? 'Biaya admin Rp 1 – Rp 50.000' : !bukti && !otomatis ? 'Bukti transfer wajib diunggah' : null;
     const keluarVA = (isOps ? Number(f.riil || 0) : item.nominal) + (f.adaAdmin ? Number(f.biaya || 0) : 0);
     async function submit() {
       setSaving(true);
@@ -10661,7 +10663,8 @@ try {
         no_bukti: f.no_bukti.trim(),
         riil: isOps ? f.riil : item.nominal,
         bukti_url: url,
-        biaya_admin: f.adaAdmin ? f.biaya : 0
+        biaya_admin: f.adaAdmin ? f.biaya : 0,
+        sub_kategori: perluSub ? f.sub : ''
       });
       setSaving(false);
       if (res.ok) {
@@ -10757,7 +10760,14 @@ try {
       value: String(item.nominal),
       onChange: function () {},
       disabled: true
-    }))), React.createElement(BiayaAdminField, {
+    }))), perluSub && React.createElement(SubBHPField, {
+      value: f.sub,
+      onChange: function (v) {
+        setF(Object.assign({}, f, {
+          sub: v
+        }));
+      }
+    }), React.createElement(BiayaAdminField, {
       ada: f.adaAdmin,
       biaya: f.biaya,
       onChange: function (patch) {
@@ -10812,6 +10822,34 @@ try {
       disabled: !!err || saving,
       onClick: submit
     }, saving ? I.spinner : I.check, " ", saving ? 'Menyimpan…' : 'Simpan realisasi'));
+  }
+  const SUB_BHP = [['ATK', 'ATK (kertas, tinta, lakban, spidol)'], ['Alat Kebersihan', 'Alat kebersihan (sabun, trash bag, tisu, sapu)'], ['APD', 'APD (masker, sarung tangan, penutup kepala)'], ['Lain-lain', 'Lain-lain (plastik kemasan, dll.)']];
+  function tebakSubBHP(uraian) {
+    for (let j = 0; j < LPDH_BHP_KATA.length; j++) if (LPDH_BHP_KATA[j][1].test(String(uraian || ''))) return LPDH_BHP_KATA[j][0];
+    return '';
+  }
+  function SubBHPField({
+    value,
+    onChange
+  }) {
+    return React.createElement(Field, {
+      label: "Sub-kategori (baris LPDH) *",
+      hint: 'Barang habis pakai dicatat per baris LPDH. Satu nota berisi barang campuran? Pilih yang nilainya terbesar.'
+    }, React.createElement("select", {
+      value: value,
+      onChange: function (e) {
+        onChange(e.target.value);
+      },
+      style: inputStyle,
+      "aria-label": "Sub-kategori barang habis pakai"
+    }, React.createElement("option", {
+      value: ""
+    }, "Pilih\u2026"), SUB_BHP.map(function (x) {
+      return React.createElement("option", {
+        key: x[0],
+        value: x[0]
+      }, x[1]);
+    })));
   }
   function BiayaAdminField({
     ada,
@@ -10993,14 +11031,16 @@ try {
     });
     const canAddFee = !requestMode && !isFee && !hasFee;
     const [alasan, setAlasan] = useState('');
+    const perluSub = isOps && trx.kategori === 'Barang Habis Pakai';
     const [f, setF] = useState({
       tanggal: trx.tanggal,
       no_bukti: trx.no_bukti || '',
-      riil: String(trx.riil || '')
+      riil: String(trx.riil || ''),
+      sub: perluSub ? tebakSubBHP(trx.uraian) : ''
     });
     const [bukti, setBukti] = useState(null);
     const [saving, setSaving] = useState(false);
-    const err = !f.tanggal ? 'Tanggal wajib' : !f.no_bukti.trim() ? 'No bukti wajib' : isOps && !(Number(f.riil) > 0) ? isFee ? 'Biaya admin wajib' : 'Realisasi aktual wajib' : isFee && Number(f.riil) > 50000 ? 'Biaya admin maksimal Rp 50.000' : tambahFee.adaAdmin && !(Number(tambahFee.biaya) > 0 && Number(tambahFee.biaya) <= 50000) ? 'Biaya admin Rp 1 – Rp 50.000' : requestMode && !alasan.trim() ? 'Alasan perubahan wajib' : null;
+    const err = !f.tanggal ? 'Tanggal wajib' : !f.no_bukti.trim() ? 'No bukti wajib' : perluSub && !f.sub ? 'Pilih sub-kategori (baris LPDH)' : isOps && !(Number(f.riil) > 0) ? isFee ? 'Biaya admin wajib' : 'Realisasi aktual wajib' : isFee && Number(f.riil) > 50000 ? 'Biaya admin maksimal Rp 50.000' : tambahFee.adaAdmin && !(Number(tambahFee.biaya) > 0 && Number(tambahFee.biaya) <= 50000) ? 'Biaya admin Rp 1 – Rp 50.000' : requestMode && !alasan.trim() ? 'Alasan perubahan wajib' : null;
     async function submit() {
       setSaving(true);
       let bukti_url = '';
@@ -11026,6 +11066,7 @@ try {
         no_bukti: f.no_bukti.trim()
       };
       if (isOps) payload.riil = f.riil;
+      if (perluSub) payload.kategori = f.sub;
       if (bukti_url) payload.bukti_url = bukti_url;
       let res;
       if (requestMode) {
@@ -11103,7 +11144,14 @@ try {
           riil: v
         }));
       }
-    }))), canAddFee && React.createElement(BiayaAdminField, {
+    }))), perluSub && React.createElement(SubBHPField, {
+      value: f.sub,
+      onChange: function (v) {
+        setF(Object.assign({}, f, {
+          sub: v
+        }));
+      }
+    }), canAddFee && React.createElement(BiayaAdminField, {
       ada: tambahFee.adaAdmin,
       biaya: tambahFee.biaya,
       onChange: function (patch) {

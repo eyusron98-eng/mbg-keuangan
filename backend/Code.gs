@@ -80,10 +80,10 @@ const JENIS_KATEGORI = {
     'Air Minum',
     'APD',
     'Sampah',
-    'Barang Habis Pakai',
     'Jasa General Cleaning',
     'Kecelakaan/Musibah/Duka',
     'Konsumsi Tamu',
+    'Biaya Rapat Koordinasi',
     'Perlengkapan Dapur',
     'Survey Lapangan',
     'Survey Pasar',
@@ -92,6 +92,14 @@ const JENIS_KATEGORI = {
   ],
   'Fasilitas SPPG': ['Sewa Gedung'],
 };
+// Kategori lama yang tidak bisa dipilih lagi, tetapi data lamanya tetap sah selama kategorinya tidak diubah
+const KATEGORI_LAMA = { 'Operasional': ['Barang Habis Pakai'] };
+// "Barang Habis Pakai" wajib dipecah ke baris LPDH saat realisasi / edit realisasi
+const SUB_BHP = ['ATK', 'Alat Kebersihan', 'APD', 'Lain-lain'];
+function kategoriSah(jenis, kat, katLama) {
+  const daftar = JENIS_KATEGORI[jenis];
+  return !!daftar && (daftar.indexOf(kat) >= 0 || (kat === katLama && (KATEGORI_LAMA[jenis] || []).indexOf(kat) >= 0));
+}
 
 // ============================================================
 //  ENTRY POINTS
@@ -126,7 +134,7 @@ function handleRequest(e, method) {
     }
     let result;
     switch (action) {
-      case 'ping':              result = { ok: true, time: new Date().toISOString(), version: 'v6-ba-sec14' }; break;
+      case 'ping':              result = { ok: true, time: new Date().toISOString(), version: 'v6-ba-sec15' }; break;
       case 'login':             result = login(params); break;
       case 'getPeriodeList':    result = getPeriodeList(params); break;
       case 'getActivePeriode':  result = getActivePeriode(params); break;
@@ -695,6 +703,11 @@ function updateTransaksi(p) {
             if (Number(p.riil) > BIAYA_ADMIN_MAX) return { ok: false, error: 'Biaya admin maksimal ' + rupiah(BIAYA_ADMIN_MAX) };
             sheet.getRange(row, 9, 1, 2).setValues([[Number(p.riil), Number(p.riil)]]);
           } else sheet.getRange(row, 9).setValue(Number(p.riil));
+        }
+        if (p.kategori !== undefined && p.kategori !== '' && p.kategori !== String(data[i][5])) {
+          // satu-satunya kategori yang boleh diubah: "Barang Habis Pakai" lama → sub-kategori baris LPDH
+          if (String(data[i][5]) !== 'Barang Habis Pakai' || SUB_BHP.indexOf(p.kategori) < 0) return { ok: false, error: 'Kategori realisasi terkunci (hanya Barang Habis Pakai yang bisa dipecah ke ' + SUB_BHP.join(' / ') + ')' };
+          sheet.getRange(row, 6).setValue(p.kategori);
         }
         if (p.bukti_url !== undefined && p.bukti_url !== '') sheet.getRange(row, 11).setValue(p.bukti_url);
         logActivity(p.user_id, 'updateTransaksi(realisasi)', p.id);
@@ -1682,6 +1695,11 @@ function realisasiItem(p) {
     if (!sumberBukti) return { ok: false, error: 'Bukti transfer / nota wajib diunggah untuk ' + it.jenis + ' · ' + it.kategori };
     if (sumberBukti === 'nota') buktiUrl = it.nota_url;
     const isOps = it.jenis === 'Operasional';
+    let katTx = it.kategori;
+    if (it.kategori === 'Barang Habis Pakai') {
+      if (SUB_BHP.indexOf(p.sub_kategori) < 0) return { ok: false, error: 'Pilih sub-kategori Barang Habis Pakai: ' + SUB_BHP.join(' / ') };
+      katTx = p.sub_kategori;
+    }
     const riil = isOps ? Number(p.riil) : it.nominal;
     if (!(riil > 0)) return { ok: false, error: 'Realisasi aktual wajib diisi' };
     const fee = parseFee(p.biaya_admin);
@@ -1697,7 +1715,7 @@ function realisasiItem(p) {
       catch (e) { logError(e); return { ok: false, error: 'Gagal membuat kuitansi otomatis: ' + pesanGangguan(e.message) + ' — coba lagi atau unggah bukti manual.' }; }
     }
     getSheet(SHEETS.TRANSAKSI).appendRow([
-      txId, it.dapur, p.tanggal, teksSel(p.no_bukti), it.jenis, it.kategori, it.uraian,
+      txId, it.dapur, p.tanggal, teksSel(p.no_bukti), it.jenis, katTx, it.uraian,
       'VA', riil, it.nominal, buktiUrl, new Date(), me.id, it.periode_id, it.id
     ]);
     if (fee > 0) getSheet(SHEETS.TRANSAKSI).appendRow(feeRowFor(it, txId, p.tanggal, p.no_bukti, buktiUrl, fee, me.id));
@@ -1873,7 +1891,7 @@ function requestTxChange(p) {
     let baru = {};
     if (aksi === 'EDIT') {
       const linked = isLinked(tx);
-      const allowed = linked ? (tx.jenis === 'Operasional' ? ['tanggal', 'no_bukti', 'bukti_url', 'riil'] : ['tanggal', 'no_bukti', 'bukti_url'])
+      const allowed = linked ? (tx.jenis === 'Operasional' ? ['tanggal', 'no_bukti', 'bukti_url', 'riil'].concat(lama.kategori === 'Barang Habis Pakai' ? ['kategori'] : []) : ['tanggal', 'no_bukti', 'bukti_url'])
                              : TX_FIELDS_ALL;
       allowed.forEach(function(k) {
         if (p[k] === undefined || p[k] === null || p[k] === '') return;
@@ -1886,7 +1904,8 @@ function requestTxChange(p) {
       if (!Object.keys(baru).length) return { ok: false, error: 'Tidak ada perubahan' };
       if (baru.no_bukti !== undefined) { const nb = siapkanNoBukti(baru.no_bukti, tx.dapur, merged.tanggal, tx.id); if (nb.error) return { ok: false, error: nb.error }; }
       if (merged.tanggal < per.tanggal_mulai || merged.tanggal > per.tanggal_akhir) return { ok: false, error: 'Tanggal harus di dalam Periode ' + per.periode_no };
-      if (!JENIS_KATEGORI[merged.jenis] || JENIS_KATEGORI[merged.jenis].indexOf(merged.kategori) < 0) return { ok: false, error: 'Jenis/kategori tidak valid' };
+      if (!kategoriSah(merged.jenis, merged.kategori, lama.kategori)) return { ok: false, error: lama.kategori === 'Barang Habis Pakai' && baru.jenis === undefined ? 'Kategori "Barang Habis Pakai" sudah dipecah — pilih ' + SUB_BHP.join(' / ') : 'Jenis/kategori tidak valid' };
+      if (linked && baru.kategori !== undefined && SUB_BHP.indexOf(baru.kategori) < 0) return { ok: false, error: 'Sub-kategori harus ' + SUB_BHP.join(' / ') };
       if (!(merged.riil > 0) || !(merged.unriil > 0)) return { ok: false, error: 'Nominal harus lebih dari 0' };
       if (!linked && merged.jenis === 'Bahan Baku' && merged.unriil !== merged.riil) { baru.unriil = merged.riil; }
       if (isFeeLink(tx.pengajuan_item_id) && baru.riil !== undefined) {

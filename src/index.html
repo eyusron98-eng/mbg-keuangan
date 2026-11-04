@@ -1349,7 +1349,7 @@ const LPDH_OPS_BARIS = [
   [17, 'ATK', ['ATK']],
   [18, 'Alat kebersihan', ['Alat Kebersihan']],
   [19, 'APD (masker, sarung tangan, penutup kepala)', ['APD']],
-  [20, 'Biaya rapat koordinasi', []],
+  [20, 'Biaya rapat koordinasi', ['Biaya Rapat Koordinasi']],
   [21, 'Lain-lain', []],
 ];
 const LPDH_KELOMPOK = [['KS-01', 'PAUD/TK/RA'], ['KS-02', 'SD/MI Kelas 1–3'], ['KS-03', 'SD/MI Kelas 4–6'], ['KS-04', 'SMP/MTs'],
@@ -4438,12 +4438,14 @@ function RealisasiForm({ item, periode, toast, onClose, onSaved }) {
   const viaKuitansi = pakaiKuitansi(item);
   const otomatis = viaNota || viaKuitansi;
   const today = todayISO();
-  const [f, setF] = useState({ tanggal: periode && today >= periode.tanggal_mulai && today <= periode.tanggal_akhir ? today : (periode ? periode.tanggal_mulai : today), no_bukti: '', riil: isOps && !viaKuitansi ? '' : String(item.nominal), adaAdmin: false, biaya: String(BIAYA_ADMIN_DEFAULT) });
+  const perluSub = item.kategori === 'Barang Habis Pakai';
+  const [f, setF] = useState({ tanggal: periode && today >= periode.tanggal_mulai && today <= periode.tanggal_akhir ? today : (periode ? periode.tanggal_mulai : today), no_bukti: '', riil: isOps && !viaKuitansi ? '' : String(item.nominal), adaAdmin: false, biaya: String(BIAYA_ADMIN_DEFAULT),
+    sub: perluSub ? tebakSubBHP(item.uraian) : '' });
   const [bukti, setBukti] = useState(null);
   const [saving, setSaving] = useState(false);
   const outRange = periode && (f.tanggal < periode.tanggal_mulai || f.tanggal > periode.tanggal_akhir);
   const err = !f.tanggal ? 'Tanggal wajib' : outRange ? 'Tanggal di luar periode' : /^[\s\-\u2013\u2014_.\/]+$/.test(f.no_bukti) ? 'No bukti tidak boleh "' + f.no_bukti.trim() + '" — kosongkan bila nota tidak bernomor' :
-    (isOps && !(Number(f.riil) > 0)) ? 'Realisasi aktual wajib' : (f.adaAdmin && !(Number(f.biaya) > 0 && Number(f.biaya) <= 50000)) ? 'Biaya admin Rp 1 – Rp 50.000' :
+    (perluSub && !f.sub) ? 'Pilih sub-kategori (baris LPDH)' : (isOps && !(Number(f.riil) > 0)) ? 'Realisasi aktual wajib' : (f.adaAdmin && !(Number(f.biaya) > 0 && Number(f.biaya) <= 50000)) ? 'Biaya admin Rp 1 – Rp 50.000' :
     (!bukti && !otomatis) ? 'Bukti transfer wajib diunggah' : null;
   const keluarVA = (isOps ? Number(f.riil || 0) : item.nominal) + (f.adaAdmin ? Number(f.biaya || 0) : 0);
   async function submit() {
@@ -4456,7 +4458,7 @@ function RealisasiForm({ item, periode, toast, onClose, onSaved }) {
       url = up.data.url;
     }
     const res = await api('realisasiItem', { item_id: item.id, tanggal: f.tanggal, no_bukti: f.no_bukti.trim(), riil: isOps ? f.riil : item.nominal, bukti_url: url,
-      biaya_admin: f.adaAdmin ? f.biaya : 0 });
+      biaya_admin: f.adaAdmin ? f.biaya : 0, sub_kategori: perluSub ? f.sub : '' });
     setSaving(false);
     if (res.ok) {
       const ket = res.data && res.data.bukti === 'kuitansi' ? ' · kuitansi dibuat otomatis' : res.data && res.data.bukti === 'nota' ? ' · bukti: nota pengajuan' : '';
@@ -4484,6 +4486,7 @@ function RealisasiForm({ item, periode, toast, onClose, onSaved }) {
         <Field label="Realisasi Aktual *" hint="Yang benar-benar ditransfer"><RupiahInput value={f.riil} onChange={function(v){ setF(Object.assign({}, f, { riil: v })); }}/></Field>
       </> : <Field label="Nominal" hint="Terkunci = nominal disetujui"><RupiahInput value={String(item.nominal)} onChange={function(){}} disabled/></Field>}
     </div>
+    {perluSub && <SubBHPField value={f.sub} onChange={function(v){ setF(Object.assign({}, f, { sub: v })); }}/>}
     <BiayaAdminField ada={f.adaAdmin} biaya={f.biaya} onChange={function(patch){ setF(Object.assign({}, f, patch)); }}/>
     {otomatis ? <div className="rounded-lg p-3 mb-3 text-sm" style={{ background: '#E8F1EC', color: COLORS.deep }}>
       {viaNota ? <>{I.check} Bukti memakai <a href={item.nota_url} target="_blank" rel="noopener" className="underline font-semibold">nota dari pengajuan</a> — tidak perlu unggah.</>
@@ -4495,6 +4498,18 @@ function RealisasiForm({ item, periode, toast, onClose, onSaved }) {
     {err && <div className="text-xs mb-2" style={{ color: COLORS.danger }}>• {err}</div>}
     <Btn full disabled={!!err || saving} onClick={submit}>{saving ? I.spinner : I.check} {saving ? 'Menyimpan…' : 'Simpan realisasi'}</Btn>
   </Modal>;
+}
+
+// Sub-kategori pengganti "Barang Habis Pakai" = baris LPDH C_Operasional
+const SUB_BHP = [['ATK', 'ATK (kertas, tinta, lakban, spidol)'], ['Alat Kebersihan', 'Alat kebersihan (sabun, trash bag, tisu, sapu)'], ['APD', 'APD (masker, sarung tangan, penutup kepala)'], ['Lain-lain', 'Lain-lain (plastik kemasan, dll.)']];
+function tebakSubBHP(uraian) { for (let j = 0; j < LPDH_BHP_KATA.length; j++) if (LPDH_BHP_KATA[j][1].test(String(uraian || ''))) return LPDH_BHP_KATA[j][0]; return ''; }
+function SubBHPField({ value, onChange }) {
+  return <Field label="Sub-kategori (baris LPDH) *" hint={'Barang habis pakai dicatat per baris LPDH. Satu nota berisi barang campuran? Pilih yang nilainya terbesar.'}>
+    <select value={value} onChange={function(e){ onChange(e.target.value); }} style={inputStyle} aria-label="Sub-kategori barang habis pakai">
+      <option value="">Pilih…</option>
+      {SUB_BHP.map(function(x){ return <option key={x[0]} value={x[0]}>{x[1]}</option>; })}
+    </select>
+  </Field>;
 }
 
 function BiayaAdminField({ ada, biaya, onChange }) {
@@ -4558,10 +4573,11 @@ function EditRealisasiModal({ trx, periode, session, toast, onClose, onSaved, re
   const [tambahFee, setTambahFee] = useState({ adaAdmin: false, biaya: String(BIAYA_ADMIN_DEFAULT) });
   const canAddFee = !requestMode && !isFee && !hasFee;
   const [alasan, setAlasan] = useState('');
-  const [f, setF] = useState({ tanggal: trx.tanggal, no_bukti: trx.no_bukti || '', riil: String(trx.riil || '') });
+  const perluSub = isOps && trx.kategori === 'Barang Habis Pakai';
+  const [f, setF] = useState({ tanggal: trx.tanggal, no_bukti: trx.no_bukti || '', riil: String(trx.riil || ''), sub: perluSub ? tebakSubBHP(trx.uraian) : '' });
   const [bukti, setBukti] = useState(null);
   const [saving, setSaving] = useState(false);
-  const err = !f.tanggal ? 'Tanggal wajib' : !f.no_bukti.trim() ? 'No bukti wajib' : (isOps && !(Number(f.riil) > 0)) ? (isFee ? 'Biaya admin wajib' : 'Realisasi aktual wajib') :
+  const err = !f.tanggal ? 'Tanggal wajib' : !f.no_bukti.trim() ? 'No bukti wajib' : (perluSub && !f.sub) ? 'Pilih sub-kategori (baris LPDH)' : (isOps && !(Number(f.riil) > 0)) ? (isFee ? 'Biaya admin wajib' : 'Realisasi aktual wajib') :
     (isFee && Number(f.riil) > 50000) ? 'Biaya admin maksimal Rp 50.000' :
     (tambahFee.adaAdmin && !(Number(tambahFee.biaya) > 0 && Number(tambahFee.biaya) <= 50000)) ? 'Biaya admin Rp 1 – Rp 50.000' :
     (requestMode && !alasan.trim()) ? 'Alasan perubahan wajib' : null;
@@ -4575,6 +4591,7 @@ function EditRealisasiModal({ trx, periode, session, toast, onClose, onSaved, re
     }
     const payload = { role: session.user.role, user_id: session.user.id, dapur: session.user.dapur, id: trx.id, tanggal: f.tanggal, no_bukti: f.no_bukti.trim() };
     if (isOps) payload.riil = f.riil;
+    if (perluSub) payload.kategori = f.sub;
     if (bukti_url) payload.bukti_url = bukti_url;
     let res;
     if (requestMode) { payload.transaksi_id = trx.id; payload.aksi = 'EDIT'; payload.alasan = alasan.trim(); res = await api('requestTxChange', payload); }
@@ -4597,6 +4614,7 @@ function EditRealisasiModal({ trx, periode, session, toast, onClose, onSaved, re
       <Field label="No Bukti *"><input value={f.no_bukti} onChange={function(e){ setF(Object.assign({}, f, { no_bukti: e.target.value })); }} style={inputStyle}/></Field>
       {isOps && <Field label={isFee ? 'Biaya admin *' : 'Realisasi Aktual *'}><RupiahInput value={f.riil} onChange={function(v){ setF(Object.assign({}, f, { riil: v })); }}/></Field>}
     </div>
+    {perluSub && <SubBHPField value={f.sub} onChange={function(v){ setF(Object.assign({}, f, { sub: v })); }}/>}
     {canAddFee && <BiayaAdminField ada={tambahFee.adaAdmin} biaya={tambahFee.biaya} onChange={function(patch){ setTambahFee(Object.assign({}, tambahFee, patch)); }}/>}
     <Field label="Bukti transfer (opsional kalau tidak ganti)"><BuktiPicker bukti={bukti} setBukti={setBukti} existing={!!trx.bukti_url}/></Field>
     {err && <div className="text-xs mb-2" style={{ color: COLORS.danger }}>• {err}</div>}
