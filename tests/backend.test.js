@@ -85,7 +85,7 @@ const ok = (c, m) => { console.log((c ? 'PASS ' : 'FAIL ') + m); if (!c) fails++
     ['U3', 'off', 'xxxxxxx', 'Nonaktif', 'pic', 'D001', 'TIDAK'],
   ]);
   const B = env.__book;
-  ok(call(env, 'GET', { action: 'ping' }).version === 'v6-ba-sec14', 'ping menampilkan versi baru');
+  ok(call(env, 'GET', { action: 'ping' }).version === 'v6-ba-sec15', 'ping menampilkan versi baru');
 
   // 1. login lama (teks biasa) berhasil via POST dan password otomatis di-hash
   let r = call(env, 'POST', { action: 'login', username: 'AKUN1', password: 'RahasiaKu9' });
@@ -557,6 +557,22 @@ const ok = (c, m) => { console.log((c ? 'PASS ' : 'FAIL ') + m); if (!c) fails++
   r = real1('K-GAGAL', { riil: 300000 });
   e8.__driveGagal = false;
   ok(!r.ok && /kuitansi/.test(r.error) && B8.Transaksi.length === nTx && B8.PengajuanItem.find(x => x[0] === 'K-GAGAL')[14] === 'DISETUJUI', 'Drive gagal → tidak ada transaksi setengah jadi, baris tetap Disetujui');
+  // ── Barang Habis Pakai dipecah ke sub-kategori baris LPDH ──
+  ok(/Kategori tidak valid/.test(e8.validateItemInput({ jenis: 'Operasional', kategori: 'Barang Habis Pakai', uraian: 'x', nominal: 1, penerima_id: 'p' }, { p: 1 }) || ''), 'pengajuan baru: "Barang Habis Pakai" tidak bisa dipilih lagi');
+  ok(e8.validateItemInput({ jenis: 'Operasional', kategori: 'Biaya Rapat Koordinasi', uraian: 'x', nominal: 1, penerima_id: 'p' }, { p: 1 }) === null, 'kategori baru "Biaya Rapat Koordinasi" sah');
+  itemDisetujui('K-BHP', 'Operasional', 'Barang Habis Pakai', 295000);
+  r = real1('K-BHP', { riil: 295000, bukti_url: 'https://drive.google.com/bhp' });
+  ok(!r.ok && /sub-kategori/.test(r.error), 'pengajuan lama Barang Habis Pakai: realisasi wajib memilih sub-kategori');
+  r = real1('K-BHP', { riil: 295000, bukti_url: 'https://drive.google.com/bhp', sub_kategori: 'ATK' });
+  const txBHP = B8.Transaksi.find(t => t[14] === 'K-BHP');
+  ok(r.ok && txBHP && txBHP[5] === 'ATK', 'realisasi Barang Habis Pakai tercatat dengan sub-kategori ATK: ' + (r.error || ''));
+  txBHP[5] = 'Barang Habis Pakai';   // seolah transaksi lama
+  r = call(e8, 'POST', { action: 'updateTransaksi', token: tkA, id: txBHP[0], kategori: 'Gas' });
+  ok(!r.ok && /terkunci/.test(r.error) && txBHP[5] === 'Barang Habis Pakai', 'realisasi lama: kategori hanya bisa dipecah ke sub-kategori BHP');
+  r = call(e8, 'POST', { action: 'updateTransaksi', token: tkA, id: txBHP[0], kategori: 'Alat Kebersihan' });
+  ok(r.ok && txBHP[5] === 'Alat Kebersihan', 'realisasi lama Barang Habis Pakai bisa dipecah ke Alat Kebersihan: ' + (r.error || ''));
+  r = call(e8, 'POST', { action: 'updateTransaksi', token: tkA, id: txBHP[0], kategori: 'ATK' });
+  ok(!r.ok && txBHP[5] === 'Alat Kebersihan', 'setelah dipecah, kategori kembali terkunci');
   ok(e8.terbilang(0) === 'Nol rupiah' && e8.terbilang(1001000) === 'Satu juta seribu rupiah' && e8.terbilang(115000) === 'Seratus lima belas ribu rupiah' && e8.terbilang(2000000000) === 'Dua miliar rupiah', 'terbilang: ' + e8.terbilang(115000));
 
   // ── Nomor nota diisi saat pengajuan; realisasi tidak perlu mengisi nomor ──

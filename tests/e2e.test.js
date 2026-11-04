@@ -313,6 +313,21 @@ async function isiBahanBaku(page, uraian, volume, harga) {
     assert(await page.isDisabled('text=Simpan realisasi'), 'gas tanpa unggahan seharusnya belum bisa disimpan');
   });
 
+  all &= await run('Realisasi Barang Habis Pakai lama: wajib pilih sub-kategori baris LPDH', { role: 'akuntan',
+    override: (a) => a === 'getRealisasiList' ? { ok: true, data: [{ id: 'RH', urut: 1, nomor: 'BA-PA/S1/2026/11/001', jenis: 'Operasional', kategori: 'Barang Habis Pakai', uraian: 'Pembelian barang habis pakai 4 november', nominal: 1380000, penerima_nama: 'Fahmi', bank: 'BNI', no_rek: '1', status: 'DISETUJUI', nota_url: '' }] } : null }, async (page, srv) => {
+    await login(page, 'siti');
+    await page.waitForSelector('header');
+    await page.click('nav:visible >> text=Realisasi');
+    await page.click('text=Pembelian barang habis pakai 4 november');
+    await page.waitForSelector('text=Pilih sub-kategori (baris LPDH)');
+    await page.selectOption('[aria-label="Sub-kategori barang habis pakai"]', 'Alat Kebersihan');
+    await page.fill('.sheet input[inputmode=numeric] >> nth=1', '1380000');
+    await page.setInputFiles('.sheet input[type=file] >> nth=0', { name: 'tf.jpg', mimeType: 'image/jpeg', buffer: Buffer.from('ffd8ffe0', 'hex') });
+    await page.click('text=Simpan realisasi');
+    await page.waitForSelector('text=Realisasi tersimpan');
+    assert(srv.log.real[0].sub_kategori === 'Alat Kebersihan', 'sub-kategori tidak terkirim: ' + JSON.stringify(srv.log.real[0]));
+  });
+
   all &= await run('Relawan: daftar kosong bisa diisi (tombol tidak tertutup) & tempel dari Excel', { role: 'akuntan',
     override: (a, m, p) => a === 'getRelawanBayar' ? { ok: true, data: { rows: [], sumber: 'baru', total: 6240000 } }
       : a === 'getDataLPDH' ? { ok: true, data: { dapur: { id: 'D1', nama: 'SPPG Satu', kode: 'S1' }, identitas: {}, tanggal: p.tanggal, harian: null,

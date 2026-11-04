@@ -47,6 +47,7 @@ function dataUji(nOp) {
     && L.lpdhBarisOps('Barang Habis Pakai', 'Pembelian BHP tgl 6 Okt')[1] === 'Lain-lain'
     && L.lpdhBarisOps('Air Bersih (Sumur)', '')[1] === 'Air PDAM' && L.lpdhBarisOps('Konsumsi Tamu', 'rapat')[1] === 'Lain-lain',
     'Barang Habis Pakai dipilah dari uraian (APD/kebersihan/ATK, sisanya Lain-lain); Air Sumur → Air PDAM; rapat → Lain-lain');
+  ok(L.lpdhBarisOps('Biaya Rapat Koordinasi', '')[0] === 20 && L.lpdhBarisOps('ATK', 'apa saja')[0] === 17 && L.lpdhBarisOps('Alat Kebersihan', '')[0] === 18 && L.lpdhBarisOps('APD', '')[0] === 19, 'sub-kategori langsung ke barisnya: rapat → 20, ATK → 17, kebersihan → 18, APD → 19');
   const pj = L.lpdhGabung(Array.from({ length: 60 }, (_, i) => 'NOMOR-BUKTI-' + i), '; ');
   ok(pj.length <= 250 && /lainnya\)$/.test(pj), 'gabungan nomor bukti dibatasi ≤ 250 karakter (batas rumus COUNTIF)');
   const h = L.lpdhInfoHari('2026-10-28');
