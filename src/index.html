@@ -1837,10 +1837,19 @@ function LpdhHarianForm({ dapurId, tanggal, toast, onClose, onSaved }) {
   </Modal>;
 }
 
+function bacaTempelRelawan(teks) {
+  return String(teks || '').split(/\r?\n/).map(function(l) { return l.trim(); }).filter(Boolean).map(function(l) {
+    const k = (l.indexOf('\t') >= 0 ? l.split('\t') : l.split(/[;|]/)).map(function(x) { return x.trim(); });
+    const angka = function(v) { return String(v || '').replace(/[^0-9]/g, ''); };
+    const metode = /tunai|cash/i.test(k[4] || '') ? 'Tunai' : 'Transfer';
+    return { nama: k[0] || '', tugas: k[1] || '', hari: angka(k[2]) || '1', upah: angka(k[3]), metode: metode };
+  }).filter(function(x) { return x.nama && !/^nama$/i.test(x.nama) && Number(x.upah) > 0; });
+}
 function RelawanForm({ tx, toast, onClose, onSaved }) {
   const [rows, setRows] = useState(null);
   const [sumber, setSumber] = useState('');
   const [saving, setSaving] = useState(false);
+  const [tempel, setTempel] = useState(null);   // null = tertutup; string = isi kotak tempel
   useEffect(function() {
     api('getRelawanBayar', { transaksi_id: tx.id }).then(function(r) {
       if (!r.ok) { toast(r.error, 'error'); onClose(); return; }
@@ -1852,6 +1861,10 @@ function RelawanForm({ tx, toast, onClose, onSaved }) {
   const total = rows.reduce(function(s, x) { return s + (Number(x.hari) || 0) * (Number(x.upah) || 0); }, 0);
   const selisih = total - tx.riil;
   function ubah(i, k, v) { setRows(rows.map(function(x, j) { return j === i ? Object.assign({}, x, { [k]: v }) : x; })); }
+  const tambahKosong = function() { setRows(rows.concat([{ nama: '', tugas: '', hari: '1', upah: '', metode: 'Transfer' }])); };
+  // Tempel dari Excel/WhatsApp: satu baris per relawan — Nama, Tugas, Hari kerja, Upah per hari (dipisah Tab, ; atau |)
+  const hasilTempel = tempel ? bacaTempelRelawan(tempel) : [];
+  function pakaiTempel() { setRows(rows.filter(function(x) { return x.nama.trim(); }).concat(hasilTempel)); setTempel(null); }
   async function simpan() {
     setSaving(true);
     const r = await apiPost('saveRelawanBayar', { transaksi_id: tx.id, rows: rows.map(function(x) { return { nama: x.nama, tugas: x.tugas, hari: Number(x.hari), upah: Number(x.upah), metode: x.metode }; }) });
@@ -1859,7 +1872,21 @@ function RelawanForm({ tx, toast, onClose, onSaved }) {
     if (r.ok) { toast('Daftar relawan disimpan'); onSaved(); onClose(); } else toast(r.error, 'error');
   }
   return <Modal title="Daftar penerima honor relawan" size="lg" onClose={onClose}>
-    <div className="text-sm mb-2" style={{ color: COLORS.ink }}>{tx.uraian} · <b>{fmt(tx.riil)}</b></div>
+    <div className="text-sm mb-1" style={{ color: COLORS.ink }}>{tx.uraian} · <b>{fmt(tx.riil)}</b></div>
+    <div className="text-xs mb-3" style={{ color: COLORS.muted }}>Isi satu baris per relawan yang dibayar di transaksi ini: nama, tugas, hari kerja, upah per hari. Jumlah semua baris harus sama dengan {fmt(tx.riil)}. Cukup sekali — pembayaran berikutnya tersalin otomatis.</div>
+    <div className="flex gap-2 flex-wrap mb-3">
+      <Btn size="sm" onClick={tambahKosong}>{I.plusSm} Tambah relawan</Btn>
+      <Btn size="sm" kind="ghost" onClick={function() { setTempel(tempel === null ? '' : null); }}>{I.file} Tempel daftar</Btn>
+    </div>
+    {tempel !== null && <div className="rounded-lg p-2.5 mb-3" style={{ border: '1px solid ' + COLORS.line, background: COLORS.paper }}>
+      <div className="text-xs mb-1.5" style={{ color: COLORS.muted }}>Salin dari Excel (kolom: Nama · Tugas · Hari kerja · Upah per hari) lalu tempel di sini. Dari WhatsApp/catatan: pisahkan dengan titik koma, cth. <i>Ani; Juru masak; 1; 120000</i></div>
+      <textarea value={tempel} onChange={function(e) { setTempel(e.target.value); }} rows={5} style={Object.assign({}, inputStyle, { minHeight: 110, fontFamily: 'inherit' })} aria-label="Tempel daftar relawan" placeholder={'Ani; Juru masak; 1; 120000\nBudi; Pengemudi; 1; 120000'}/>
+      <div className="flex items-center justify-between gap-2 mt-2">
+        <span className="text-xs" style={{ color: COLORS.ink }}>{hasilTempel.length} relawan terbaca · {fmt(hasilTempel.reduce(function(a, x) { return a + Number(x.hari) * Number(x.upah); }, 0))}</span>
+        <Btn size="sm" onClick={pakaiTempel} disabled={!hasilTempel.length}>{I.check} Masukkan</Btn>
+      </div>
+    </div>}
+    {!rows.length && tempel === null && <div className="text-sm rounded-lg p-3 mb-3 text-center" style={{ border: '1.5px dashed ' + COLORS.line, color: COLORS.muted }}>Belum ada relawan. Ketuk <b>Tambah relawan</b> atau <b>Tempel daftar</b>.</div>}
     {sumber.indexOf('disalin') === 0 && <div className="text-sm rounded-lg p-2.5 mb-3" style={{ background: '#EAF0F8', color: COLORS.blue }}>Daftar {sumber}. Sesuaikan hari kerja bila berbeda.</div>}
     {rows.map(function(x, i) { return <div key={i} className="rounded-lg p-2.5 mb-2" style={{ border: '1px solid ' + COLORS.line }}>
       <div className="grid grid-cols-2 gap-2">
@@ -1874,8 +1901,8 @@ function RelawanForm({ tx, toast, onClose, onSaved }) {
       <div className="flex justify-between text-xs mt-1.5"><span style={{ color: COLORS.muted }}>Diterima {fmt((Number(x.hari) || 0) * (Number(x.upah) || 0))}</span>
         <button type="button" onClick={function() { setRows(rows.filter(function(_, j) { return j !== i; })); }} style={{ color: COLORS.danger }}>Hapus</button></div>
     </div>; })}
-    <Btn size="sm" kind="ghost" onClick={function() { setRows(rows.concat([{ nama: '', tugas: '', hari: '1', upah: '', metode: 'Transfer' }])); }}>{I.plusSm} Tambah relawan</Btn>
-    <div className="sticky-bar">
+    {rows.length > 0 && <Btn size="sm" kind="ghost" onClick={tambahKosong}>{I.plusSm} Tambah relawan</Btn>}
+    <div className="mt-3 pt-3" style={{ borderTop: '1px solid ' + COLORS.line }}>
       <div className="flex justify-between text-sm"><span style={{ color: COLORS.muted }}>{rows.length} relawan · total</span><b className="num">{fmt(total)}</b></div>
       {selisih !== 0 && <div className="text-xs mt-1" style={{ color: COLORS.danger }}>Selisih {fmt(selisih)} dari nilai transaksi — harus sama sebelum disimpan.</div>}
       <div className="flex gap-2 mt-2"><Btn kind="ghost" onClick={onClose}>Batal</Btn><Btn onClick={simpan} disabled={saving || selisih !== 0 || !rows.length}>{saving ? I.spinner : I.check} Simpan</Btn></div>

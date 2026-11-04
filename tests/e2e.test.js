@@ -296,6 +296,32 @@ async function isiBahanBaku(page, uraian, volume, harga) {
     assert(await page.isDisabled('text=Simpan realisasi'), 'gas tanpa unggahan seharusnya belum bisa disimpan');
   });
 
+  all &= await run('Relawan: daftar kosong bisa diisi (tombol tidak tertutup) & tempel dari Excel', { role: 'akuntan',
+    override: (a, m, p) => a === 'getRelawanBayar' ? { ok: true, data: { rows: [], sumber: 'baru', total: 6240000 } }
+      : a === 'getDataLPDH' ? { ok: true, data: { dapur: { id: 'D1', nama: 'SPPG Satu', kode: 'S1' }, identitas: {}, tanggal: p.tanggal, harian: null,
+        periode: { id: 'P2', periode_no: 2, tanggal_mulai: '2026-10-01', tanggal_akhir: '2026-10-31', status: 'AKTIF' }, saldoAwal: 9000000, topups: [],
+        transaksi: [{ id: 'TH', tanggal: p.tanggal, no_bukti: 'HN-4', jenis: 'Operasional', kategori: 'Gaji/honor relawan pekerja SPPG', uraian: 'Pembayaran Honor/Gaji Relawan 4 November', sumber: 'VA', riil: 6240000, bukti_url: 'https://x', relawan: null }],
+        komponen: { awal: [6000000, 2000000, 1000000], topups: [], geser: [], nama: ['Bahan Baku', 'Operasional', 'Insentif'] } } } : null }, async (page, srv) => {
+    await login(page, 'siti');
+    await page.waitForSelector('header');
+    await page.click('nav:visible >> text=LPDH Harian');
+    await page.click('button:has-text("Isi") >> nth=-1');
+    await page.waitForSelector('text=Belum ada relawan');
+    if (process.env.SHOT) { await page.waitForTimeout(800); await page.screenshot({ path: process.env.SHOT + '/relawan-kosong.png' }); }
+    await page.click('.sheet button:has-text("Tambah relawan")', { timeout: 5000 });   // gagal bila tertutup elemen lain
+    assert(await page.isVisible('[aria-label="Nama 1"]'), 'baris relawan tidak muncul setelah Tambah');
+    await page.click('.sheet button:has-text("Tempel daftar")');
+    const baris = Array.from({ length: 52 }, (_, i) => 'Relawan ' + (i + 1) + '\tJuru masak\t1\t120.000').join('\n');
+    await page.fill('[aria-label="Tempel daftar relawan"]', 'Nama\tTugas\tHari\tUpah\n' + baris);
+    await page.waitForSelector('text=52 relawan terbaca');
+    await page.click('.sheet button:has-text("Masukkan")');
+    await page.waitForSelector('text=52 relawan · total');
+    assert(!(await page.isVisible('text=harus sama sebelum disimpan')), 'total 52 × 120.000 seharusnya pas dengan transaksi');
+    await page.click('.sheet >> text=Simpan');
+    await page.waitForSelector('text=Daftar relawan disimpan');
+    assert(srv.log.relawan.length === 52 && srv.log.relawan[51].nama === 'Relawan 52' && srv.log.relawan[0].upah === 120000, 'daftar tempel terkirim salah');
+  });
+
   all &= await run('Setup: kartu sinkron saldo + form periode', { role: 'akuntan' }, async (page) => {
     await login(page, 'siti');
     await page.waitForSelector('header');
