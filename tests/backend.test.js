@@ -85,7 +85,7 @@ const ok = (c, m) => { console.log((c ? 'PASS ' : 'FAIL ') + m); if (!c) fails++
     ['U3', 'off', 'xxxxxxx', 'Nonaktif', 'pic', 'D001', 'TIDAK'],
   ]);
   const B = env.__book;
-  ok(call(env, 'GET', { action: 'ping' }).version === 'v6-ba-sec12', 'ping menampilkan versi baru');
+  ok(call(env, 'GET', { action: 'ping' }).version === 'v6-ba-sec13', 'ping menampilkan versi baru');
 
   // 1. login lama (teks biasa) berhasil via POST dan password otomatis di-hash
   let r = call(env, 'POST', { action: 'login', username: 'AKUN1', password: 'RahasiaKu9' });
@@ -484,6 +484,23 @@ const ok = (c, m) => { console.log((c ? 'PASS ' : 'FAIL ') + m); if (!c) fails++
   ok(!r.ok, 'PIC yang mengirim "sebagai akuntan" ditolak');
   r = call(e8, 'POST', { action: 'getRealisasiList', token: tkAst, sebagai: 'akuntan', sebagai_dapur: 'D001' });
   ok(!r.ok && /Hanya akuntan/.test(r.error), 'asisten yang mengirim "sebagai akuntan" ditolak');
+
+  // ── Otomatisasi LPDH lanjutan ──
+  ok(lp('adm').data.identitas.bast_folder === '', 'identitas lama: kolom folder BAST (isinya tanggal) dibaca kosong');
+  r = call(e8, 'POST', Object.assign({ action: 'saveIdentitasLPDH', token: tk8('akn') }, idt, { bast_folder: 'drive/bast' }));
+  ok(!r.ok && /folder BAST/.test(r.error), 'link folder BAST tanpa https ditolak');
+  r = call(e8, 'POST', Object.assign({ action: 'saveIdentitasLPDH', token: tk8('akn') }, idt, { bast_folder: 'https://drive.google.com/drive/folders/BAST' }));
+  ok(r.ok && lp('adm').data.identitas.bast_folder === 'https://drive.google.com/drive/folders/BAST' && lp('adm').data.identitas.yayasan === 'Yayasan X', 'link folder BAST tersimpan, isian lain utuh');
+  r = call(e8, 'POST', { action: 'saveTtdInsentif', token: tk8('pic'), transaksi_id: 'TI1', ttd_url: 'https://drive.google.com/ttd1' });
+  ok(r.ok, 'PIC mengunggah kuitansi insentif bertanda tangan: ' + (r.error || ''));
+  r = call(e8, 'POST', { action: 'getDataLPDH', token: tk8('adm'), dapur: 'D001', tanggal: '2026-10-17' });
+  const ti2 = r.data.transaksi.find(t => t.id === 'TI1');
+  ok(ti2.insentif.ttd_url === 'https://drive.google.com/ttd1' && ti2.insentif.kuitansi_ttd === 'Ya' && ti2.insentif.no_ppk === 'PPK/INS/2026/0101', 'kuitansi ttd tersimpan tanpa menghapus pernyataan PPK');
+  ok(r.data.ppkTerakhir === 'PPK/INS/2026/0101', 'nomor pernyataan PPK terakhir tersedia untuk dipakai lagi');
+  ok(!call(e8, 'POST', { action: 'saveTtdInsentif', token: tkAst, transaksi_id: 'TI1', ttd_url: 'https://x' }).ok, 'asisten tidak bisa mengunggah kuitansi insentif');
+  call(e8, 'POST', { action: 'saveInsentifLPDH', token: tkA, transaksi_id: 'TI1', no_ppk: 'PPK/INS/2026/0102', nilai_ppk: 5000000 });
+  r = call(e8, 'POST', { action: 'getDataLPDH', token: tk8('adm'), dapur: 'D001', tanggal: '2026-10-17' });
+  ok(r.data.transaksi.find(t => t.id === 'TI1').insentif.ttd_url === 'https://drive.google.com/ttd1', 'ubah pernyataan PPK tidak menghapus kuitansi bertanda tangan');
 
   // ── Relawan: daftar tetap, centang hadir ──
   B8.Transaksi.push(tx('TH3', '2026-10-27', 'HN-3', 'Operasional', 'Gaji/honor relawan pekerja SPPG', 'Honor 27 Okt', 240000));

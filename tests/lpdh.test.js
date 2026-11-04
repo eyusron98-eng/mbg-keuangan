@@ -60,7 +60,7 @@ function dataUji(nOp) {
   const v = (s, a) => { const x = wb.getWorksheet(s).getCell(a).value; return x && x.formula ? '=' : x; };
   ok(v('Identitas', 'B7') === 'SPPG Cipaku 02' && v('Identitas', 'B6') === '32.04.01.0001' && v('Identitas', 'D36') === '3204000000000001', 'identitas & NIK terisi (NIK sebagai teks)');
   ok(v('Identitas', 'B18') === 'HPE' && v('Identitas', 'B19') === 3, 'status hari & HPE ke- terisi');
-  ok(v('Identitas', 'F36') === null, 'kolom "sudah tanda tangan" dikosongkan (diisi setelah ttd)');
+  ok(['F36', 'F37', 'F38'].every(a => v('Identitas', a) === 'Ya'), 'kolom "sudah tanda tangan" otomatis Ya');
   ok(v('Identitas', 'B25') instanceof Date && v('Identitas', 'B25').toISOString().slice(0, 10) === '2026-10-29' && Math.abs(v('Identitas', 'B26') - 330 / 1440) < 1e-9, 'tanggal & jam unggah = waktu LPDH dibuat');
   ok(v('A_PM', 'E6') === null && v('A_PM', 'M6') === null && v('A_PM', 'E10') === null, 'data contoh A_PM dibersihkan');
   ok(v('Ref', 'A64') === null, 'contoh indeks kemahalan di Ref dibersihkan');
@@ -90,6 +90,20 @@ function dataUji(nOp) {
   ok(v('E_Saldo', 'E10') === 9060000, 'saldo VA rekening dari isian akuntan');
   ok(v('E_Saldo', 'D19') === 'SP2D-9' && v('E_Saldo', 'I19') === 'KW-TU-9' && v('E_Saldo', 'J19') === 'https://cloud/tu9', 'top up: SP2D, kuitansi, link bukti terima');
   ok(v('D_Insentif', 'C19') === 'PPK/1; PPK/2' && v('D_Insentif', 'C20') === 500000 && v('D_Insentif', 'C24') === 'KW-1; KW-2' && v('D_Insentif', 'C25') === 'Ya' && v('D_Insentif', 'C27') === 'TRX-1; TRX-2', 'insentif: pernyataan PPK, kuitansi, ttd, referensi VA');
+  {
+    const wb2 = new ExcelJS.Workbook(); await wb2.xlsx.readFile(TPL);
+    const d2 = dataUji(0);
+    d2.identitas.bast_folder = 'https://drive.google.com/drive/folders/BAST';
+    d2.harian.pm = [{ kode: 'KS-02', target: 650, distribusi: 650, diterima: 640, tidak: 10, alasan: 'x' }];
+    d2.transaksi = [tx(4, 'Fasilitas SPPG', 'Sewa Gedung', 300000, { ref: 'PGJ-9 #2', insentif: { ttd_url: 'https://drive.google.com/ttd4' } })];
+    d2.ppkTerakhir = 'PPK/07/2026';
+    L.isiLPDH(wb2, d2, { waktu: new Date(2026, 9, 29, 5, 30) });
+    const w = (s, a) => { const x = wb2.getWorksheet(s).getCell(a).value; return x && x.formula ? '=' : x; };
+    ok(w('A_PM', 'L7') === 'BAST/CPK02/20261028/KS-02' && w('A_PM', 'M7') === 'https://drive.google.com/drive/folders/BAST' && w('A_PM', 'K7') === 'Ya', 'A_PM: nomor BAST otomatis bertanggal + link folder BAST bersama (' + w('A_PM', 'L7') + ')');
+    ok(w('D_Insentif', 'C19') === 'PPK/07/2026' && w('D_Insentif', 'C20') === 300000 && w('D_Insentif', 'C24') === 'NB-4' && w('D_Insentif', 'C25') === 'Ya'
+      && w('D_Insentif', 'C26') === 'https://drive.google.com/ttd4' && w('D_Insentif', 'C27') === 'PGJ-9 #2',
+      'D_Insentif otomatis: PPK terakhir, nilai = insentif, no kuitansi = no bukti, ttd dari unggahan PIC, referensi transaksi (' + ['C19','C20','C24','C25','C26','C27'].map(a => a + '=' + w('D_Insentif', a)).join(' ') + ')');
+  }
   let sisa = 0;
   wb.eachSheet(ws => ws.eachRow(row => row.eachCell(c => { const x = c.value; if (x && typeof x === 'object' && (x.formula || x.sharedFormula) && 'result' in x) sisa++; })));
   ok(sisa === 0, 'tidak ada hasil rumus lama (angka contoh) yang terbawa: ' + sisa);

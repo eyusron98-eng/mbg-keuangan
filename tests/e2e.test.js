@@ -188,10 +188,11 @@ async function isiBahanBaku(page, uraian, volume, harga) {
     if (process.env.SHOT) await page.screenshot({ path: process.env.SHOT + '/lpdh-1.png', fullPage: true });
     await page.click('text=Ubah');
     await page.fill('.sheet input >> nth=0', '32.04.01.0001');
-    await page.fill('.sheet input >> nth=9', '3204000000000001');
+    await page.fill('.sheet input >> nth=10', '3204000000000001');
+    await page.fill('.sheet input >> nth=8', 'https://drive.google.com/drive/folders/BAST');
     await page.click('.sheet >> text=Simpan');
     await page.waitForSelector('text=Identitas LPDH disimpan');
-    assert(srv.log.identPost && srv.log.ident.id_sppg === '32.04.01.0001' && srv.log.ident.pengawas_nik === '3204000000000001', 'identitas tidak terkirim via POST');
+    assert(srv.log.identPost && srv.log.ident.id_sppg === '32.04.01.0001' && srv.log.ident.pengawas_nik === '3204000000000001' && srv.log.ident.bast_folder === 'https://drive.google.com/drive/folders/BAST', 'identitas tidak terkirim via POST');
     assert(!srv.log.urls.some(u => u.includes('3204000000000001')), 'NIK bocor ke URL GET');
     await page.fill('[aria-label="Saldo VA rekening"]', '6000000');
     await page.waitForSelector('text=wajib dijelaskan');   // aplikasi: 7.000.000 − 640.000 = 6.360.000 → selisih
@@ -247,6 +248,22 @@ async function isiBahanBaku(page, uraian, volume, harga) {
     await page.click('.sheet >> text=Simpan');
     await page.waitForSelector('text=Daftar relawan disimpan');
     assert(srv.log.relawan.length === 1 && srv.log.relawan[0].hari === 15, 'daftar relawan terkirim salah');
+  });
+
+  all &= await run('LPDH: PIC unggah kuitansi insentif bertanda tangan; nomor PPK terakhir dipakai', { role: 'pic',
+    override: (a, m, p, log) => a === 'getDataLPDH' ? { ok: true, data: { dapur: { id: 'D1', nama: 'SPPG Satu', kode: 'S1' }, identitas: {}, tanggal: p.tanggal, harian: null, ppkTerakhir: 'PPK/07/2026',
+      periode: { id: 'P2', periode_no: 2, tanggal_mulai: '2026-10-01', tanggal_akhir: '2026-10-31', status: 'AKTIF' }, saldoAwal: 5000000, topups: [],
+      transaksi: [{ id: 'TI', tanggal: p.tanggal, no_bukti: 'KW-S1-001', jenis: 'Fasilitas SPPG', kategori: 'Sewa Gedung', uraian: 'Insentif yayasan', sumber: 'VA', riil: 300000, bukti_url: 'https://x', ref: 'BA-PA/S1/001 #4', insentif: null }],
+      komponen: { awal: [3000000, 1500000, 500000], topups: [], geser: [], nama: ['Bahan Baku', 'Operasional', 'Insentif'] } } }
+      : a === 'saveTtdInsentif' ? (globalThis.__ttd = p, { ok: true }) : null }, async (page, srv) => {
+    await login(page, 'siti');
+    await page.waitForSelector('header');
+    await page.click('nav:visible >> text=LPDH Harian');
+    await page.waitForSelector('text=Pernyataan PPK PPK/07/2026 (nomor terakhir)');
+    await page.waitForSelector('text=Kuitansi bertanda tangan belum diunggah');
+    await page.setInputFiles('[aria-label="Unggah kuitansi ttd TI"]', { name: 'ttd.jpg', mimeType: 'image/jpeg', buffer: Buffer.from('ffd8ffe0', 'hex') });
+    await page.waitForSelector('text=Kuitansi bertanda tangan tersimpan');
+    assert(globalThis.__ttd && globalThis.__ttd.transaksi_id === 'TI' && /^https:\/\/drive\.google\.com\/up/.test(globalThis.__ttd.ttd_url), 'ttd tidak terkirim: ' + JSON.stringify(globalThis.__ttd));
   });
 
   all &= await run('Admin: mode uji peran (bertindak sebagai akuntan) lalu kembali', { role: 'admin' }, async (page, srv) => {
