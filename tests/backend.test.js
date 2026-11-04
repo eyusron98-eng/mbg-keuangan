@@ -85,7 +85,7 @@ const ok = (c, m) => { console.log((c ? 'PASS ' : 'FAIL ') + m); if (!c) fails++
     ['U3', 'off', 'xxxxxxx', 'Nonaktif', 'pic', 'D001', 'TIDAK'],
   ]);
   const B = env.__book;
-  ok(call(env, 'GET', { action: 'ping' }).version === 'v6-ba-sec11', 'ping menampilkan versi baru');
+  ok(call(env, 'GET', { action: 'ping' }).version === 'v6-ba-sec12', 'ping menampilkan versi baru');
 
   // 1. login lama (teks biasa) berhasil via POST dan password otomatis di-hash
   let r = call(env, 'POST', { action: 'login', username: 'AKUN1', password: 'RahasiaKu9' });
@@ -484,6 +484,22 @@ const ok = (c, m) => { console.log((c ? 'PASS ' : 'FAIL ') + m); if (!c) fails++
   ok(!r.ok, 'PIC yang mengirim "sebagai akuntan" ditolak');
   r = call(e8, 'POST', { action: 'getRealisasiList', token: tkAst, sebagai: 'akuntan', sebagai_dapur: 'D001' });
   ok(!r.ok && /Hanya akuntan/.test(r.error), 'asisten yang mengirim "sebagai akuntan" ditolak');
+
+  // ── Relawan: daftar tetap, centang hadir ──
+  B8.Transaksi.push(tx('TH3', '2026-10-27', 'HN-3', 'Operasional', 'Gaji/honor relawan pekerja SPPG', 'Honor 27 Okt', 240000));
+  const daftar3 = [{ nama: 'Ani', tugas: 'Masak', hari: 1, upah: 120000, hadir: true }, { nama: 'Budi', tugas: 'Supir', hari: 1, upah: 120000, hadir: false }, { nama: 'Cici', tugas: 'Cuci', hari: 1, upah: 120000, hadir: true }];
+  r = call(e8, 'POST', { action: 'saveRelawanBayar', token: tk8('pic'), transaksi_id: 'TH3', rows: daftar3 });
+  ok(r.ok, 'simpan daftar dengan satu relawan tidak hadir (total = yang hadir saja): ' + (r.error || ''));
+  r = call(e8, 'POST', { action: 'saveRelawanBayar', token: tk8('pic'), transaksi_id: 'TH3', rows: daftar3.map(x => Object.assign({}, x, { hadir: false })) });
+  ok(!r.ok && /dicentang hadir/.test(r.error), 'tidak ada yang hadir ditolak');
+  r = call(e8, 'POST', { action: 'getDataLPDH', token: tk8('adm'), dapur: 'D001', tanggal: '2026-10-27' });
+  const th3 = r.data.transaksi.find(t => t.id === 'TH3');
+  ok(th3.relawan.length === 2 && !th3.relawan.some(x => x.nama === 'Budi'), 'LPDH hanya memuat relawan yang hadir');
+  B8.Transaksi.push(tx('TH4', '2026-10-28', 'HN-4', 'Operasional', 'Gaji/honor relawan pekerja SPPG', 'Honor 28 Okt', 360000));
+  r = call(e8, 'POST', { action: 'getRelawanBayar', token: tk8('pic'), transaksi_id: 'TH4' });
+  ok(r.data.rows.length === 3 && r.data.rows.every(x => x.hadir === true), 'pembayaran berikutnya: daftar lengkap (termasuk yang kemarin absen) dicentang hadir semua');
+  r = call(e8, 'POST', { action: 'getRelawanBayar', token: tk8('pic'), transaksi_id: 'TH3' });
+  ok(r.data.rows.find(x => x.nama === 'Budi').hadir === false, 'daftar tersimpan mengingat siapa yang tidak hadir');
 
   // ── Realisasi sekali klik: nota pengajuan / kuitansi otomatis ──
   r = pa([bb({ nota_url: '', rincian: [{ nama: 'Wortel', kategori: 'Sayuran', volume: 10, satuan: 'kg', harga: 15000 }] })]);

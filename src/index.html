@@ -1850,33 +1850,38 @@ function RelawanForm({ tx, toast, onClose, onSaved }) {
   const [sumber, setSumber] = useState('');
   const [saving, setSaving] = useState(false);
   const [tempel, setTempel] = useState(null);   // null = tertutup; string = isi kotak tempel
+  const [modeUbah, setModeUbah] = useState(false);   // false = centang hadir; true = ubah nama/tugas/upah
   useEffect(function() {
     api('getRelawanBayar', { transaksi_id: tx.id }).then(function(r) {
       if (!r.ok) { toast(r.error, 'error'); onClose(); return; }
-      setRows((r.data.rows || []).map(function(x) { return { nama: x.nama, tugas: x.tugas, hari: String(x.hari), upah: String(x.upah), metode: x.metode || 'Transfer' }; }));
+      setRows((r.data.rows || []).map(function(x) { return { nama: x.nama, tugas: x.tugas, hari: String(x.hari || 1), upah: String(x.upah), metode: x.metode || 'Transfer', hadir: x.hadir !== false }; }));
       setSumber(r.data.sumber);
     });
   }, []);
   if (!rows) return <Modal title="Daftar relawan" onClose={onClose}>{I.spinner}</Modal>;
-  const total = rows.reduce(function(s, x) { return s + (Number(x.hari) || 0) * (Number(x.upah) || 0); }, 0);
+  const hadir = rows.filter(function(x) { return x.hadir; });
+  const total = hadir.reduce(function(s, x) { return s + (Number(x.hari) || 0) * (Number(x.upah) || 0); }, 0);
   const selisih = total - tx.riil;
   function ubah(i, k, v) { setRows(rows.map(function(x, j) { return j === i ? Object.assign({}, x, { [k]: v }) : x; })); }
-  const tambahKosong = function() { setRows(rows.concat([{ nama: '', tugas: '', hari: '1', upah: '', metode: 'Transfer' }])); };
+  const tambahKosong = function() { setRows(rows.concat([{ nama: '', tugas: '', hari: '1', upah: '', metode: 'Transfer', hadir: true }])); setModeUbah(true); };
+  const semua = function(v) { setRows(rows.map(function(x) { return Object.assign({}, x, { hadir: v }); })); };
   // Tempel dari Excel/WhatsApp: satu baris per relawan — Nama, Tugas, Hari kerja, Upah per hari (dipisah Tab, ; atau |)
   const hasilTempel = tempel ? bacaTempelRelawan(tempel) : [];
-  function pakaiTempel() { setRows(rows.filter(function(x) { return x.nama.trim(); }).concat(hasilTempel)); setTempel(null); }
+  function pakaiTempel() { setRows(rows.filter(function(x) { return x.nama.trim(); }).concat(hasilTempel.map(function(x) { return Object.assign({ hadir: true }, x); }))); setTempel(null); }
   async function simpan() {
     setSaving(true);
-    const r = await apiPost('saveRelawanBayar', { transaksi_id: tx.id, rows: rows.map(function(x) { return { nama: x.nama, tugas: x.tugas, hari: Number(x.hari), upah: Number(x.upah), metode: x.metode }; }) });
+    const r = await apiPost('saveRelawanBayar', { transaksi_id: tx.id, rows: rows.map(function(x) { return { nama: x.nama, tugas: x.tugas, hari: Number(x.hari), upah: Number(x.upah), metode: x.metode, hadir: !!x.hadir }; }) });
     setSaving(false);
     if (r.ok) { toast('Daftar relawan disimpan'); onSaved(); onClose(); } else toast(r.error, 'error');
   }
   return <Modal title="Daftar penerima honor relawan" size="lg" onClose={onClose}>
     <div className="text-sm mb-1" style={{ color: COLORS.ink }}>{tx.uraian} · <b>{fmt(tx.riil)}</b></div>
-    <div className="text-xs mb-3" style={{ color: COLORS.muted }}>Isi satu baris per relawan yang dibayar di transaksi ini: nama, tugas, hari kerja, upah per hari. Jumlah semua baris harus sama dengan {fmt(tx.riil)}. Cukup sekali — pembayaran berikutnya tersalin otomatis.</div>
+    <div className="text-xs mb-3" style={{ color: COLORS.muted }}>{rows.length ? 'Centang yang hadir/dibayar, hapus centang yang tidak hadir. Jumlah yang dicentang harus sama dengan ' + fmt(tx.riil) + '.'
+      : 'Isi daftar relawan sekali (nama, tugas, hari kerja, upah per hari). Pembayaran berikutnya tinggal centang yang hadir.'}</div>
     <div className="flex gap-2 flex-wrap mb-3">
       <Btn size="sm" onClick={tambahKosong}>{I.plusSm} Tambah relawan</Btn>
       <Btn size="sm" kind="ghost" onClick={function() { setTempel(tempel === null ? '' : null); }}>{I.file} Tempel daftar</Btn>
+      {rows.length > 0 && <Btn size="sm" kind="ghost" onClick={function() { setModeUbah(!modeUbah); }}>{modeUbah ? I.check : I.edit} {modeUbah ? 'Selesai ubah' : 'Ubah detail'}</Btn>}
     </div>
     {tempel !== null && <div className="rounded-lg p-2.5 mb-3" style={{ border: '1px solid ' + COLORS.line, background: COLORS.paper }}>
       <div className="text-xs mb-1.5" style={{ color: COLORS.muted }}>Salin dari Excel (kolom: Nama · Tugas · Hari kerja · Upah per hari) lalu tempel di sini. Dari WhatsApp/catatan: pisahkan dengan titik koma, cth. <i>Ani; Juru masak; 1; 120000</i></div>
@@ -1887,8 +1892,21 @@ function RelawanForm({ tx, toast, onClose, onSaved }) {
       </div>
     </div>}
     {!rows.length && tempel === null && <div className="text-sm rounded-lg p-3 mb-3 text-center" style={{ border: '1.5px dashed ' + COLORS.line, color: COLORS.muted }}>Belum ada relawan. Ketuk <b>Tambah relawan</b> atau <b>Tempel daftar</b>.</div>}
-    {sumber.indexOf('disalin') === 0 && <div className="text-sm rounded-lg p-2.5 mb-3" style={{ background: '#EAF0F8', color: COLORS.blue }}>Daftar {sumber}. Sesuaikan hari kerja bila berbeda.</div>}
-    {rows.map(function(x, i) { return <div key={i} className="rounded-lg p-2.5 mb-2" style={{ border: '1px solid ' + COLORS.line }}>
+    {sumber.indexOf('disalin') === 0 && <div className="text-sm rounded-lg p-2.5 mb-3" style={{ background: '#EAF0F8', color: COLORS.blue }}>Daftar {sumber} — semua dicentang hadir. Hapus centang yang tidak hadir; ubah hari kerja bila dibayar per periode.</div>}
+    {rows.length > 0 && !modeUbah && <div className="flex items-center justify-between text-xs mb-1.5" style={{ color: COLORS.muted }}>
+      <span>{hadir.length} hadir dari {rows.length}</span>
+      <span className="flex gap-3"><button type="button" onClick={function() { semua(true); }} style={{ color: COLORS.blue }}>Centang semua</button>
+        <button type="button" onClick={function() { semua(false); }} style={{ color: COLORS.blue }}>Kosongkan</button></span></div>}
+    {!modeUbah && rows.map(function(x, i) { return <div key={i} className="flex items-center gap-2 py-1.5" style={{ borderTop: '1px solid ' + COLORS.line, opacity: x.hadir ? 1 : 0.5 }}>
+      <label className="flex items-center gap-2.5 flex-1 min-w-0 cursor-pointer">
+        <input type="checkbox" checked={!!x.hadir} onChange={function(e) { ubah(i, 'hadir', e.target.checked); }} style={{ width: 22, height: 22, flexShrink: 0 }} aria-label={'Hadir ' + (x.nama || i + 1)}/>
+        <span className="min-w-0"><span className="block text-sm truncate" style={{ color: COLORS.ink, textDecoration: x.hadir ? 'none' : 'line-through' }}>{x.nama || '(tanpa nama)'}</span>
+          <span className="block text-[11px] truncate" style={{ color: COLORS.muted }}>{x.tugas || '—'} · {fmt(Number(x.upah) || 0)}/hari{x.metode === 'Tunai' ? ' · tunai' : ''}</span></span>
+      </label>
+      {x.hadir && <input value={x.hari} inputMode="numeric" onChange={function(e) { ubah(i, 'hari', e.target.value.replace(/\D/g, '')); }} style={Object.assign({}, inputStyle, { width: 54, minHeight: 36, padding: '6px 8px', textAlign: 'center' })} aria-label={'Hari ' + (i + 1)} title="Hari kerja"/>}
+      {x.hadir && <span className="text-[11px] shrink-0" style={{ color: COLORS.muted }}>hari</span>}
+    </div>; })}
+    {modeUbah && rows.map(function(x, i) { return <div key={i} className="rounded-lg p-2.5 mb-2" style={{ border: '1px solid ' + COLORS.line }}>
       <div className="grid grid-cols-2 gap-2">
         <input value={x.nama} onChange={function(e) { ubah(i, 'nama', e.target.value); }} style={inputStyle} placeholder="Nama relawan" aria-label={'Nama ' + (i + 1)}/>
         <input value={x.tugas} onChange={function(e) { ubah(i, 'tugas', e.target.value); }} style={inputStyle} placeholder="Tugas, cth. Juru masak" aria-label={'Tugas ' + (i + 1)}/>
@@ -1901,11 +1919,11 @@ function RelawanForm({ tx, toast, onClose, onSaved }) {
       <div className="flex justify-between text-xs mt-1.5"><span style={{ color: COLORS.muted }}>Diterima {fmt((Number(x.hari) || 0) * (Number(x.upah) || 0))}</span>
         <button type="button" onClick={function() { setRows(rows.filter(function(_, j) { return j !== i; })); }} style={{ color: COLORS.danger }}>Hapus</button></div>
     </div>; })}
-    {rows.length > 0 && <Btn size="sm" kind="ghost" onClick={tambahKosong}>{I.plusSm} Tambah relawan</Btn>}
+    {modeUbah && rows.length > 0 && <Btn size="sm" kind="ghost" onClick={tambahKosong}>{I.plusSm} Tambah relawan</Btn>}
     <div className="mt-3 pt-3" style={{ borderTop: '1px solid ' + COLORS.line }}>
-      <div className="flex justify-between text-sm"><span style={{ color: COLORS.muted }}>{rows.length} relawan · total</span><b className="num">{fmt(total)}</b></div>
+      <div className="flex justify-between text-sm"><span style={{ color: COLORS.muted }}>{hadir.length} relawan dibayar · total</span><b className="num">{fmt(total)}</b></div>
       {selisih !== 0 && <div className="text-xs mt-1" style={{ color: COLORS.danger }}>Selisih {fmt(selisih)} dari nilai transaksi — harus sama sebelum disimpan.</div>}
-      <div className="flex gap-2 mt-2"><Btn kind="ghost" onClick={onClose}>Batal</Btn><Btn onClick={simpan} disabled={saving || selisih !== 0 || !rows.length}>{saving ? I.spinner : I.check} Simpan</Btn></div>
+      <div className="flex gap-2 mt-2"><Btn kind="ghost" onClick={onClose}>Batal</Btn><Btn onClick={simpan} disabled={saving || selisih !== 0 || !hadir.length}>{saving ? I.spinner : I.check} Simpan</Btn></div>
     </div>
   </Modal>;
 }

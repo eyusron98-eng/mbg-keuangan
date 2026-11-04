@@ -126,7 +126,7 @@ function handleRequest(e, method) {
     }
     let result;
     switch (action) {
-      case 'ping':              result = { ok: true, time: new Date().toISOString(), version: 'v6-ba-sec11' }; break;
+      case 'ping':              result = { ok: true, time: new Date().toISOString(), version: 'v6-ba-sec12' }; break;
       case 'login':             result = login(params); break;
       case 'getPeriodeList':    result = getPeriodeList(params); break;
       case 'getActivePeriode':  result = getActivePeriode(params); break;
@@ -2251,10 +2251,11 @@ function getRelawanBayar(p) {
   if (!tx || !isHonorRelawan(tx)) return { ok: false, error: 'Transaksi honor relawan tidak ditemukan' };
   if (lpdhDapur(me, tx.dapur) !== tx.dapur) return { ok: false, error: 'Bukan dapur Anda' };
   const semua = bacaRelawanSemua(tx.dapur);
-  if (semua[tx.id]) return { ok: true, data: { rows: semua[tx.id].rows, sumber: 'tersimpan', total: tx.riil } };
-  // salin dari daftar terakhir dapur ini (nama, tugas, upah, metode, hari kerja)
+  if (semua[tx.id]) return { ok: true, data: { rows: semua[tx.id].rows.map(function(r) { return Object.assign({ hadir: true }, r); }), sumber: 'tersimpan', total: tx.riil } };
+  // salin dari daftar terakhir dapur ini (nama, tugas, upah, metode, hari kerja); semua dicentang hadir lagi
   let akhir = null; Object.keys(semua).forEach(function(k) { if (!akhir || semua[k].seq > akhir.seq) akhir = semua[k]; });
-  return { ok: true, data: { rows: akhir ? akhir.rows : [], sumber: akhir ? 'disalin dari daftar terakhir' : 'baru', total: tx.riil } };
+  return { ok: true, data: { rows: akhir ? akhir.rows.map(function(r) { return Object.assign({}, r, { hadir: true, hari: r.hari > 0 ? r.hari : 1 }); }) : [],
+    sumber: akhir ? 'disalin dari daftar terakhir' : 'baru', total: tx.riil } };
 }
 function saveRelawanBayar(p) {
   const me = authUser(p);
@@ -2266,14 +2267,19 @@ function saveRelawanBayar(p) {
   let a = p.rows;
   if (typeof a === 'string') a = bacaJson(a);
   if (!Array.isArray(a) || !a.length) return { ok: false, error: 'Daftar relawan kosong' };
-  if (a.length > 60) return { ok: false, error: 'Maksimal 60 relawan per pembayaran (kapasitas lembar C1 PPK)' };
-  const rows = []; let total = 0;
+  if (a.length > 200) return { ok: false, error: 'Daftar relawan maksimal 200 orang' };
+  // daftar lengkap disimpan (termasuk yang tidak hadir, agar dipakai lagi); yang dibayar = yang hadir
+  const rows = []; let total = 0, nHadir = 0;
   for (let i = 0; i < a.length; i++) {
-    const x = a[i] || {}, r = { nama: String(x.nama || '').trim(), tugas: String(x.tugas || '').trim(), hari: Number(x.hari), upah: Number(x.upah), metode: x.metode === 'Tunai' ? 'Tunai' : 'Transfer' };
+    const x = a[i] || {}, r = { nama: String(x.nama || '').trim(), tugas: String(x.tugas || '').trim(), hari: Number(x.hari) || 0, upah: Number(x.upah) || 0,
+      metode: x.metode === 'Tunai' ? 'Tunai' : 'Transfer', hadir: x.hadir !== false && x.hadir !== 'false' };
     if (!r.nama) return { ok: false, error: 'Baris ' + (i + 1) + ': nama wajib' };
-    if (!(r.hari > 0) || !(r.upah > 0)) return { ok: false, error: 'Baris ' + (i + 1) + ' (' + r.nama + '): hari kerja & upah harian wajib > 0' };
-    total += r.hari * r.upah; rows.push(r);
+    if (r.hadir && (!(r.hari > 0) || !(r.upah > 0))) return { ok: false, error: 'Baris ' + (i + 1) + ' (' + r.nama + '): hari kerja & upah harian wajib > 0' };
+    if (r.hadir) { total += r.hari * r.upah; nHadir++; }
+    rows.push(r);
   }
+  if (!nHadir) return { ok: false, error: 'Belum ada relawan yang dicentang hadir' };
+  if (nHadir > 60) return { ok: false, error: 'Maksimal 60 relawan dibayar per transaksi (kapasitas lembar C1 PPK)' };
   if (Math.round(total) !== Math.round(tx.riil)) return { ok: false, error: 'Total daftar ' + rupiah(total) + ' ≠ nilai transaksi ' + rupiah(tx.riil) + ' (selisih ' + rupiah(total - tx.riil) + ')' };
   return withLock(function() {
     const sh = relawanSheet(), ada = bacaRelawanSemua(tx.dapur)[tx.id];
@@ -2476,7 +2482,7 @@ function getDataLPDH(p) {
       uraian: t.uraian, sumber: t.sumber, riil: t.riil, bukti_url: String(t.bukti_url || ''),
       pemasok: it ? (isFeeLink(link) ? it.bank : it.penerima_nama) : '', seq: t.seq,
       rincian: it && !isFeeLink(link) && t.jenis === 'Bahan Baku' ? it.rincian : [], nota_url: it && !isFeeLink(link) ? it.nota_url : '',
-      relawan: isHonorRelawan(t) && relawan[t.id] ? relawan[t.id].rows : null,
+      relawan: isHonorRelawan(t) && relawan[t.id] ? relawan[t.id].rows.filter(function(r) { return r.hadir !== false; }) : null,
       insentif: t.jenis === 'Fasilitas SPPG' ? (insentif[t.id] ? insentif[t.id].data : {}) : null };
   }).sort(function(a, b) { return a.seq - b.seq; });
 

@@ -4238,6 +4238,7 @@ try {
     const [sumber, setSumber] = useState('');
     const [saving, setSaving] = useState(false);
     const [tempel, setTempel] = useState(null);
+    const [modeUbah, setModeUbah] = useState(false);
     useEffect(function () {
       api('getRelawanBayar', {
         transaksi_id: tx.id
@@ -4251,9 +4252,10 @@ try {
           return {
             nama: x.nama,
             tugas: x.tugas,
-            hari: String(x.hari),
+            hari: String(x.hari || 1),
             upah: String(x.upah),
-            metode: x.metode || 'Transfer'
+            metode: x.metode || 'Transfer',
+            hadir: x.hadir !== false
           };
         }));
         setSumber(r.data.sumber);
@@ -4263,7 +4265,10 @@ try {
       title: "Daftar relawan",
       onClose: onClose
     }, I.spinner);
-    const total = rows.reduce(function (s, x) {
+    const hadir = rows.filter(function (x) {
+      return x.hadir;
+    });
+    const total = hadir.reduce(function (s, x) {
       return s + (Number(x.hari) || 0) * (Number(x.upah) || 0);
     }, 0);
     const selisih = total - tx.riil;
@@ -4280,14 +4285,27 @@ try {
         tugas: '',
         hari: '1',
         upah: '',
-        metode: 'Transfer'
+        metode: 'Transfer',
+        hadir: true
       }]));
+      setModeUbah(true);
+    };
+    const semua = function (v) {
+      setRows(rows.map(function (x) {
+        return Object.assign({}, x, {
+          hadir: v
+        });
+      }));
     };
     const hasilTempel = tempel ? bacaTempelRelawan(tempel) : [];
     function pakaiTempel() {
       setRows(rows.filter(function (x) {
         return x.nama.trim();
-      }).concat(hasilTempel));
+      }).concat(hasilTempel.map(function (x) {
+        return Object.assign({
+          hadir: true
+        }, x);
+      })));
       setTempel(null);
     }
     async function simpan() {
@@ -4300,7 +4318,8 @@ try {
             tugas: x.tugas,
             hari: Number(x.hari),
             upah: Number(x.upah),
-            metode: x.metode
+            metode: x.metode,
+            hadir: !!x.hadir
           };
         })
       });
@@ -4325,7 +4344,7 @@ try {
       style: {
         color: COLORS.muted
       }
-    }, "Isi satu baris per relawan yang dibayar di transaksi ini: nama, tugas, hari kerja, upah per hari. Jumlah semua baris harus sama dengan ", fmt(tx.riil), ". Cukup sekali \u2014 pembayaran berikutnya tersalin otomatis."), React.createElement("div", {
+    }, rows.length ? 'Centang yang hadir/dibayar, hapus centang yang tidak hadir. Jumlah yang dicentang harus sama dengan ' + fmt(tx.riil) + '.' : 'Isi daftar relawan sekali (nama, tugas, hari kerja, upah per hari). Pembayaran berikutnya tinggal centang yang hadir.'), React.createElement("div", {
       className: "flex gap-2 flex-wrap mb-3"
     }, React.createElement(Btn, {
       size: "sm",
@@ -4336,7 +4355,13 @@ try {
       onClick: function () {
         setTempel(tempel === null ? '' : null);
       }
-    }, I.file, " Tempel daftar")), tempel !== null && React.createElement("div", {
+    }, I.file, " Tempel daftar"), rows.length > 0 && React.createElement(Btn, {
+      size: "sm",
+      kind: "ghost",
+      onClick: function () {
+        setModeUbah(!modeUbah);
+      }
+    }, modeUbah ? I.check : I.edit, " ", modeUbah ? 'Selesai ubah' : 'Ubah detail')), tempel !== null && React.createElement("div", {
       className: "rounded-lg p-2.5 mb-3",
       style: {
         border: '1px solid ' + COLORS.line,
@@ -4384,7 +4409,85 @@ try {
         background: '#EAF0F8',
         color: COLORS.blue
       }
-    }, "Daftar ", sumber, ". Sesuaikan hari kerja bila berbeda."), rows.map(function (x, i) {
+    }, "Daftar ", sumber, " \u2014 semua dicentang hadir. Hapus centang yang tidak hadir; ubah hari kerja bila dibayar per periode."), rows.length > 0 && !modeUbah && React.createElement("div", {
+      className: "flex items-center justify-between text-xs mb-1.5",
+      style: {
+        color: COLORS.muted
+      }
+    }, React.createElement("span", null, hadir.length, " hadir dari ", rows.length), React.createElement("span", {
+      className: "flex gap-3"
+    }, React.createElement("button", {
+      type: "button",
+      onClick: function () {
+        semua(true);
+      },
+      style: {
+        color: COLORS.blue
+      }
+    }, "Centang semua"), React.createElement("button", {
+      type: "button",
+      onClick: function () {
+        semua(false);
+      },
+      style: {
+        color: COLORS.blue
+      }
+    }, "Kosongkan"))), !modeUbah && rows.map(function (x, i) {
+      return React.createElement("div", {
+        key: i,
+        className: "flex items-center gap-2 py-1.5",
+        style: {
+          borderTop: '1px solid ' + COLORS.line,
+          opacity: x.hadir ? 1 : 0.5
+        }
+      }, React.createElement("label", {
+        className: "flex items-center gap-2.5 flex-1 min-w-0 cursor-pointer"
+      }, React.createElement("input", {
+        type: "checkbox",
+        checked: !!x.hadir,
+        onChange: function (e) {
+          ubah(i, 'hadir', e.target.checked);
+        },
+        style: {
+          width: 22,
+          height: 22,
+          flexShrink: 0
+        },
+        "aria-label": 'Hadir ' + (x.nama || i + 1)
+      }), React.createElement("span", {
+        className: "min-w-0"
+      }, React.createElement("span", {
+        className: "block text-sm truncate",
+        style: {
+          color: COLORS.ink,
+          textDecoration: x.hadir ? 'none' : 'line-through'
+        }
+      }, x.nama || '(tanpa nama)'), React.createElement("span", {
+        className: "block text-[11px] truncate",
+        style: {
+          color: COLORS.muted
+        }
+      }, x.tugas || '—', " \xB7 ", fmt(Number(x.upah) || 0), "/hari", x.metode === 'Tunai' ? ' · tunai' : ''))), x.hadir && React.createElement("input", {
+        value: x.hari,
+        inputMode: "numeric",
+        onChange: function (e) {
+          ubah(i, 'hari', e.target.value.replace(/\D/g, ''));
+        },
+        style: Object.assign({}, inputStyle, {
+          width: 54,
+          minHeight: 36,
+          padding: '6px 8px',
+          textAlign: 'center'
+        }),
+        "aria-label": 'Hari ' + (i + 1),
+        title: "Hari kerja"
+      }), x.hadir && React.createElement("span", {
+        className: "text-[11px] shrink-0",
+        style: {
+          color: COLORS.muted
+        }
+      }, "hari"));
+    }), modeUbah && rows.map(function (x, i) {
       return React.createElement("div", {
         key: i,
         className: "rounded-lg p-2.5 mb-2",
@@ -4454,7 +4557,7 @@ try {
           color: COLORS.danger
         }
       }, "Hapus")));
-    }), rows.length > 0 && React.createElement(Btn, {
+    }), modeUbah && rows.length > 0 && React.createElement(Btn, {
       size: "sm",
       kind: "ghost",
       onClick: tambahKosong
@@ -4469,7 +4572,7 @@ try {
       style: {
         color: COLORS.muted
       }
-    }, rows.length, " relawan \xB7 total"), React.createElement("b", {
+    }, hadir.length, " relawan dibayar \xB7 total"), React.createElement("b", {
       className: "num"
     }, fmt(total))), selisih !== 0 && React.createElement("div", {
       className: "text-xs mt-1",
@@ -4483,7 +4586,7 @@ try {
       onClick: onClose
     }, "Batal"), React.createElement(Btn, {
       onClick: simpan,
-      disabled: saving || selisih !== 0 || !rows.length
+      disabled: saving || selisih !== 0 || !hadir.length
     }, saving ? I.spinner : I.check, " Simpan"))));
   }
   function LpdhDokForm({
