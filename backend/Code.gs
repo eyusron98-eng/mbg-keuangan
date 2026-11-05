@@ -79,6 +79,7 @@ const JENIS_KATEGORI = {
     'Alat Kebersihan',
     'Air Minum',
     'APD',
+    'Barang Habis Pakai',
     'Sampah',
     'Jasa General Cleaning',
     'Kecelakaan/Musibah/Duka',
@@ -93,8 +94,8 @@ const JENIS_KATEGORI = {
   'Fasilitas SPPG': ['Sewa Gedung'],
 };
 // Kategori lama yang tidak bisa dipilih lagi, tetapi data lamanya tetap sah selama kategorinya tidak diubah
-const KATEGORI_LAMA = { 'Operasional': ['Barang Habis Pakai'] };
-// "Barang Habis Pakai" wajib dipecah ke baris LPDH saat realisasi / edit realisasi
+const KATEGORI_LAMA = {};
+// "Barang Habis Pakai" BOLEH (tidak wajib) dipindah ke baris LPDH saat realisasi / edit realisasi
 const SUB_BHP = ['ATK', 'Alat Kebersihan', 'APD', 'Lain-lain'];
 function kategoriSah(jenis, kat, katLama) {
   const daftar = JENIS_KATEGORI[jenis];
@@ -134,7 +135,7 @@ function handleRequest(e, method) {
     }
     let result;
     switch (action) {
-      case 'ping':              result = { ok: true, time: new Date().toISOString(), version: 'v6-ba-sec15' }; break;
+      case 'ping':              result = { ok: true, time: new Date().toISOString(), version: 'v6-ba-sec16' }; break;
       case 'login':             result = login(params); break;
       case 'getPeriodeList':    result = getPeriodeList(params); break;
       case 'getActivePeriode':  result = getActivePeriode(params); break;
@@ -1696,8 +1697,8 @@ function realisasiItem(p) {
     if (sumberBukti === 'nota') buktiUrl = it.nota_url;
     const isOps = it.jenis === 'Operasional';
     let katTx = it.kategori;
-    if (it.kategori === 'Barang Habis Pakai') {
-      if (SUB_BHP.indexOf(p.sub_kategori) < 0) return { ok: false, error: 'Pilih sub-kategori Barang Habis Pakai: ' + SUB_BHP.join(' / ') };
+    if (it.kategori === 'Barang Habis Pakai' && p.sub_kategori) {
+      if (SUB_BHP.indexOf(p.sub_kategori) < 0) return { ok: false, error: 'Sub-kategori harus ' + SUB_BHP.join(' / ') };
       katTx = p.sub_kategori;
     }
     const riil = isOps ? Number(p.riil) : it.nominal;
@@ -1904,7 +1905,7 @@ function requestTxChange(p) {
       if (!Object.keys(baru).length) return { ok: false, error: 'Tidak ada perubahan' };
       if (baru.no_bukti !== undefined) { const nb = siapkanNoBukti(baru.no_bukti, tx.dapur, merged.tanggal, tx.id); if (nb.error) return { ok: false, error: nb.error }; }
       if (merged.tanggal < per.tanggal_mulai || merged.tanggal > per.tanggal_akhir) return { ok: false, error: 'Tanggal harus di dalam Periode ' + per.periode_no };
-      if (!kategoriSah(merged.jenis, merged.kategori, lama.kategori)) return { ok: false, error: lama.kategori === 'Barang Habis Pakai' && baru.jenis === undefined ? 'Kategori "Barang Habis Pakai" sudah dipecah — pilih ' + SUB_BHP.join(' / ') : 'Jenis/kategori tidak valid' };
+      if (!kategoriSah(merged.jenis, merged.kategori, lama.kategori)) return { ok: false, error: 'Jenis/kategori tidak valid' };
       if (linked && baru.kategori !== undefined && SUB_BHP.indexOf(baru.kategori) < 0) return { ok: false, error: 'Sub-kategori harus ' + SUB_BHP.join(' / ') };
       if (!(merged.riil > 0) || !(merged.unriil > 0)) return { ok: false, error: 'Nominal harus lebih dari 0' };
       if (!linked && merged.jenis === 'Bahan Baku' && merged.unriil !== merged.riil) { baru.unriil = merged.riil; }

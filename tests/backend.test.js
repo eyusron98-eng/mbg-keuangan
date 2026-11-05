@@ -85,7 +85,7 @@ const ok = (c, m) => { console.log((c ? 'PASS ' : 'FAIL ') + m); if (!c) fails++
     ['U3', 'off', 'xxxxxxx', 'Nonaktif', 'pic', 'D001', 'TIDAK'],
   ]);
   const B = env.__book;
-  ok(call(env, 'GET', { action: 'ping' }).version === 'v6-ba-sec15', 'ping menampilkan versi baru');
+  ok(call(env, 'GET', { action: 'ping' }).version === 'v6-ba-sec16', 'ping menampilkan versi baru');
 
   // 1. login lama (teks biasa) berhasil via POST dan password otomatis di-hash
   let r = call(env, 'POST', { action: 'login', username: 'AKUN1', password: 'RahasiaKu9' });
@@ -558,11 +558,14 @@ const ok = (c, m) => { console.log((c ? 'PASS ' : 'FAIL ') + m); if (!c) fails++
   e8.__driveGagal = false;
   ok(!r.ok && /kuitansi/.test(r.error) && B8.Transaksi.length === nTx && B8.PengajuanItem.find(x => x[0] === 'K-GAGAL')[14] === 'DISETUJUI', 'Drive gagal → tidak ada transaksi setengah jadi, baris tetap Disetujui');
   // ── Barang Habis Pakai dipecah ke sub-kategori baris LPDH ──
-  ok(/Kategori tidak valid/.test(e8.validateItemInput({ jenis: 'Operasional', kategori: 'Barang Habis Pakai', uraian: 'x', nominal: 1, penerima_id: 'p' }, { p: 1 }) || ''), 'pengajuan baru: "Barang Habis Pakai" tidak bisa dipilih lagi');
+  ok(e8.validateItemInput({ jenis: 'Operasional', kategori: 'Barang Habis Pakai', uraian: 'x', nominal: 1, penerima_id: 'p' }, { p: 1 }) === null, 'pengajuan baru: "Barang Habis Pakai" bisa dipilih lagi');
   ok(e8.validateItemInput({ jenis: 'Operasional', kategori: 'Biaya Rapat Koordinasi', uraian: 'x', nominal: 1, penerima_id: 'p' }, { p: 1 }) === null, 'kategori baru "Biaya Rapat Koordinasi" sah');
   itemDisetujui('K-BHP', 'Operasional', 'Barang Habis Pakai', 295000);
-  r = real1('K-BHP', { riil: 295000, bukti_url: 'https://drive.google.com/bhp' });
-  ok(!r.ok && /sub-kategori/.test(r.error), 'pengajuan lama Barang Habis Pakai: realisasi wajib memilih sub-kategori');
+  itemDisetujui('K-BHP0', 'Operasional', 'Barang Habis Pakai', 100000);
+  r = real1('K-BHP0', { riil: 100000, bukti_url: 'https://drive.google.com/bhp0' });
+  ok(r.ok && B8.Transaksi.find(t => t[14] === 'K-BHP0')[5] === 'Barang Habis Pakai', 'realisasi Barang Habis Pakai tanpa sub-kategori: kategori tetap Barang Habis Pakai: ' + (r.error || ''));
+  r = real1('K-BHP', { riil: 295000, bukti_url: 'https://drive.google.com/bhp', sub_kategori: 'Gas' });
+  ok(!r.ok && /Sub-kategori harus/.test(r.error), 'sub-kategori di luar daftar ditolak');
   r = real1('K-BHP', { riil: 295000, bukti_url: 'https://drive.google.com/bhp', sub_kategori: 'ATK' });
   const txBHP = B8.Transaksi.find(t => t[14] === 'K-BHP');
   ok(r.ok && txBHP && txBHP[5] === 'ATK', 'realisasi Barang Habis Pakai tercatat dengan sub-kategori ATK: ' + (r.error || ''));
