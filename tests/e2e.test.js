@@ -313,13 +313,13 @@ async function isiBahanBaku(page, uraian, volume, harga) {
     assert(await page.isDisabled('text=Simpan realisasi'), 'gas tanpa unggahan seharusnya belum bisa disimpan');
   });
 
-  all &= await run('Realisasi Barang Habis Pakai lama: wajib pilih sub-kategori baris LPDH', { role: 'akuntan',
+  all &= await run('Realisasi Barang Habis Pakai: boleh dipindah ke baris LPDH (opsional)', { role: 'akuntan',
     override: (a) => a === 'getRealisasiList' ? { ok: true, data: [{ id: 'RH', urut: 1, nomor: 'BA-PA/S1/2026/11/001', jenis: 'Operasional', kategori: 'Barang Habis Pakai', uraian: 'Pembelian barang habis pakai 4 november', nominal: 1380000, penerima_nama: 'Fahmi', bank: 'BNI', no_rek: '1', status: 'DISETUJUI', nota_url: '' }] } : null }, async (page, srv) => {
     await login(page, 'siti');
     await page.waitForSelector('header');
     await page.click('nav:visible >> text=Realisasi');
     await page.click('text=Pembelian barang habis pakai 4 november');
-    await page.waitForSelector('text=Pilih sub-kategori (baris LPDH)');
+    await page.waitForSelector('text=Baris LPDH (opsional)');
     await page.selectOption('[aria-label="Sub-kategori barang habis pakai"]', 'Alat Kebersihan');
     await page.fill('.sheet input[inputmode=numeric] >> nth=1', '1380000');
     await page.setInputFiles('.sheet input[type=file] >> nth=0', { name: 'tf.jpg', mimeType: 'image/jpeg', buffer: Buffer.from('ffd8ffe0', 'hex') });

@@ -10633,12 +10633,12 @@ try {
       riil: isOps && !viaKuitansi ? '' : String(item.nominal),
       adaAdmin: false,
       biaya: String(BIAYA_ADMIN_DEFAULT),
-      sub: perluSub ? tebakSubBHP(item.uraian) : ''
+      sub: ''
     });
     const [bukti, setBukti] = useState(null);
     const [saving, setSaving] = useState(false);
     const outRange = periode && (f.tanggal < periode.tanggal_mulai || f.tanggal > periode.tanggal_akhir);
-    const err = !f.tanggal ? 'Tanggal wajib' : outRange ? 'Tanggal di luar periode' : /^[\s\-\u2013\u2014_.\/]+$/.test(f.no_bukti) ? 'No bukti tidak boleh "' + f.no_bukti.trim() + '" — kosongkan bila nota tidak bernomor' : perluSub && !f.sub ? 'Pilih sub-kategori (baris LPDH)' : isOps && !(Number(f.riil) > 0) ? 'Realisasi aktual wajib' : f.adaAdmin && !(Number(f.biaya) > 0 && Number(f.biaya) <= 50000) ? 'Biaya admin Rp 1 – Rp 50.000' : !bukti && !otomatis ? 'Bukti transfer wajib diunggah' : null;
+    const err = !f.tanggal ? 'Tanggal wajib' : outRange ? 'Tanggal di luar periode' : /^[\s\-\u2013\u2014_.\/]+$/.test(f.no_bukti) ? 'No bukti tidak boleh "' + f.no_bukti.trim() + '" — kosongkan bila nota tidak bernomor' : isOps && !(Number(f.riil) > 0) ? 'Realisasi aktual wajib' : f.adaAdmin && !(Number(f.biaya) > 0 && Number(f.biaya) <= 50000) ? 'Biaya admin Rp 1 – Rp 50.000' : !bukti && !otomatis ? 'Bukti transfer wajib diunggah' : null;
     const keluarVA = (isOps ? Number(f.riil || 0) : item.nominal) + (f.adaAdmin ? Number(f.biaya || 0) : 0);
     async function submit() {
       setSaving(true);
@@ -10762,6 +10762,7 @@ try {
       disabled: true
     }))), perluSub && React.createElement(SubBHPField, {
       value: f.sub,
+      uraian: item.uraian,
       onChange: function (v) {
         setF(Object.assign({}, f, {
           sub: v
@@ -10830,11 +10831,13 @@ try {
   }
   function SubBHPField({
     value,
-    onChange
+    onChange,
+    uraian
   }) {
+    const t = tebakSubBHP(uraian);
     return React.createElement(Field, {
-      label: "Sub-kategori (baris LPDH) *",
-      hint: 'Barang habis pakai dicatat per baris LPDH. Satu nota berisi barang campuran? Pilih yang nilainya terbesar.'
+      label: "Baris LPDH (opsional)",
+      hint: 'Template LPDH tidak punya baris Barang Habis Pakai. Bila tetap, di LPDH masuk ' + (t || 'Lain-lain') + ' (dipilah dari uraian). Bisa dipindah ke barisnya sekarang.'
     }, React.createElement("select", {
       value: value,
       onChange: function (e) {
@@ -10844,7 +10847,7 @@ try {
       "aria-label": "Sub-kategori barang habis pakai"
     }, React.createElement("option", {
       value: ""
-    }, "Pilih\u2026"), SUB_BHP.map(function (x) {
+    }, "Tetap Barang Habis Pakai"), SUB_BHP.map(function (x) {
       return React.createElement("option", {
         key: x[0],
         value: x[0]
@@ -11036,11 +11039,11 @@ try {
       tanggal: trx.tanggal,
       no_bukti: trx.no_bukti || '',
       riil: String(trx.riil || ''),
-      sub: perluSub ? tebakSubBHP(trx.uraian) : ''
+      sub: ''
     });
     const [bukti, setBukti] = useState(null);
     const [saving, setSaving] = useState(false);
-    const err = !f.tanggal ? 'Tanggal wajib' : !f.no_bukti.trim() ? 'No bukti wajib' : perluSub && !f.sub ? 'Pilih sub-kategori (baris LPDH)' : isOps && !(Number(f.riil) > 0) ? isFee ? 'Biaya admin wajib' : 'Realisasi aktual wajib' : isFee && Number(f.riil) > 50000 ? 'Biaya admin maksimal Rp 50.000' : tambahFee.adaAdmin && !(Number(tambahFee.biaya) > 0 && Number(tambahFee.biaya) <= 50000) ? 'Biaya admin Rp 1 – Rp 50.000' : requestMode && !alasan.trim() ? 'Alasan perubahan wajib' : null;
+    const err = !f.tanggal ? 'Tanggal wajib' : !f.no_bukti.trim() ? 'No bukti wajib' : isOps && !(Number(f.riil) > 0) ? isFee ? 'Biaya admin wajib' : 'Realisasi aktual wajib' : isFee && Number(f.riil) > 50000 ? 'Biaya admin maksimal Rp 50.000' : tambahFee.adaAdmin && !(Number(tambahFee.biaya) > 0 && Number(tambahFee.biaya) <= 50000) ? 'Biaya admin Rp 1 – Rp 50.000' : requestMode && !alasan.trim() ? 'Alasan perubahan wajib' : null;
     async function submit() {
       setSaving(true);
       let bukti_url = '';
@@ -11066,7 +11069,7 @@ try {
         no_bukti: f.no_bukti.trim()
       };
       if (isOps) payload.riil = f.riil;
-      if (perluSub) payload.kategori = f.sub;
+      if (perluSub && f.sub) payload.kategori = f.sub;
       if (bukti_url) payload.bukti_url = bukti_url;
       let res;
       if (requestMode) {
@@ -11146,6 +11149,7 @@ try {
       }
     }))), perluSub && React.createElement(SubBHPField, {
       value: f.sub,
+      uraian: trx.uraian,
       onChange: function (v) {
         setF(Object.assign({}, f, {
           sub: v
