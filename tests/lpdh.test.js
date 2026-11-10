@@ -59,6 +59,18 @@ function dataUji(nOp) {
   const d = dataUji(35);
   const r = L.isiLPDH(wb, d, { waktu: new Date(2026, 9, 29, 5, 30) });
   const v = (s, a) => { const x = wb.getWorksheet(s).getCell(a).value; return x && x.formula ? '=' : x; };
+  {
+    const wb3 = new ExcelJS.Workbook(); await wb3.xlsx.readFile(TPL);
+    const d3 = dataUji(0); d3.tanggal = '2026-10-31'; d3.transaksi = []; d3.topups = []; d3.harian = null; d3.saldoRekening = null; d3.saldoAwal = 9760475;
+    d3.komponen = { awal: [5000000, 3000000, 1760475], topups: [], geser: [], nama: ['Bahan Baku', 'Operasional', 'Insentif'] };
+    const r3 = L.isiLPDH(wb3, d3, { waktu: new Date(2026, 9, 31, 20, 0) });
+    const w = (s, a) => { const x = wb3.getWorksheet(s).getCell(a).value; return x && x.formula ? '=' : x; };
+    ok(r3.jumlah.bb === 0 && r3.jumlah.op === 0 && w('Identitas', 'B7') === 'SPPG Cipaku 02', 'hari tanpa transaksi: LPDH tetap terbentuk, identitas terisi');
+    ok(w('Identitas', 'B18') === 'Melebihi 5 hari dalam seminggu', 'Sabtu: status hari bawaan "Melebihi 5 hari dalam seminggu" (' + w('Identitas', 'B18') + ')');
+    ok(w('D_Insentif', 'B6') === 'Tidak' && w('D_Insentif', 'B9') === 'Ya' && w('D_Insentif', 'B10') === 'Ya', 'tanpa isian PIC: syarat insentif keadaan normal');
+    ok(w('E_Saldo', 'E10') === 9760475 && r3.saldoVaOtomatis === true, 'saldo VA belum diketik → saldo akhir aplikasi (ditandai)');
+    ok(w('E_Saldo', 'B5') === 5000000 && w('E_Saldo', 'B7') === 1760475, 'saldo per komponen terisi');
+  }
   ok(v('Identitas', 'B7') === 'SPPG Cipaku 02' && v('Identitas', 'B6') === '32.04.01.0001' && v('Identitas', 'D36') === '3204000000000001', 'identitas & NIK terisi (NIK sebagai teks)');
   ok(v('Identitas', 'B18') === 'HPE' && v('Identitas', 'B19') === 3, 'status hari & HPE ke- terisi');
   ok(['F36', 'F37', 'F38'].every(a => v('Identitas', a) === 'Ya'), 'kolom "sudah tanda tangan" otomatis Ya');
