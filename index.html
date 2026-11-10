@@ -2941,6 +2941,7 @@ try {
   const LPDH_KELOMPOK = [['KS-01', 'PAUD/TK/RA'], ['KS-02', 'SD/MI Kelas 1–3'], ['KS-03', 'SD/MI Kelas 4–6'], ['KS-04', 'SMP/MTs'], ['KS-05', 'SMA/MA/SMK/SLB'], ['KS-06', 'Santri'], ['KS-07', 'Ibu Hamil'], ['KS-08', 'Ibu Menyusui'], ['KS-09', 'Anak Balita (6–59 bulan)'], ['PTK', 'Pendidik & Tenaga Kependidikan']];
   const LPDH_ALASAN = ['Kualitas tidak layak/tidak standar', 'Kemasan rusak/tumpah', 'PM tidak hadir', 'Libur/kegiatan mendadak', 'Keterlambatan pengiriman', 'Kelebihan kirim/dikembalikan', 'Lainnya'];
   const LPDH_SYARAT = [['kontaminasi', 'Terjadi kontaminasi makanan/gagal penyaluran', 'Tidak'], ['fatal', 'Terjadi kejadian fatal (keracunan)', 'Tidak'], ['suspend', 'SPPG dalam status suspend', 'Tidak'], ['verifikasi', 'Hasil verifikasi ketersediaan & mutu layanan memenuhi', 'Ya'], ['sipgn', 'Data penerima manfaat sudah diinput di SIPGN', 'Ya']];
+  const LPDH_HARI_LEBIH = 'Melebihi 5 hari dalam seminggu';
   const LPDH_MAKS_TEKS = 250;
   function lpdhTgl(s) {
     const p = String(s).split('-').map(Number);
@@ -3033,7 +3034,7 @@ try {
     set(I, 'B14', id.bank);
     set(I, 'B15', tgl);
     set(I, 'B17', info.mingguKe);
-    set(I, 'B18', opsi.statusHari || (info.akhirPekan ? '' : 'HPE'));
+    set(I, 'B18', opsi.statusHari || (info.akhirPekan ? LPDH_HARI_LEBIH : 'HPE'));
     set(I, 'B19', opsi.hpeKe !== undefined && opsi.hpeKe !== '' ? Number(opsi.hpeKe) : info.hpeKe);
     set(I, 'B36', id.pengawas_nama);
     set(I, 'D36', id.pengawas_nik);
@@ -3214,10 +3215,11 @@ try {
       set(A, 'C22', pr.sampel);
       set(A, 'C23', pr.tidak_terdistribusi);
       set(A, 'C24', pr.buffer);
-      LPDH_SYARAT.forEach(function (x, i) {
-        set(D, 'B' + (6 + i), (h.syarat || {})[x[0]]);
-      });
     }
+    LPDH_SYARAT.forEach(function (x, i) {
+      const v = h && h.syarat ? h.syarat[x[0]] : '';
+      set(D, 'B' + (6 + i), v || x[2]);
+    });
     const ins = grup.ins;
     if (ins.length) {
       const ki = ins.map(function (t) {
@@ -3286,10 +3288,16 @@ try {
       set(E, 'I' + r, t.no_kuitansi);
       set(E, 'J' + r, t.bukti_url);
     });
-    if (data.saldoRekening) {
+    const saldoAkhirApp = Math.round((data.saldoAwal || 0) + (data.topups || []).reduce(function (s, t) {
+      return s + (Number(t.jumlah) || 0);
+    }, 0) - (data.transaksi || []).reduce(function (s, t) {
+      return s + (Number(t.riil) || 0);
+    }, 0));
+    const saldoVaOtomatis = !(data.saldoRekening && data.saldoRekening.saldo_va !== '' && data.saldoRekening.saldo_va != null);
+    if (!saldoVaOtomatis) {
       set(E, 'E10', data.saldoRekening.saldo_va);
       set(E, 'E12', data.saldoRekening.penjelasan);
-    }
+    } else set(E, 'E10', saldoAkhirApp);
     if (opsi.waktu) {
       const w = opsi.waktu;
       set(I, 'B25', new Date(Date.UTC(w.getFullYear(), w.getMonth(), w.getDate())));
@@ -3315,6 +3323,7 @@ try {
       fullCalcOnLoad: true
     };
     return {
+      saldoVaOtomatis: saldoVaOtomatis,
       kelebihan: kelebihan,
       opsRingkas: opsRingkas,
       geser: kp.geser || [],
@@ -3402,7 +3411,7 @@ try {
           penjelasan: r.data.saldoRekening && r.data.saldoRekening.penjelasan || ''
         });
         setOpsi({
-          statusHari: info.akhirPekan ? '' : 'HPE',
+          statusHari: info.akhirPekan ? LPDH_HARI_LEBIH : 'HPE',
           hpeKe: String(info.hpeKe),
           nomor: lpdhNomorDefault(tanggal, r.data.dapur.kode)
         });
@@ -3897,13 +3906,13 @@ try {
     }, React.createElement(Btn, {
       full: true,
       onClick: unduh,
-      disabled: busy || !data.transaksi.length && !data.topups.length
+      disabled: busy
     }, busy ? I.spinner : I.download, " Unduh LPDH (.xlsx)")), !data.transaksi.length && !data.topups.length && React.createElement("div", {
       className: "text-xs mt-2 text-center",
       style: {
         color: COLORS.muted
       }
-    }, "Tidak ada transaksi atau top up pada tanggal ini."))), hasil && React.createElement(Card, null, React.createElement("div", {
+    }, "Tidak ada transaksi atau top up pada tanggal ini \u2014 LPDH tetap bisa diunduh (pengeluaran nihil, saldo awal = saldo akhir)."))), hasil && React.createElement(Card, null, React.createElement("div", {
       className: "font-bold mb-2",
       style: {
         color: COLORS.ink
@@ -3929,12 +3938,12 @@ try {
       style: {
         color: COLORS.ink
       }
-    }, !hasil.adaHarian && React.createElement("li", null, React.createElement("b", null, "A_PM"), " & syarat insentif: belum diisi PIC untuk tanggal ini."), React.createElement("li", null, "Kolom \"Sudah tanda tangan\" terisi ", React.createElement("b", null, "Ya"), " \u2014 tandatangani & cap lembar ", React.createElement("b", null, "J_Pengesahan"), " sebelum diunggah."), React.createElement("li", null, "Tanggal & jam unggah terisi waktu unduh (", new Date().toTimeString().slice(0, 5), ") \u2014 unggah ke SIPGN segera, atau ubah bila diunggah belakangan.")), React.createElement("div", {
+    }, !hasil.adaHarian && React.createElement("li", null, React.createElement("b", null, "A_PM"), " (porsi) belum diisi PIC untuk tanggal ini; syarat insentif memakai keadaan normal (tidak ada kontaminasi/keracunan/suspend)."), hasil.saldoVaOtomatis && React.createElement("li", null, React.createElement("b", null, "Saldo VA"), " (E_Saldo) diisi saldo aplikasi karena saldo rekening belum diketik \u2014 cocokkan dengan mutasi rekening."), React.createElement("li", null, "Kolom \"Sudah tanda tangan\" terisi ", React.createElement("b", null, "Ya"), " \u2014 tandatangani & cap lembar ", React.createElement("b", null, "J_Pengesahan"), " sebelum diunggah."), React.createElement("li", null, "Tanggal & jam unggah terisi waktu unduh (", new Date().toTimeString().slice(0, 5), ") \u2014 unggah ke SIPGN segera, atau ubah bila diunggah belakangan.")), React.createElement("div", {
       className: "text-xs mt-2",
       style: {
         color: COLORS.muted
       }
-    }, "Operasional digabung per kategori ke 15 baris tetap template. Saldo per komponen bersambung dari hari sebelumnya: top up menutup komponen yang kurang lebih dulu, sisanya sesuai porsi pengeluaran hari itu. Angka memakai nilai riil (uang keluar).")), editIdent && React.createElement(LpdhIdentForm, {
+    }, "Operasional digabung per kategori ke 15 baris tetap template. Saldo per komponen bersambung dari hari sebelumnya: top up menutup komponen yang kurang lebih dulu, sisanya sesuai porsi pengeluaran hari itu. Angka memakai nilai anggaran pengajuan.")), editIdent && React.createElement(LpdhIdentForm, {
       dapurId: dapurId,
       initial: id,
       toast: toast,

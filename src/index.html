@@ -1357,6 +1357,7 @@ const LPDH_KELOMPOK = [['KS-01', 'PAUD/TK/RA'], ['KS-02', 'SD/MI Kelas 1–3'], 
 const LPDH_ALASAN = ['Kualitas tidak layak/tidak standar', 'Kemasan rusak/tumpah', 'PM tidak hadir', 'Libur/kegiatan mendadak', 'Keterlambatan pengiriman', 'Kelebihan kirim/dikembalikan', 'Lainnya'];
 const LPDH_SYARAT = [['kontaminasi', 'Terjadi kontaminasi makanan/gagal penyaluran', 'Tidak'], ['fatal', 'Terjadi kejadian fatal (keracunan)', 'Tidak'],
   ['suspend', 'SPPG dalam status suspend', 'Tidak'], ['verifikasi', 'Hasil verifikasi ketersediaan & mutu layanan memenuhi', 'Ya'], ['sipgn', 'Data penerima manfaat sudah diinput di SIPGN', 'Ya']];
+const LPDH_HARI_LEBIH = 'Melebihi 5 hari dalam seminggu';   // status bawaan Sabtu/Minggu (bisa diganti di layar)
 const LPDH_MAKS_TEKS = 250;   // rumus COUNTIF Excel gagal untuk teks > 255 karakter
 function lpdhTgl(s) { const p = String(s).split('-').map(Number); return new Date(Date.UTC(p[0], p[1] - 1, p[2])); }
 function lpdhInfoHari(tgl) {
@@ -1429,7 +1430,7 @@ function isiLPDH(wb, data, opsi) {
   set(I, 'B12', id.yayasan); set(I, 'B13', id.no_va); set(I, 'B14', id.bank);
   set(I, 'B15', tgl);
   set(I, 'B17', info.mingguKe);
-  set(I, 'B18', opsi.statusHari || (info.akhirPekan ? '' : 'HPE'));
+  set(I, 'B18', opsi.statusHari || (info.akhirPekan ? LPDH_HARI_LEBIH : 'HPE'));
   set(I, 'B19', opsi.hpeKe !== undefined && opsi.hpeKe !== '' ? Number(opsi.hpeKe) : info.hpeKe);
   set(I, 'B36', id.pengawas_nama); set(I, 'D36', id.pengawas_nik);
   set(I, 'B37', id.kepala_nama);   set(I, 'D37', id.kepala_nip);
@@ -1496,8 +1497,9 @@ function isiLPDH(wb, data, opsi) {
       set(A, 'I' + r, x.alasan); set(A, 'K' + r, x.bnba || (ada ? 'Ya' : '')); set(A, 'L' + r, bast); set(A, 'M' + r, link); });
     const pr = h.produksi || {};
     set(A, 'C19', pr.total); set(A, 'C21', pr.organoleptik); set(A, 'C22', pr.sampel); set(A, 'C23', pr.tidak_terdistribusi); set(A, 'C24', pr.buffer);
-    LPDH_SYARAT.forEach(function(x, i) { set(D, 'B' + (6 + i), (h.syarat || {})[x[0]]); });
   }
+  // syarat insentif: isian PIC hari itu; bila belum ada → keadaan normal (nilai bawaan form PIC)
+  LPDH_SYARAT.forEach(function(x, i) { const v = h && h.syarat ? h.syarat[x[0]] : ''; set(D, 'B' + (6 + i), v || x[2]); });
 
   // Insentif Mitra/Yayasan: satu slot di template → beberapa pembayaran hari itu dijumlah
   const ins = grup.ins;
@@ -1535,7 +1537,12 @@ function isiLPDH(wb, data, opsi) {
     set(E, 'E' + r, t.bagi[0]); set(E, 'F' + r, t.bagi[1]); set(E, 'G' + r, t.bagi[2]);
     set(E, 'I' + r, t.no_kuitansi); set(E, 'J' + r, t.bukti_url); });
   // saldo VA menurut mutasi rekening (diketik dari rekening, bukan dihitung aplikasi) + penjelasan selisih
-  if (data.saldoRekening) { set(E, 'E10', data.saldoRekening.saldo_va); set(E, 'E12', data.saldoRekening.penjelasan); }
+  // belum diketik → saldo akhir menurut aplikasi (sudah direkonsiliasi dengan rekening); ditandai di hasil
+  const saldoAkhirApp = Math.round((data.saldoAwal || 0) + (data.topups || []).reduce(function(s, t) { return s + (Number(t.jumlah) || 0); }, 0)
+    - (data.transaksi || []).reduce(function(s, t) { return s + (Number(t.riil) || 0); }, 0));
+  const saldoVaOtomatis = !(data.saldoRekening && data.saldoRekening.saldo_va !== '' && data.saldoRekening.saldo_va != null);
+  if (!saldoVaOtomatis) { set(E, 'E10', data.saldoRekening.saldo_va); set(E, 'E12', data.saldoRekening.penjelasan); }
+  else set(E, 'E10', saldoAkhirApp);
   // waktu unggah = saat LPDH dibuat (opsi.waktu = Date lokal); dianggap langsung diunggah ke SIPGN
   if (opsi.waktu) {
     const w = opsi.waktu;
@@ -1555,7 +1562,7 @@ function isiLPDH(wb, data, opsi) {
     });
   });
   if (wb.calcProperties) wb.calcProperties.fullCalcOnLoad = true; else wb.calcProperties = { fullCalcOnLoad: true };
-  return { kelebihan: kelebihan, opsRingkas: opsRingkas, geser: kp.geser || [], barisBB: barisBB.length, barisRL: barisRL.length, adaHarian: !!h,
+  return { saldoVaOtomatis: saldoVaOtomatis, kelebihan: kelebihan, opsRingkas: opsRingkas, geser: kp.geser || [], barisBB: barisBB.length, barisRL: barisRL.length, adaHarian: !!h,
     jumlah: { bb: grup.bb.length, op: grup.op.length, rl: grup.rl.length, ins: grup.ins.length, topup: (kp.topups || []).length },
     total: { bb: jml(grup.bb), op: jml(grup.op), rl: jml(grup.rl), ins: jml(grup.ins) },
     namaFile: ((id.id_sppg || data.dapur.kode || data.dapur.id) + '_' + data.dapur.nama + '_LPDH_' + String(data.tanggal).replace(/-/g, '')).replace(/[\\/:*?"<>|]/g, '-') + '.xlsx' };
@@ -1609,7 +1616,7 @@ function LpdhPage({ session, scope, toast }) {
       const info = lpdhInfoHari(tanggal);
       setData(r.data);
       setSaldoRek({ saldo_va: r.data.saldoRekening && r.data.saldoRekening.saldo_va != null ? String(r.data.saldoRekening.saldo_va) : '', penjelasan: (r.data.saldoRekening && r.data.saldoRekening.penjelasan) || '' });
-      setOpsi({ statusHari: info.akhirPekan ? '' : 'HPE', hpeKe: String(info.hpeKe), nomor: lpdhNomorDefault(tanggal, r.data.dapur.kode) });
+      setOpsi({ statusHari: info.akhirPekan ? LPDH_HARI_LEBIH : 'HPE', hpeKe: String(info.hpeKe), nomor: lpdhNomorDefault(tanggal, r.data.dapur.kode) });
     });
   }
   useEffect(load, [dapurId, tanggal]);
@@ -1772,8 +1779,8 @@ function LpdhPage({ session, scope, toast }) {
         </div>}
         {kembar.length > 0 && <div className="text-sm rounded-lg p-3 mt-3" style={{ background: '#FBF3E2', color: '#7A5408' }}>
           Nomor bukti kosong/"-"/kembar: {kembar.map(function(k) { return '"' + (k || 'kosong') + '"'; }).join(', ')}. PPK mewajibkan nomor bukti unik — akan ditandai DUPLIKAT di file.</div>}
-        <div className="mt-4"><Btn full onClick={unduh} disabled={busy || !data.transaksi.length && !data.topups.length}>{busy ? I.spinner : I.download} Unduh LPDH (.xlsx)</Btn></div>
-        {!data.transaksi.length && !data.topups.length && <div className="text-xs mt-2 text-center" style={{ color: COLORS.muted }}>Tidak ada transaksi atau top up pada tanggal ini.</div>}
+        <div className="mt-4"><Btn full onClick={unduh} disabled={busy}>{busy ? I.spinner : I.download} Unduh LPDH (.xlsx)</Btn></div>
+        {!data.transaksi.length && !data.topups.length && <div className="text-xs mt-2 text-center" style={{ color: COLORS.muted }}>Tidak ada transaksi atau top up pada tanggal ini — LPDH tetap bisa diunduh (pengeluaran nihil, saldo awal = saldo akhir).</div>}
       </>}
     </Card>
 
@@ -1785,11 +1792,12 @@ function LpdhPage({ session, scope, toast }) {
           {LPDH_BAGIAN[x.bagian]} · {x.t.no_bukti ? x.t.no_bukti + ' · ' : ''}{x.t.uraian} · {fmt(x.t.riil)}</div>; })}
       </div>}
       <ul className="text-sm list-disc pl-5 space-y-1" style={{ color: COLORS.ink }}>
-        {!hasil.adaHarian && <li><b>A_PM</b> & syarat insentif: belum diisi PIC untuk tanggal ini.</li>}
+        {!hasil.adaHarian && <li><b>A_PM</b> (porsi) belum diisi PIC untuk tanggal ini; syarat insentif memakai keadaan normal (tidak ada kontaminasi/keracunan/suspend).</li>}
+        {hasil.saldoVaOtomatis && <li><b>Saldo VA</b> (E_Saldo) diisi saldo aplikasi karena saldo rekening belum diketik — cocokkan dengan mutasi rekening.</li>}
         <li>Kolom "Sudah tanda tangan" terisi <b>Ya</b> — tandatangani & cap lembar <b>J_Pengesahan</b> sebelum diunggah.</li>
         <li>Tanggal & jam unggah terisi waktu unduh ({new Date().toTimeString().slice(0, 5)}) — unggah ke SIPGN segera, atau ubah bila diunggah belakangan.</li>
       </ul>
-      <div className="text-xs mt-2" style={{ color: COLORS.muted }}>Operasional digabung per kategori ke 15 baris tetap template. Saldo per komponen bersambung dari hari sebelumnya: top up menutup komponen yang kurang lebih dulu, sisanya sesuai porsi pengeluaran hari itu. Angka memakai nilai riil (uang keluar).</div>
+      <div className="text-xs mt-2" style={{ color: COLORS.muted }}>Operasional digabung per kategori ke 15 baris tetap template. Saldo per komponen bersambung dari hari sebelumnya: top up menutup komponen yang kurang lebih dulu, sisanya sesuai porsi pengeluaran hari itu. Angka memakai nilai anggaran pengajuan.</div>
     </Card>}
 
     {editIdent && <LpdhIdentForm dapurId={dapurId} initial={id} toast={toast} onClose={function() { setEditIdent(false); }} onSaved={load}/>}
