@@ -1723,6 +1723,32 @@ function roRingkas(items, ctx, setelan, hariSet) {
   const takNilai = tak.reduce(function(s, x) { return s + x.nominal + roFee(x, pmap, ctx.bankVA); }, 0);
   return { hari: per, paguTot: paguTot, rencanaTot: rencanaTot, lebih: lebih, nLebih: nLebih, takMuat: tak.length, takNilai: takNilai, kurang: lebih + takNilai };
 }
+// Label pendek kolom tabel (pos operasional)
+const RO_LABEL = { 'Gaji/honor relawan pekerja SPPG': 'Honor relawan', 'Insentif Guru/PIC Sekolah': 'PIC sekolah', 'Insentif Kader Posyandu': 'Kader posyandu',
+  'Asuransi kecelakaan kerja (BPJS) relawan': 'BPJS relawan', 'BBM Operasional Kendaraan': 'BBM', 'Air Galon Masak': 'Galon masak', 'Air Bersih (Sumur)': 'Air sumur',
+  'Internet/Telepon': 'Internet', 'Barang Habis Pakai': 'BHP', 'Alat Kebersihan': 'Kebersihan', 'Jasa General Cleaning': 'Cleaning',
+  'Kecelakaan/Musibah/Duka': 'Musibah', 'Perlengkapan Dapur': 'Perlengk. dapur', 'Biaya Rapat Koordinasi': 'Rapat', 'Biaya Admin Bank': 'Admin bank' };
+function roLabel(k) { return RO_LABEL[k] || k; }
+// Tabel matriks: baris = hari, kolom = pos operasional (rutin dulu, lalu nilai terbesar)
+function roMatriks(items, ctx, setelan, hariSet) {
+  const pmap = {}; (ctx.penerima || []).forEach(function(p) { pmap[p.id] = p; });
+  const tot = {}, tak = {}, takItems = {}, sel = {}, fee = {};
+  items.forEach(function(x) {
+    tot[x.kategori] = (tot[x.kategori] || 0) + x.nominal;
+    const f = roFee(x, pmap, ctx.bankVA);
+    if (!x.tanggal) { tak[x.kategori] = (tak[x.kategori] || 0) + x.nominal + f; (takItems[x.kategori] = takItems[x.kategori] || []).push(x); return; }
+    const r = sel[x.tanggal] = sel[x.tanggal] || {}, c = r[x.kategori] = r[x.kategori] || { nominal: 0, n: 0, aju: 0, items: [] };
+    c.nominal += x.nominal; c.n++; if (x.pengajuan_id) c.aju++; c.items.push(x);
+    fee[x.tanggal] = (fee[x.tanggal] || 0) + f;
+  });
+  const kolom = Object.keys(tot).sort(function(a, b) {
+    const ra = RO_RUTIN.indexOf(a), rb = RO_RUTIN.indexOf(b);
+    if (ra >= 0 || rb >= 0) return (ra < 0 ? 99 : ra) - (rb < 0 ? 99 : rb);
+    return tot[b] - tot[a];
+  });
+  const terjadwal = {}; kolom.forEach(function(k) { terjadwal[k] = 0; Object.keys(sel).forEach(function(t) { if (sel[t][k]) terjadwal[k] += sel[t][k].nominal; }); });
+  return { batas: (setelan && setelan.batas) || 95, kolom: kolom, sel: sel, fee: fee, tak: tak, takItems: takItems, terjadwal: terjadwal, ring: roRingkas(items, ctx, setelan, hariSet) };
+}
 // </RENCANA-OPS>
 function RencanaOpsPage({ session, scope, toast }) {
   const role = session.user.role;
@@ -1739,6 +1765,8 @@ function RencanaOpsPage({ session, scope, toast }) {
   const [konfirm, setKonfirm] = useState(false);
   const [catatan, setCatatan] = useState('');
   const [ajukanTgl, setAjukanTgl] = useState('');
+  const [tampil, setTampil] = useState('tabel');
+  const [pilihSel, setPilihSel] = useState(null);
   const seedRef = useRef(0);
   const [kategori, setKategori] = useState([]);
   useEffect(function() { api('getKategori').then(function(r) { if (r.ok) setKategori(r.data['Operasional'] || []); }); }, []);
@@ -1837,13 +1865,26 @@ function RencanaOpsPage({ session, scope, toast }) {
       </div>}
     </Card>
 
-    {tak.length > 0 && <Card>
+    <div className="flex gap-2">
+      {[['tabel', 'Tabel matriks'], ['hari', 'Per hari']].map(function(t) { return <button key={t[0]} type="button" onClick={function() { setTampil(t[0]); }}
+        className="flex-1 rounded-lg py-2 text-sm font-semibold" style={{ background: tampil === t[0] ? COLORS.green : COLORS.surface, color: tampil === t[0] ? '#fff' : COLORS.ink, border: '1px solid ' + COLORS.line }}>{t[1]}</button>; })}
+    </div>
+
+    {tampil === 'tabel' && <RencanaMatriks m={roMatriks(items, ctx, setelan, hariSet)} bisaUbah={bisaUbah} ajukanTgl={ajukanTgl}
+      onSel={function(t, k, c) {
+        if (c && c.items.length === 1) setEdit(Object.assign({}, c.items[0]));
+        else if (c && c.items.length > 1) setPilihSel({ tanggal: t, kategori: k, items: c.items });
+        else if (bisaUbah && t) setEdit({ id: 'RO' + Date.now().toString(36), tanggal: t, kategori: k, uraian: roLabel(k), nominal: 0, penerima_id: '', baru: true });
+      }}
+      onAjukan={ajukan} terkunci={terkunci}/>}
+
+    {tampil === 'hari' && tak.length > 0 && <Card>
       <div className="font-bold text-sm mb-1" style={{ color: COLORS.danger }}>Tidak muat / belum dijadwalkan · {fmt(ring.takNilai)}</div>
       <div className="text-xs mb-1" style={{ color: COLORS.muted }}>Tidak ada hari dengan sisa pagu cukup. Ketuk untuk mengubah nominal atau memindah ke hari tertentu.</div>
       {tak.map(function(x) { return <Baris key={x.id} x={x}/>; })}
     </Card>}
 
-    {ring.hari.map(function(h) {
+    {tampil === 'hari' && ring.hari.map(function(h) {
       const baris = items.filter(function(x) { return x.tanggal === h.tanggal; });
       const lebih = h.pakai > h.pagu, warn = !lebih && h.pakai > h.batas;
       const pct = h.pagu ? Math.min(100, Math.round(h.pakai / h.pagu * 100)) : (h.pakai ? 100 : 0);
@@ -1871,12 +1912,80 @@ function RencanaOpsPage({ session, scope, toast }) {
       </Card>;
     })}
 
+    {pilihSel && <Modal title={roLabel(pilihSel.kategori) + ' · ' + (pilihSel.tanggal ? fmtDate(pilihSel.tanggal) : 'tidak muat')} onClose={function() { setPilihSel(null); }}>
+      {pilihSel.items.map(function(x) { return <div key={x.id} onClick={function() { setPilihSel(null); setEdit(Object.assign({}, x)); }} style={{ cursor: 'pointer' }}><Baris x={x}/></div>; })}
+      {bisaUbah && <div className="mt-3"><Btn size="sm" kind="ghost" onClick={function() { const p = pilihSel; setPilihSel(null);
+        setEdit({ id: 'RO' + Date.now().toString(36), tanggal: p.tanggal, kategori: p.kategori, uraian: roLabel(p.kategori), nominal: 0, penerima_id: '', baru: true }); }}>{I.plus} Tambah baris {roLabel(pilihSel.kategori)}</Btn></div>}
+    </Modal>}
     {konfirm && <ConfirmModal title="Usulkan ulang?" message="Baris yang belum diajukan akan diganti usulan baru (susunan hari berbeda). Baris yang sudah diajukan tetap." confirmLabel="Usulkan ulang" onConfirm={usulkan} onClose={function() { setKonfirm(false); }}/>}
     {edit && <RencanaItemModal x={edit} ctx={ctx} hari={ring.hari} kategori={kategori} bisaUbah={bisaUbah && !terkunci(edit)} pmap={pmap}
       onClose={function() { setEdit(null); }}
       onSave={function(v) { ubah(function(a) { return v.baru ? a.concat([Object.assign({}, v, { baru: undefined })]) : a.map(function(x) { return x.id === v.id ? v : x; }); }); setEdit(null); }}
       onDelete={function() { ubah(function(a) { return a.filter(function(x) { return x.id !== edit.id; }); }); setEdit(null); }}/>}
   </div>;
+}
+function RencanaMatriks({ m, bisaUbah, ajukanTgl, onSel, onAjukan, terkunci }) {
+  const r = m.ring, kol = m.kolom;
+  const th = { padding: '6px 8px', fontSize: 11, fontWeight: 700, color: COLORS.muted, textAlign: 'right', whiteSpace: 'nowrap', background: COLORS.paper, borderBottom: '1px solid ' + COLORS.line };
+  const td = { padding: '6px 8px', fontSize: 12, textAlign: 'right', whiteSpace: 'nowrap', borderBottom: '1px solid ' + COLORS.line, fontVariantNumeric: 'tabular-nums' };
+  const kiri = { position: 'sticky', left: 0, zIndex: 1, textAlign: 'left', background: COLORS.surface, borderRight: '1px solid ' + COLORS.line };
+  const singkat = function(n) { return n >= 1e6 ? (n / 1e6).toFixed(n >= 1e7 ? 1 : 2).replace('.', ',') + ' jt' : n >= 1e3 ? Math.round(n / 1e3) + ' rb' : String(n || ''); };
+  if (!kol.length) return <Card><div className="text-sm" style={{ color: COLORS.muted }}>Belum ada rencana. Tekan <b>Usulkan otomatis</b> atau <b>Tambah kebutuhan</b>.</div></Card>;
+  const totTerjadwal = kol.reduce(function(s, k) { return s + m.terjadwal[k]; }, 0);
+  const totTak = kol.reduce(function(s, k) { return s + (m.tak[k] || 0); }, 0);
+  const totFee = Object.keys(m.fee).reduce(function(s, t) { return s + m.fee[t]; }, 0);
+  return <Card pad={false}>
+    <div className="px-4 pt-3 pb-2 text-xs" style={{ color: COLORS.muted }}>Geser ke samping untuk melihat semua pos. Ketuk sel untuk mengubah/menambah; ketuk sel merah "Tidak muat" untuk melihat barangnya.
+      Usulan otomatis hanya mengisi sampai {m.batas}% pagu (cadangan bila PM turun); sisanya boleh diisi manual.
+      <span className="inline-flex items-center gap-1 ml-2"><span style={{ width: 10, height: 10, background: '#DCEFE3', display: 'inline-block', borderRadius: 2 }}/> sudah diajukan</span>
+      <span className="inline-flex items-center gap-1 ml-2"><span style={{ width: 10, height: 10, background: '#F8E9E5', display: 'inline-block', borderRadius: 2 }}/> melebihi pagu</span></div>
+    <div style={{ overflowX: 'auto' }}>
+      <table style={{ borderCollapse: 'separate', borderSpacing: 0, minWidth: '100%' }} aria-label="Matriks rencana operasional">
+        <thead><tr>
+          <th style={Object.assign({}, th, kiri, { background: COLORS.paper, zIndex: 2 })}>Hari</th>
+          {kol.map(function(k) { return <th key={k} style={th} title={k}>{roLabel(k)}</th>; })}
+          <th style={th}>Biaya transfer</th><th style={th}>Total</th><th style={th}>Pagu</th><th style={th}>Sisa pagu</th>{bisaUbah && <th style={th}></th>}
+        </tr></thead>
+        <tbody>
+          {r.hari.map(function(h) {
+            const row = m.sel[h.tanggal] || {}, lebih = h.pakai > h.pagu, sisa = h.pagu - h.pakai;
+            const belum = kol.reduce(function(n, k) { return n + (row[k] ? row[k].n - row[k].aju : 0); }, 0);
+            const bg = lebih ? '#F8E9E5' : h.libur ? COLORS.paper : COLORS.surface;
+            return <tr key={h.tanggal}>
+              <td style={Object.assign({}, td, kiri, { background: bg, fontWeight: 600, color: COLORS.ink })}>{h.nama} {h.tanggal.slice(8)}/{h.tanggal.slice(5, 7)}
+                <div style={{ fontSize: 10, fontWeight: 400, color: COLORS.muted }}>{h.libur ? 'bukan HPE' : 'PM ' + fmtNoRp(h.pm)}</div></td>
+              {kol.map(function(k) { const c = row[k];
+                return <td key={k} onClick={function() { if (!h.libur || c) onSel(h.tanggal, k, c); }} style={Object.assign({}, td, { cursor: (!h.libur && bisaUbah) || c ? 'pointer' : 'default',
+                  background: c && c.aju === c.n ? '#DCEFE3' : bg, color: c ? COLORS.ink : COLORS.line })} aria-label={roLabel(k) + ' ' + h.tanggal}>
+                  {c ? singkat(c.nominal) + (c.n > 1 ? ' ×' + c.n : '') : (h.libur ? '' : '·')}</td>; })}
+              <td style={Object.assign({}, td, { background: bg, color: COLORS.muted })}>{m.fee[h.tanggal] ? singkat(m.fee[h.tanggal]) : ''}</td>
+              <td style={Object.assign({}, td, { background: bg, fontWeight: 700 })}>{h.pakai ? singkat(h.pakai) : ''}</td>
+              <td style={Object.assign({}, td, { background: bg, color: COLORS.muted })}>{h.pagu ? singkat(h.pagu) : '0'}</td>
+              <td style={Object.assign({}, td, { background: bg, fontWeight: 700, color: lebih ? COLORS.danger : COLORS.green })}>{h.libur && !h.pakai ? '' : (lebih ? '−' + singkat(-sisa) : singkat(sisa))}</td>
+              {bisaUbah && <td style={Object.assign({}, td, { background: bg })}>{belum > 0 && <button type="button" disabled={lebih || !!ajukanTgl} onClick={function() { onAjukan(h.tanggal); }}
+                className="rounded-md px-2 py-1 text-[11px] font-semibold" style={{ background: lebih ? COLORS.muted : COLORS.green, color: '#fff', opacity: lebih ? 0.5 : 1 }}
+                title={lebih ? 'Melebihi pagu — kurangi dulu' : 'Ajukan ' + belum + ' baris'}>{ajukanTgl === h.tanggal ? '…' : 'Ajukan'}</button>}</td>}
+            </tr>;
+          })}
+        </tbody>
+        <tfoot>
+          <tr><td style={Object.assign({}, td, kiri, { background: COLORS.paper, fontWeight: 700 })}>Terjadwal</td>
+            {kol.map(function(k) { return <td key={k} style={Object.assign({}, td, { background: COLORS.paper, fontWeight: 700 })}>{singkat(m.terjadwal[k])}</td>; })}
+            <td style={Object.assign({}, td, { background: COLORS.paper })}>{singkat(totFee)}</td><td style={Object.assign({}, td, { background: COLORS.paper, fontWeight: 700 })}>{singkat(r.rencanaTot)}</td>
+            <td style={Object.assign({}, td, { background: COLORS.paper })}>{singkat(r.paguTot)}</td>
+            <td style={Object.assign({}, td, { background: COLORS.paper, fontWeight: 700, color: r.lebih ? COLORS.danger : COLORS.green })}>{r.lebih ? '−' + singkat(r.lebih) : singkat(r.paguTot - r.rencanaTot)}</td>{bisaUbah && <td style={Object.assign({}, td, { background: COLORS.paper })}/>}</tr>
+          <tr><td style={Object.assign({}, td, kiri, { background: '#FBF1EE', fontWeight: 700, color: COLORS.danger })}>Tidak muat</td>
+            {kol.map(function(k) { return <td key={k} onClick={function() { const its = m.takItems[k]; if (its) onSel('', k, { items: its, n: its.length, aju: 0 }); }} style={Object.assign({}, td, { background: '#FBF1EE', color: COLORS.danger, fontWeight: 700, cursor: m.takItems[k] ? 'pointer' : 'default' })}>{m.tak[k] ? singkat(m.tak[k]) : ''}</td>; })}
+            <td style={Object.assign({}, td, { background: '#FBF1EE' })}/><td style={Object.assign({}, td, { background: '#FBF1EE', color: COLORS.danger, fontWeight: 700 })}>{totTak ? singkat(totTak) : '0'}</td>
+            <td style={Object.assign({}, td, { background: '#FBF1EE' })}/><td style={Object.assign({}, td, { background: '#FBF1EE' })}/>{bisaUbah && <td style={Object.assign({}, td, { background: '#FBF1EE' })}/>}</tr>
+          <tr><td style={Object.assign({}, td, kiri, { background: COLORS.paper, fontWeight: 700 })}>Kebutuhan</td>
+            {kol.map(function(k) { return <td key={k} style={Object.assign({}, td, { background: COLORS.paper, fontWeight: 700 })}>{singkat(m.terjadwal[k] + (m.tak[k] || 0))}</td>; })}
+            <td style={Object.assign({}, td, { background: COLORS.paper })}/><td style={Object.assign({}, td, { background: COLORS.paper, fontWeight: 700 })}>{singkat(totTerjadwal + totTak + totFee)}</td>
+            <td style={Object.assign({}, td, { background: COLORS.paper })}/><td style={Object.assign({}, td, { background: COLORS.paper, fontWeight: 700, color: r.kurang ? COLORS.danger : COLORS.green })}>{r.kurang ? 'kurang ' + singkat(r.kurang) : 'cukup'}</td>{bisaUbah && <td style={Object.assign({}, td, { background: COLORS.paper })}/>}</tr>
+        </tfoot>
+      </table>
+    </div>
+  </Card>;
 }
 function RencanaItemModal({ x, ctx, hari, kategori, bisaUbah, pmap, onClose, onSave, onDelete }) {
   const [f, setF] = useState(x);

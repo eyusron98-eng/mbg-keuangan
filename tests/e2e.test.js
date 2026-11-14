@@ -348,8 +348,16 @@ async function isiBahanBaku(page, uraian, volume, harga) {
     await page.click('text=Usulkan otomatis');
     await page.waitForSelector('text=Usulan dibuat');
     await page.waitForSelector('text=Semua kebutuhan muat di pagu harian.');
-    assert(await page.isVisible('text=bagian 1/2 >> nth=0'), 'gas besar tidak dipecah');
+    await page.waitForSelector('[aria-label="Matriks rencana operasional"]');
+    assert(await page.isVisible('th:has-text("Honor relawan")') && await page.isVisible('th:has-text("Gas")') && await page.isVisible('td:has-text("Tidak muat")'), 'kolom pos / baris ringkasan matriks tidak tampil');
     if (process.env.SHOT) { await page.waitForTimeout(600); await page.screenshot({ path: process.env.SHOT + '/rencana.png', fullPage: true }); }
+    await page.click('[aria-label="Gas 2026-11-09"]');
+    await page.waitForSelector('text=Tambah kebutuhan >> nth=1');
+    assert((await page.inputValue('[aria-label="Tanggal rencana"]')) === '2026-11-09', 'sel kosong tidak membuka baris baru di tanggal itu');
+    await page.click('[aria-label="Tutup"]');
+    await page.click('button:has-text("Per hari")');
+    assert(await page.isVisible('text=bagian 1/2 >> nth=0'), 'gas besar tidak dipecah');
+    await page.click('button:has-text("Tabel matriks")');
     await page.click('text=Simpan perubahan');
     await page.waitForSelector('text=Rencana tersimpan');
     const L = globalThis.__ro;

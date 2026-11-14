@@ -2,7 +2,7 @@
 const fs = require('fs'), path = require('path');
 const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'index.html'), 'utf8');
 const blok = src.slice(src.indexOf('// <RENCANA-OPS>'), src.indexOf('// </RENCANA-OPS>'));
-const R = new Function(blok + '\nreturn { roHari, roPagu, roBatas, roFee, roKodeBank, roBersih, roUsulkan, roRingkas };')();
+const R = new Function(blok + '\nreturn { roHari, roPagu, roBatas, roFee, roKodeBank, roBersih, roUsulkan, roRingkas, roMatriks, roLabel };')();
 let fails = 0;
 const ok = (c, m) => { console.log((c ? 'PASS ' : 'FAIL ') + m); if (!c) fails++; };
 
@@ -50,6 +50,11 @@ const sempit = Object.assign({}, ctx, { periode: Object.assign({}, periode, { pe
 const u5 = R.roUsulkan(sempit, set, {}, 1), s5 = R.roRingkas(u5.items, sempit, set, {});
 ok(s5.takMuat > 0 && s5.takNilai > 0 && s5.hari.every(h => h.pakai <= h.pagu || u5.items.filter(x => x.tanggal === h.tanggal && !x.rutin).length === 0), 'pagu tidak cukup → sisa kebutuhan "tidak muat" (' + s5.takNilai + '), tidak dipaksakan ke hari mana pun');
 ok(!u5.items.some(x => x.bagian && x.nominal < 250000), 'belanja kecil tidak dipecah');
+{ const m = R.roMatriks(u5.items, sempit, set, {});
+  ok(m.kolom[0] === 'Gaji/honor relawan pekerja SPPG' && m.kolom[1] === 'Insentif Guru/PIC Sekolah', 'kolom matriks: pos rutin di depan (' + m.kolom.map(R.roLabel).join(', ') + ')');
+  const takTot = Object.keys(m.tak).reduce((a, k) => a + m.tak[k], 0);
+  ok(takTot === s5.takNilai && m.kolom.every(k => m.terjadwal[k] + (m.tak[k] ? m.takItems[k].reduce((a, x) => a + x.nominal, 0) : 0) === u5.items.filter(x => x.kategori === k).reduce((a, x) => a + x.nominal, 0)), 'baris Terjadwal + Tidak muat per pos = total kebutuhan pos');
+  ok(m.sel['2026-11-09']['Gaji/honor relawan pekerja SPPG'].nominal === 1500000 && !m.sel['2026-11-14'], 'sel hari × pos berisi nominal; Sabtu kosong'); }
 const kosong = R.roUsulkan(Object.assign({}, ctx, { riwayat: null }), set, {}, 1);
 ok(kosong.items.length === 0 && /manual/.test(kosong.catatan), 'tanpa riwayat: tidak ada usulan, diminta isi manual');
 
