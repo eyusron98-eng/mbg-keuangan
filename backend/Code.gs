@@ -57,7 +57,7 @@ const SHEETS = {
   TRANSAKSI: 'Transaksi', LOG: 'Log',
   SESI: 'Sesi', PENERIMA: 'Penerima',
   PENGAJUAN: 'Pengajuan', PITEM: 'PengajuanItem',
-  PERUBAHAN: 'PerubahanTx', LPDH: 'IdentitasLPDH', LPDH_HARIAN: 'LPDHHarian', RELAWAN: 'RelawanBayar', INSENTIF: 'InsentifBayar', LPDH_SALDO: 'LPDHSaldo',
+  PERUBAHAN: 'PerubahanTx', LPDH: 'IdentitasLPDH', LPDH_HARIAN: 'LPDHHarian', RELAWAN: 'RelawanBayar', INSENTIF: 'InsentifBayar', LPDH_SALDO: 'LPDHSaldo', RENCANA: 'RencanaOps',
 };
 
 const JENIS_KATEGORI = {
@@ -135,7 +135,7 @@ function handleRequest(e, method) {
     }
     let result;
     switch (action) {
-      case 'ping':              result = { ok: true, time: new Date().toISOString(), version: 'v6-ba-sec16' }; break;
+      case 'ping':              result = { ok: true, time: new Date().toISOString(), version: 'v6-ba-sec17' }; break;
       case 'login':             result = login(params); break;
       case 'getPeriodeList':    result = getPeriodeList(params); break;
       case 'getActivePeriode':  result = getActivePeriode(params); break;
@@ -188,6 +188,9 @@ function handleRequest(e, method) {
       case 'getIdentitasLPDH':  result = getIdentitasLPDH(params); break;
       case 'saveIdentitasLPDH': result = saveIdentitasLPDH(params); break;
       case 'getDataLPDH':       result = getDataLPDH(params); break;
+      case 'getRencanaOps':     result = getRencanaOps(params); break;
+      case 'saveRencanaOps':    result = saveRencanaOps(params); break;
+      case 'getPaguOps':        result = getPaguOps(params); break;
       case 'getHarianLPDH':     result = getHarianLPDH(params); break;
       case 'saveHarianLPDH':    result = saveHarianLPDH(params); break;
       case 'getRelawanBayar':   result = getRelawanBayar(params); break;
@@ -2867,4 +2870,140 @@ function getBeritaAcara(p) {
     akuntan: akuntanRow ? { nama: akuntanRow[3], ttd: readTtdDataUrl(akuntanRow[0]) } : null,
     kode_verifikasi: kodeVerifikasi,
   } };
+}
+
+// ============================================================
+//  RENCANA OPERASIONAL PER PERIODE
+//  Pagu operasional LPDH = Rp 3.000 × PM × indeks kemahalan, per HARI (mutlak).
+//  Akuntan menyusun rencana belanja operasional per hari; tiap hari bisa langsung diajukan.
+//  Data rencana (JSON) disimpan per dapur per periode di sheet RencanaOps.
+// ============================================================
+const PAGU_OPS_PER_PM = 3000;
+function rencanaSheet() { return sheetOtomatis(SHEETS.RENCANA, ['dapur_id', 'periode_id', 'data_json', 'updated_at', 'updated_by']); }
+function bacaRencana(dapurId, periodeId) {
+  const d = rencanaSheet().getDataRange().getValues();
+  for (let i = 1; i < d.length; i++) if (d[i][0] === dapurId && d[i][1] === periodeId) return { _row: i + 1, data: bacaJson(d[i][2]) };
+  return null;
+}
+function rencanaDapur(me, dapur) {
+  if (me.role === 'akuntan' || me.role === 'pic') return me.dapur || null;
+  if (me.role === 'admin' || me.role === 'yayasan') return String(dapur || '') || null;
+  return null;
+}
+function periodeRencana(dapurId, periodeId) {
+  const all = readAllPeriode(dapurId);
+  return periodeId ? all.find(function(r) { return r.id === periodeId; }) : all.find(function(r) { return r.status === 'AKTIF'; });
+}
+// Operasional yang sudah terealisasi per tanggal (nilai LPDH = anggaran pengajuan)
+function opsPerTanggal(dapurId, periodeId) {
+  const out = {};
+  readAllTransaksi([dapurId], periodeId).forEach(function(t) {
+    if (t.jenis !== 'Operasional' || t.sumber === 'Petty Cash') return;
+    out[t.tanggal] = (out[t.tanggal] || 0) + nilaiLPDH(t);
+  });
+  return out;
+}
+function getRencanaOps(p) {
+  const me = authUser(p);
+  if (!me) return { ok: false, error: SESI_ERR };
+  const dapurId = rencanaDapur(me, p.dapur);
+  if (!dapurId) return { ok: false, error: 'Pilih dapur' };
+  const per = periodeRencana(dapurId, p.periode_id);
+  if (!per) return { ok: false, error: 'Tidak ada periode aktif untuk dapur ini' };
+  const items = {}; readAllItems().forEach(function(i) { items[i.id] = i; });
+  // riwayat: periode sebelumnya yang punya transaksi operasional → dasar usulan
+  const semuaPer = readAllPeriode(dapurId).filter(function(r) { return r.tanggal_mulai < per.tanggal_mulai; })
+    .sort(function(a, b) { return a.tanggal_mulai < b.tanggal_mulai ? 1 : -1; });
+  const semuaTx = readAllTransaksi([dapurId]);
+  let riwayat = null;
+  for (let k = 0; k < semuaPer.length && !riwayat; k++) {
+    const pr = semuaPer[k];
+    const tx = semuaTx.filter(function(t) { return t.periode_id === pr.id; });
+    const ops = tx.filter(function(t) { return t.jenis === 'Operasional' && t.kategori !== 'Biaya Admin Bank' && !isFeeLink(t.pengajuan_item_id); });
+    if (!ops.length) continue;
+    const hariBB = {}; tx.forEach(function(t) { if (t.jenis === 'Bahan Baku') hariBB[t.tanggal] = 1; });
+    riwayat = { periode_no: pr.periode_no, hari: Math.max(1, Object.keys(hariBB).length),
+      tx: ops.map(function(t) { const it = items[String(t.pengajuan_item_id)]; return { tanggal: t.tanggal, kategori: t.kategori, uraian: String(t.uraian || ''),
+        nominal: nilaiLPDH(t), penerima_id: it ? it.penerima_id : '' }; }) };
+  }
+  const ada = bacaRencana(dapurId, per.id);
+  const rencana = ada ? ada.data : null;
+  // status pengajuan yang dibuat dari rencana
+  const status = {};
+  if (rencana && rencana.items) {
+    const pids = {}; rencana.items.forEach(function(x) { if (x.pengajuan_id) pids[x.pengajuan_id] = 1; });
+    Object.keys(items).forEach(function(k) { const it = items[k]; if (pids[it.pengajuan_id]) (status[it.pengajuan_id] = status[it.pengajuan_id] || []).push(it.status); });
+  }
+  const ident = readIdentitasLPDH(dapurId) || {};
+  return { ok: true, data: {
+    dapur: dapurId,
+    periode: { id: per.id, periode_no: per.periode_no, tanggal_mulai: per.tanggal_mulai, tanggal_akhir: per.tanggal_akhir, penerima: per.penerima, status: per.status },
+    rencana: rencana, riwayat: riwayat, status: status, bankVA: String(ident.bank || ''),
+    aktual: opsPerTanggal(dapurId, per.id),
+    penerima: readPenerima().filter(function(r) { return r.aktif; }).map(function(r) { return { id: r.id, nama: r.nama, bank: r.bank, no_rek: r.no_rek }; })
+      .sort(function(a, b) { return a.nama.localeCompare(b.nama); }),
+    bisaUbah: me.role === 'akuntan' || me.role === 'admin' } };
+}
+function saveRencanaOps(p) {
+  const me = authUser(p);
+  if (!me) return { ok: false, error: SESI_ERR };
+  if (me.role !== 'akuntan' && me.role !== 'admin') return { ok: false, error: 'Hanya akuntan atau admin' };
+  const dapurId = rencanaDapur(me, p.dapur);
+  if (!dapurId) return { ok: false, error: 'Pilih dapur' };
+  const per = periodeRencana(dapurId, p.periode_id);
+  if (!per) return { ok: false, error: 'Periode tidak ditemukan' };
+  if (per.status !== 'AKTIF') return { ok: false, error: 'Periode sudah ditutup' };
+  let d = p.data;
+  if (typeof d === 'string') d = bacaJson(d);
+  if (!d || typeof d !== 'object') return { ok: false, error: 'Data rencana tidak valid' };
+  const items = Array.isArray(d.items) ? d.items : [];
+  if (items.length > 400) return { ok: false, error: 'Rencana maksimal 400 baris' };
+  const kat = JENIS_KATEGORI['Operasional'];
+  const bersih = { versi: (Number(d.versi) || 0) + 1, setelan: { indeks: Math.min(300, Math.max(50, Number((d.setelan || {}).indeks) || 100)), batas: Math.min(100, Math.max(50, Number((d.setelan || {}).batas) || 95)) },
+    hari: {}, items: [] };
+  Object.keys(d.hari || {}).forEach(function(t) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(t) || t < per.tanggal_mulai || t > per.tanggal_akhir) return;
+    const h = d.hari[t] || {}; bersih.hari[t] = { pm: Math.max(0, Math.round(Number(h.pm) || 0)), libur: !!h.libur };
+  });
+  for (let i = 0; i < items.length; i++) {
+    const x = items[i] || {};
+    const tgl = String(x.tanggal || '');
+    if (tgl && (!/^\d{4}-\d{2}-\d{2}$/.test(tgl) || tgl < per.tanggal_mulai || tgl > per.tanggal_akhir)) return { ok: false, error: 'Baris ' + (i + 1) + ': tanggal di luar periode' };
+    if (kat.indexOf(x.kategori) < 0) return { ok: false, error: 'Baris ' + (i + 1) + ': kategori operasional tidak valid' };
+    const nom = Math.round(Number(x.nominal) || 0);
+    if (!(nom > 0)) return { ok: false, error: 'Baris ' + (i + 1) + ': nominal wajib > 0' };
+    bersih.items.push({ id: String(x.id || idUnik('RO')).substring(0, 40), tanggal: tgl, kategori: x.kategori, uraian: String(x.uraian || '').trim().substring(0, 200),
+      nominal: nom, penerima_id: String(x.penerima_id || '').substring(0, 40), rutin: !!x.rutin, bagian: String(x.bagian || '').substring(0, 10),
+      pengajuan_id: String(x.pengajuan_id || '').substring(0, 60), nomor: String(x.nomor || '').substring(0, 60) });
+  }
+  const json = JSON.stringify(bersih);
+  if (json.length > 45000) return { ok: false, error: 'Rencana terlalu besar — kurangi jumlah baris' };
+  return withLock(function() {
+    const ada = bacaRencana(dapurId, per.id);
+    const versiAda = ada && ada.data ? Number(ada.data.versi) || 0 : 0;
+    if (versiAda !== (Number(d.versi) || 0)) return { ok: false, error: 'Rencana sudah diubah di perangkat lain. Muat ulang halaman, lalu ulangi perubahan Anda.' };
+    const sh = rencanaSheet();
+    if (ada) sh.getRange(ada._row, 3, 1, 3).setValues([[json, new Date(), me.id]]);
+    else sh.appendRow([dapurId, per.id, json, new Date(), me.id]);
+    logActivity(me.id, 'saveRencanaOps', dapurId + ' ' + per.id + ' v' + bersih.versi + ' (' + bersih.items.length + ' baris)');
+    return { ok: true, data: { versi: bersih.versi } };
+  });
+}
+// Pagu operasional hari itu & yang sudah terpakai (untuk peringatan saat realisasi)
+function getPaguOps(p) {
+  const me = authUser(p);
+  if (!me) return { ok: false, error: SESI_ERR };
+  const dapurId = rencanaDapur(me, p.dapur);
+  if (!dapurId) return { ok: false, error: 'Pilih dapur' };
+  const tgl = String(p.tanggal || '').substring(0, 10);
+  const per = readAllPeriode(dapurId).find(function(r) { return tgl >= r.tanggal_mulai && tgl <= r.tanggal_akhir; });
+  if (!per) return { ok: true, data: null };
+  const r = bacaRencana(dapurId, per.id), d = r && r.data ? r.data : {};
+  const h = (d.hari || {})[tgl] || {}, set = d.setelan || {};
+  const pm = h.pm > 0 ? h.pm : per.penerima;
+  const indeks = Number(set.indeks) || 100;
+  const dow = new Date(tgl + 'T00:00:00Z').getUTCDay();
+  const libur = h.libur !== undefined ? !!h.libur : (dow === 0 || dow === 6);   // Sabtu/Minggu bukan HPE kecuali diatur lain
+  return { ok: true, data: { tanggal: tgl, pm: pm, indeks: indeks, libur: libur, pagu: libur ? 0 : Math.round(PAGU_OPS_PER_PM * pm * indeks / 100),
+    terpakai: opsPerTanggal(dapurId, per.id)[tgl] || 0 } };
 }
