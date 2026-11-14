@@ -85,7 +85,7 @@ const ok = (c, m) => { console.log((c ? 'PASS ' : 'FAIL ') + m); if (!c) fails++
     ['U3', 'off', 'xxxxxxx', 'Nonaktif', 'pic', 'D001', 'TIDAK'],
   ]);
   const B = env.__book;
-  ok(call(env, 'GET', { action: 'ping' }).version === 'v6-ba-sec16', 'ping menampilkan versi baru');
+  ok(call(env, 'GET', { action: 'ping' }).version === 'v6-ba-sec17', 'ping menampilkan versi baru');
 
   // 1. login lama (teks biasa) berhasil via POST dan password otomatis di-hash
   let r = call(env, 'POST', { action: 'login', username: 'AKUN1', password: 'RahasiaKu9' });
@@ -605,6 +605,34 @@ const ok = (c, m) => { console.log((c ? 'PASS ' : 'FAIL ') + m); if (!c) fails++
   ok(r.ok, 'edit dengan nomor notanya sendiri tetap boleh: ' + (r.error || ''));
 
   ok(e8.teksSel('01-2026') === "'01-2026" && e8.teksSel('1/10') === "'1/10" && e8.teksSel('NT-001') === 'NT-001' && e8.teksSel('') === '', 'nomor bukti mirip tanggal/angka disimpan sebagai teks');
+
+  // ── Rencana operasional per periode ──
+  {
+    const tAkn = tk8('akn');
+    let r = call(e8, 'GET', { action: 'getRencanaOps', token: tAkn });
+    ok(r.ok && r.data.periode.id === 'P1' && r.data.rencana === null && r.data.penerima.some(p => p.id === 'pn1'), 'rencana: periode aktif dimuat, belum ada rencana: ' + (r.error || ''));
+    const isi = { versi: 0, setelan: { indeks: 100, batas: 95 }, hari: { '2026-10-09': { pm: 200 }, '2026-10-12': { libur: true }, '2026-12-01': { pm: 5 } },
+      items: [{ id: 'RO1', tanggal: '2026-10-09', kategori: 'Gas', uraian: 'Isi gas 12 kg', nominal: 300000, penerima_id: 'pn1' }, { id: 'RO2', tanggal: '', kategori: 'APD', uraian: 'Masker', nominal: 50000 }] };
+    r = call(e8, 'POST', { action: 'saveRencanaOps', token: tAkn, data: isi });
+    ok(r.ok && r.data.versi === 1, 'rencana tersimpan (versi 1): ' + (r.error || ''));
+    r = call(e8, 'GET', { action: 'getRencanaOps', token: tAkn });
+    ok(r.data.rencana.items.length === 2 && r.data.rencana.hari['2026-10-09'].pm === 200 && !r.data.rencana.hari['2026-12-01'], 'isi rencana terbaca kembali; tanggal di luar periode dibuang');
+    r = call(e8, 'POST', { action: 'saveRencanaOps', token: tAkn, data: isi });
+    ok(!r.ok && /perangkat lain/.test(r.error), 'simpan dengan versi lama ditolak (tidak menimpa perubahan perangkat lain)');
+    r = call(e8, 'POST', { action: 'saveRencanaOps', token: tAkn, data: Object.assign({}, isi, { versi: 1, items: [{ kategori: 'Beras', uraian: 'x', nominal: 1 }] }) });
+    ok(!r.ok && /kategori operasional/.test(r.error), 'kategori bukan operasional ditolak');
+    r = call(e8, 'POST', { action: 'saveRencanaOps', token: tk8('pic'), data: Object.assign({}, isi, { versi: 1 }) });
+    ok(!r.ok && /Hanya akuntan/.test(r.error), 'PIC tidak bisa mengubah rencana');
+    r = call(e8, 'GET', { action: 'getPaguOps', token: tAkn, tanggal: '2026-10-09' });
+    ok(r.ok && r.data.pagu === 600000 && r.data.pm === 200, 'pagu harian = 3.000 × PM hari itu (PM disesuaikan 200): ' + JSON.stringify(r.data));
+    ok(r.data.terpakai === 100000, 'operasional terpakai hari itu memakai nilai anggaran (' + r.data.terpakai + ')');
+    r = call(e8, 'GET', { action: 'getPaguOps', token: tAkn, tanggal: '2026-10-10' });
+    ok(r.data.libur === true && r.data.pagu === 0, 'Sabtu bukan HPE → pagu 0');
+    r = call(e8, 'GET', { action: 'getPaguOps', token: tAkn, tanggal: '2026-10-13' });
+    ok(r.data.pagu === 300000 && r.data.libur === false, 'tanpa penyesuaian: PM = penerima di setup periode (100)');
+    r = call(e8, 'GET', { action: 'getPaguOps', token: tAkn, tanggal: '2026-10-12' });
+    ok(r.data.libur === true && r.data.pagu === 0, 'hari yang ditandai libur di rencana → pagu 0');
+  }
 
   console.log(fails ? '\n' + fails + ' GAGAL' : '\nSEMUA LULUS');
   process.exit(fails ? 1 : 0);

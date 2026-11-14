@@ -4,10 +4,11 @@
   "description": "Keuangan MBG — build src/index.html (JSX + Tailwind) menjadi index.html siap pakai",
   "scripts": {
     "build": "node build.js",
-    "test": "npm run test:backend && npm run test:lpdh && npm run test:e2e",
+    "test": "npm run test:backend && npm run test:lpdh && npm run test:rencana && npm run test:e2e",
     "test:backend": "node tests/backend.test.js",
     "test:e2e": "node tests/e2e.test.js",
-    "test:lpdh": "node tests/lpdh.test.js"
+    "test:lpdh": "node tests/lpdh.test.js",
+    "test:rencana": "node tests/rencana.test.js"
   },
   "devDependencies": {
     "@babel/standalone": "7.24.0",

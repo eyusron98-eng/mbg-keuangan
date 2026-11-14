@@ -328,6 +328,40 @@ async function isiBahanBaku(page, uraian, volume, harga) {
     assert(srv.log.real[0].sub_kategori === 'Alat Kebersihan', 'sub-kategori tidak terkirim: ' + JSON.stringify(srv.log.real[0]));
   });
 
+  all &= await run('Rencana Ops: usulan otomatis dari periode lalu, simpan, ajukan satu hari', { role: 'akuntan',
+    override: (a, m, p, log) => {
+      const L = globalThis.__ro = globalThis.__ro || { save: [], aju: [] };
+      if (a === 'getRencanaOps') return { ok: true, data: { dapur: 'D1', bisaUbah: true, bankVA: 'BSI', status: {}, aktual: {}, rencana: L.saved || null,
+        periode: { id: 'P19', periode_no: 19, tanggal_mulai: '2026-11-09', tanggal_akhir: '2026-11-20', penerima: 1000, status: 'AKTIF' },
+        penerima: [{ id: 'W', nama: 'Wanda', bank: 'BANK SYARIAH INDONESIA', no_rek: '1' }, { id: 'G', nama: 'PT Gas', bank: 'MANDIRI', no_rek: '2' }],
+        riwayat: { periode_no: 18, hari: 5, tx: [].concat(...['2026-11-02', '2026-11-03', '2026-11-04', '2026-11-05', '2026-11-06'].map(t => [
+          { tanggal: t, kategori: 'Gaji/honor relawan pekerja SPPG', uraian: 'Honor relawan ' + t.slice(8) + ' November', nominal: 1500000, penerima_id: 'W' }])).concat(
+          [{ tanggal: '2026-11-03', kategori: 'Gas', uraian: 'Isi gas 12kg 10 tabung', nominal: 2400000, penerima_id: 'G' }]) } } };
+      if (a === 'getKategori') return { ok: true, data: { 'Operasional': ['Gaji/honor relawan pekerja SPPG', 'Gas', 'APD'] } };
+      if (a === 'saveRencanaOps') { L.save.push(p); L.saved = Object.assign({}, p.data, { versi: (p.data.versi || 0) + 1 }); return { ok: true, data: { versi: L.saved.versi } }; }
+      if (a === 'createPengajuan') { L.aju.push(p); return { ok: true, data: { id: 'PA9', nomor: 'BA-PA/S1/2026/11/009' } }; }
+      return null; } }, async (page, srv) => {
+    await login(page, 'siti');
+    await page.waitForSelector('header');
+    await page.click('nav:visible >> text=Rencana Ops');
+    await page.waitForSelector('text=Rencana operasional · Periode 19');
+    await page.click('text=Usulkan otomatis');
+    await page.waitForSelector('text=Usulan dibuat');
+    await page.waitForSelector('text=Semua kebutuhan muat di pagu harian.');
+    assert(await page.isVisible('text=bagian 1/2 >> nth=0'), 'gas besar tidak dipecah');
+    if (process.env.SHOT) { await page.waitForTimeout(600); await page.screenshot({ path: process.env.SHOT + '/rencana.png', fullPage: true }); }
+    await page.click('text=Simpan perubahan');
+    await page.waitForSelector('text=Rencana tersimpan');
+    const L = globalThis.__ro;
+    assert(L.save.length === 1 && L.save[0].data.items.length >= 12 && L.save[0].periode_id === 'P19', 'rencana tidak tersimpan: ' + JSON.stringify(L.save[0] && L.save[0].data.items.length));
+    await page.click('button:has-text("Ajukan") >> nth=0');
+    await page.waitForSelector('text=Pengajuan BA-PA/S1/2026/11/009 terkirim');
+    const aj = L.aju[0];
+    assert(aj && aj.tanggal === '2026-11-09' && aj.items.every(i => i.jenis === 'Operasional' && i.penerima_id) && aj.items.some(i => /honor/i.test(i.kategori)), 'pengajuan salah: ' + JSON.stringify(aj));
+    assert(L.save.length >= 2 && L.save[L.save.length - 1].data.items.filter(x => x.pengajuan_id === 'PA9').length === aj.items.length, 'baris yang diajukan tidak ditandai di rencana');
+    globalThis.__ro = null;
+  });
+
   all &= await run('Relawan: daftar kosong bisa diisi (tombol tidak tertutup) & tempel dari Excel', { role: 'akuntan',
     override: (a, m, p) => a === 'getRelawanBayar' ? { ok: true, data: { rows: [], sumber: 'baru', total: 6240000 } }
       : a === 'getDataLPDH' ? { ok: true, data: { dapur: { id: 'D1', nama: 'SPPG Satu', kode: 'S1' }, identitas: {}, tanggal: p.tanggal, harian: null,
