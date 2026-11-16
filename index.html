@@ -3636,9 +3636,14 @@ try {
         tanggal: ''
       }, x));
     });
+    const lewat = (r.dilewati || []).length ? ' Periode ' + r.dilewati.join(', ') + ' dilewati karena pencatatannya belum lengkap.' : '';
+    if (!items.length) return {
+      items: items,
+      catatan: 'Periode ' + r.periode_no + ' tidak punya transaksi operasional yang bisa dijadikan contoh.' + lewat + ' Isi kebutuhan secara manual.'
+    };
     return {
       items: items,
-      catatan: 'Usulan dari pola periode ' + r.periode_no + ' (' + r.hari + ' hari layanan) untuk ' + hari.length + ' HPE.'
+      catatan: 'Usulan dari pola periode ' + r.periode_no + ' (' + r.hari + ' hari layanan) untuk ' + hari.length + ' HPE.' + lewat
     };
   }
   function roRingkas(items, ctx, setelan, hariSet, dariTgl) {
