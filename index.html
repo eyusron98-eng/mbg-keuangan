@@ -3641,27 +3641,38 @@ try {
       catatan: 'Usulan dari pola periode ' + r.periode_no + ' (' + r.hari + ' hari layanan) untuk ' + hari.length + ' HPE.'
     };
   }
-  function roRingkas(items, ctx, setelan, hariSet) {
+  function roRingkas(items, ctx, setelan, hariSet, dariTgl) {
     const hari = roHari(ctx.periode, hariSet),
       pakai = roPakai(items, ctx);
     let paguTot = 0,
       rencanaTot = 0,
       lebih = 0,
-      nLebih = 0;
+      nLebih = 0,
+      paguAktif = 0,
+      rencanaAktif = 0,
+      nAktif = 0,
+      nLewat = 0;
     const per = hari.map(function (h) {
       const pagu = roPagu(h, setelan),
         batas = roBatas(h, setelan),
         p = pakai[h.tanggal] || 0;
+      const aktif = !dariTgl || h.tanggal >= dariTgl;
       paguTot += pagu;
       rencanaTot += p;
-      if (p > pagu) {
-        lebih += p - pagu;
-        nLebih++;
-      }
+      if (aktif) {
+        paguAktif += pagu;
+        rencanaAktif += p;
+        if (!h.libur) nAktif++;
+        if (p > pagu) {
+          lebih += p - pagu;
+          nLebih++;
+        }
+      } else if (!h.libur) nLewat++;
       return Object.assign({}, h, {
         pagu: pagu,
         batas: batas,
         pakai: p,
+        lewat: !aktif,
         aktual: (ctx.aktual || {})[h.tanggal] || 0
       });
     });
@@ -3679,10 +3690,15 @@ try {
       hari: per,
       paguTot: paguTot,
       rencanaTot: rencanaTot,
+      paguAktif: paguAktif,
+      rencanaAktif: rencanaAktif,
+      nAktif: nAktif,
+      nLewat: nLewat,
       lebih: lebih,
       nLebih: nLebih,
       takMuat: tak.length,
       takNilai: takNilai,
+      kebutuhanAktif: rencanaAktif + takNilai,
       kurang: lebih + takNilai
     };
   }
@@ -3706,7 +3722,7 @@ try {
   function roLabel(k) {
     return RO_LABEL[k] || k;
   }
-  function roMatriks(items, ctx, setelan, hariSet) {
+  function roMatriks(items, ctx, setelan, hariSet, dariTgl) {
     const pmap = {};
     (ctx.penerima || []).forEach(function (p) {
       pmap[p.id] = p;
@@ -3743,14 +3759,21 @@ try {
       if (ra >= 0 || rb >= 0) return (ra < 0 ? 99 : ra) - (rb < 0 ? 99 : rb);
       return tot[b] - tot[a];
     });
+    const aktif = function (t) {
+      return !dariTgl || t >= dariTgl;
+    };
     const terjadwal = {};
     kolom.forEach(function (k) {
       terjadwal[k] = 0;
       Object.keys(sel).forEach(function (t) {
-        if (sel[t][k]) terjadwal[k] += sel[t][k].nominal;
+        if (sel[t][k] && aktif(t)) terjadwal[k] += sel[t][k].nominal;
       });
     });
+    const feeAktif = Object.keys(fee).reduce(function (a, t) {
+      return a + (aktif(t) ? fee[t] : 0);
+    }, 0);
     return {
+      feeAktif: feeAktif,
       batas: setelan && setelan.batas || 95,
       kolom: kolom,
       sel: sel,
@@ -3758,7 +3781,7 @@ try {
       tak: tak,
       takItems: takItems,
       terjadwal: terjadwal,
-      ring: roRingkas(items, ctx, setelan, hariSet)
+      ring: roRingkas(items, ctx, setelan, hariSet, dariTgl)
     };
   }
   function RencanaOpsPage({
@@ -3849,7 +3872,7 @@ try {
     ctx.penerima.forEach(function (p) {
       pmap[p.id] = p;
     });
-    const ring = roRingkas(items, ctx, setelan, hariSet);
+    const ring = roRingkas(items, ctx, setelan, hariSet, todayISO());
     const ubah = function (fn) {
       setItems(fn);
       setDirty(true);
@@ -4082,17 +4105,25 @@ try {
       style: {
         color: COLORS.muted
       }
-    }, "Pagu periode"), React.createElement("b", {
+    }, "Pagu sisa periode (", ring.nAktif, " HPE, mulai hari ini)"), React.createElement("b", {
       className: "num"
-    }, fmt(ring.paguTot))), React.createElement("div", {
+    }, fmt(ring.paguAktif))), React.createElement("div", {
       className: "flex justify-between"
     }, React.createElement("span", {
       style: {
         color: COLORS.muted
       }
-    }, "Terjadwal (termasuk biaya transfer)"), React.createElement("b", {
+    }, "Terjadwal di hari tersisa (termasuk biaya transfer)"), React.createElement("b", {
       className: "num"
-    }, fmt(ring.rencanaTot))), ring.nLebih > 0 && React.createElement("div", {
+    }, fmt(ring.rencanaAktif))), React.createElement("div", {
+      className: "flex justify-between"
+    }, React.createElement("span", {
+      style: {
+        color: COLORS.muted
+      }
+    }, "Sisa pagu belum terpakai"), React.createElement("b", {
+      className: "num"
+    }, fmt(Math.max(0, ring.paguAktif - ring.rencanaAktif)))), ring.nLebih > 0 && React.createElement("div", {
       className: "flex justify-between",
       style: {
         color: COLORS.danger
@@ -4111,12 +4142,17 @@ try {
       style: {
         color: COLORS.danger
       }
-    }, "Kebutuhan melebihi pagu ", fmt(ring.kurang), ". Kurangi biaya rutin/kebutuhan, atau bahas dengan Yayasan \u2014 aplikasi tidak bisa menyamarkannya.") : items.length > 0 && React.createElement("div", {
+    }, "Total kebutuhan ", fmt(ring.kebutuhanAktif), " (terjadwal ", fmt(ring.rencanaAktif), " + tidak muat ", fmt(ring.takNilai), ") melebihi pagu sisa ", fmt(ring.paguAktif), ring.kebutuhanAktif > ring.paguAktif ? ' sebesar ' + fmt(ring.kebutuhanAktif - ring.paguAktif) : '', ".", ring.takMuat > 0 && ring.paguAktif > ring.rencanaAktif ? ' Sisa pagu ' + fmt(ring.paguAktif - ring.rencanaAktif) + ' tersebar kecil di tiap hari, tidak cukup untuk satu pun barang yang tidak muat.' : '', " Kurangi kebutuhan atau bahas dengan Yayasan.") : items.length > 0 && React.createElement("div", {
       className: "text-xs pt-1",
       style: {
         color: COLORS.green
       }
-    }, "Semua kebutuhan muat di pagu harian.")), catatan && React.createElement("div", {
+    }, "Semua kebutuhan muat di pagu harian."), ring.nLewat > 0 && React.createElement("div", {
+      className: "text-xs pt-1",
+      style: {
+        color: COLORS.muted
+      }
+    }, ring.nLewat, " HPE sudah lewat tidak dihitung \xB7 pagu satu periode penuh ", fmt(ring.paguTot), ".")), catatan && React.createElement("div", {
       className: "text-xs mt-2",
       style: {
         color: COLORS.muted
@@ -4170,7 +4206,7 @@ try {
         }
       }, t[1]);
     })), tampil === 'tabel' && React.createElement(RencanaMatriks, {
-      m: roMatriks(items, ctx, setelan, hariSet),
+      m: roMatriks(items, ctx, setelan, hariSet, hariIni),
       bisaUbah: bisaUbah,
       ajukanTgl: ajukanTgl,
       lewat: lewat,
@@ -4447,9 +4483,7 @@ try {
     const totTak = kol.reduce(function (s, k) {
       return s + (m.tak[k] || 0);
     }, 0);
-    const totFee = Object.keys(m.fee).reduce(function (s, t) {
-      return s + m.fee[t];
-    }, 0);
+    const totFee = m.feeAktif;
     return React.createElement(Card, {
       pad: false
     }, React.createElement("div", {
@@ -4592,7 +4626,13 @@ try {
         background: COLORS.paper,
         fontWeight: 700
       })
-    }, "Terjadwal"), kol.map(function (k) {
+    }, "Terjadwal", React.createElement("div", {
+      style: {
+        fontSize: 10,
+        fontWeight: 400,
+        color: COLORS.muted
+      }
+    }, "hari ini \u2013 akhir")), kol.map(function (k) {
       return React.createElement("td", {
         key: k,
         style: Object.assign({}, td, {
@@ -4608,18 +4648,20 @@ try {
       style: Object.assign({}, td, {
         background: COLORS.paper,
         fontWeight: 700
-      })
-    }, singkat(r.rencanaTot)), React.createElement("td", {
+      }),
+      title: "hari ini s.d. akhir periode"
+    }, singkat(r.rencanaAktif)), React.createElement("td", {
       style: Object.assign({}, td, {
         background: COLORS.paper
-      })
-    }, singkat(r.paguTot)), React.createElement("td", {
+      }),
+      title: "pagu hari ini s.d. akhir periode"
+    }, singkat(r.paguAktif)), React.createElement("td", {
       style: Object.assign({}, td, {
         background: COLORS.paper,
         fontWeight: 700,
         color: r.lebih ? COLORS.danger : COLORS.green
       })
-    }, r.lebih ? '−' + singkat(r.lebih) : singkat(r.paguTot - r.rencanaTot)), bisaUbah && React.createElement("td", {
+    }, r.lebih ? '−' + singkat(r.lebih) : singkat(r.paguAktif - r.rencanaAktif)), bisaUbah && React.createElement("td", {
       style: Object.assign({}, td, {
         background: COLORS.paper
       })

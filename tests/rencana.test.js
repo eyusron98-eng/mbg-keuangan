@@ -61,6 +61,11 @@ ok(!u5.items.some(x => x.bagian && x.nominal < 250000), 'belanja kecil tidak dip
 { const ul = R.roUsulkan(ctx, set, {}, 1, [], '2026-11-12');
   ok(ul.items.length > 0 && ul.items.every(x => !x.tanggal || x.tanggal >= '2026-11-12'), 'tanggal sebelum hari ini tidak dijadwalkan');
   ok(ul.items.filter(x => x.rutin && x.kategori.startsWith('Gaji')).length === 7, 'honor hanya untuk 7 HPE tersisa (12–20 Nov)'); }
+{ const ul = R.roUsulkan(ctx, set, {}, 1, [], '2026-11-16'), r = R.roRingkas(ul.items, ctx, set, {}, '2026-11-16');
+  ok(r.nAktif === 5 && r.paguAktif === 15000000 && r.paguTot === 30000000 && r.nLewat === 5, 'pagu sisa = 5 HPE tersisa (16–20 Nov) = 15 jt, bukan 30 jt sepuluh hari (' + r.paguAktif + ')');
+  ok(r.rencanaAktif <= r.paguAktif && r.kebutuhanAktif === r.rencanaAktif + r.takNilai, 'rencana aktif & kebutuhan dihitung dari hari tersisa');
+  const m = R.roMatriks(ul.items.concat([{ id: 'L', tanggal: '2026-11-10', kategori: 'Gas', uraian: 'lama', nominal: 999000, penerima_id: 'GAS' }]), ctx, set, {}, '2026-11-16');
+  ok(!(m.terjadwal['Gas'] >= 999000) || ul.items.filter(x => x.kategori === 'Gas' && x.tanggal).reduce((a, x) => a + x.nominal, 0) === m.terjadwal['Gas'], 'baris Terjadwal di matriks tidak menghitung tanggal yang sudah lewat'); }
 const kosong = R.roUsulkan(Object.assign({}, ctx, { riwayat: null }), set, {}, 1);
 ok(kosong.items.length === 0 && /manual/.test(kosong.catatan), 'tanpa riwayat: tidak ada usulan, diminta isi manual');
 
