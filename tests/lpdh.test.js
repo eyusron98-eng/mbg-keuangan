@@ -220,6 +220,8 @@ function dataUji(nOp) {
     ok(g('Identitas', 'E36') === 'Valid' && g('Identitas', 'E37') === 'Valid', 'NIK/NIP lolos validasi rumus');
     ok(g('I_RegisterBukti', 'C127') === 0, 'register: tidak ada nomor duplikat');
     ok(String(g('J_Pengesahan', 'D5')).includes('SPPG Cipaku 02') && g('J_Pengesahan', 'B33') === 'Peng', 'lembar pengesahan terisi');
+    { const rk = r.ringkasan, J = ['E13', 'E14', 'E15', 'E16', 'E17', 'E18', 'E19'].map(a => g('J_Pengesahan', a)), A = [rk.pm, rk.bb, rk.ops, rk.insHitung, rk.insBayar, rk.saldoAkhir, rk.usulan];
+      ok(J.every((v, i) => Math.abs(Number(v) - A[i]) < 1), 'ringkasan PDF pengesahan = hasil rumus J_Pengesahan (Excel ' + J.join('/') + ' · aplikasi ' + A.join('/') + ')'); }
   }
   console.log(fails ? '\n' + fails + ' GAGAL' : '\nSEMUA LULUS');
   process.exit(fails ? 1 : 0);

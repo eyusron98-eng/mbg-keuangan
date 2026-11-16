@@ -745,6 +745,27 @@ async function isiBahanBaku(page, uraian, volume, harga) {
     assert(/\.xlsx$/.test(dl.suggestedFilename()), 'LPDH tetap bisa diunduh setelah konfirmasi');
   });
 
+  all &= await run('LPDH: lembar pengesahan PDF bertanda tangan tiga pihak', { role: 'pic',
+    override: (a, m, p) => a === 'getDataLPDH' ? { ok: true, data: { dapur: { id: 'D1', nama: 'SPPG BANDUNG PACET CIPEUJEUH 02', kode: 'CPJ02' },
+        identitas: { id_sppg: 'BNDOZFPK', kabupaten: 'KABUPATEN BANDUNG', provinsi: 'JAWA BARAT', yayasan: 'YAYASAN INSAN SINERGI CENDIKIA', pengawas_nama: 'Wanda Azira Agustina, S.Ak', pengawas_nik: '3204294108000007',
+          kepala_nama: 'Ners. Debbi Prasetiawan, S.Kep', kepala_nip: '198909272026211002', wakil_nama: 'Eri Yusron', wakil_nik: '3204300604950011', bast_folder: 'https://drive.google.com/bast' }, tanggal: p.tanggal,
+        periode: { id: 'P2', periode_no: 2, tanggal_mulai: '2026-10-01', tanggal_akhir: '2026-10-31', status: 'AKTIF' }, saldoAwal: 287633700, topups: [],
+        transaksi: [{ id: 'T1', tanggal: p.tanggal, no_bukti: 'NB-1', jenis: 'Bahan Baku', kategori: 'Semua Kategori', uraian: 'Beras', sumber: 'VA', riil: 25484700, bukti_url: 'https://x' },
+          { id: 'T2', tanggal: p.tanggal, no_bukti: 'NB-2', jenis: 'Operasional', kategori: 'Listrik', uraian: 'Listrik', sumber: 'VA', riil: 7111250, bukti_url: 'https://y' }],
+        komponen: { awal: [169101748, 70333249, 48198703], topups: [], geser: [], nama: ['Bahan Baku', 'Operasional', 'Insentif'] },
+        harian: { pm: [{ kode: 'KS-02', target: 2560, distribusi: 2560, diterima: 2560, tidak: 0 }], produksi: {}, syarat: {} } } }
+      : a === 'getTtdPengesahan' ? { ok: true, data: { pengawas: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==', kepala: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==', wakil: null } } : null }, async (page, srv) => {
+    await login(page, 'siti');
+    await page.waitForSelector('header');
+    await page.click('nav:visible >> text=LPDH Harian');
+    const [dl] = await Promise.all([page.waitForEvent('download'), page.click('text=Lembar Pengesahan (PDF bertanda tangan)')]);
+    assert(/^BNDOZFPK_SPPG BANDUNG PACET CIPEUJEUH 02_LPDH_\d{8}_Pengesahan\.pdf$/.test(dl.suggestedFilename()), 'nama file: ' + dl.suggestedFilename());
+    const f = (process.env.SHOT || require('os').tmpdir()) + '/pengesahan.pdf'; await dl.saveAs(f);
+    const isi = fs.readFileSync(f, 'latin1');
+    assert(/DCTDecode/.test(isi) && (isi.match(/\/Type \/Page\b/g) || []).length === 1, 'PDF 1 halaman dengan gambar TTD');
+    await page.waitForSelector('text=belum ada TTD: Perwakilan Mitra/Yayasan');
+  });
+
   all &= await run('Relawan: daftar kosong bisa diisi (tombol tidak tertutup) & tempel dari Excel', { role: 'akuntan',
     override: (a, m, p) => a === 'getRelawanBayar' ? { ok: true, data: { rows: [], sumber: 'baru', total: 6240000 } }
       : a === 'getDataLPDH' ? { ok: true, data: { dapur: { id: 'D1', nama: 'SPPG Satu', kode: 'S1' }, identitas: {}, tanggal: p.tanggal, harian: null,
