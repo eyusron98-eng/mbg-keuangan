@@ -71,6 +71,16 @@ function dataUji(nOp) {
     ok(w('E_Saldo', 'E10') === 9760475 && r3.saldoVaOtomatis === true, 'saldo VA belum diketik → saldo akhir aplikasi (ditandai)');
     ok(w('E_Saldo', 'B5') === 5000000 && w('E_Saldo', 'B7') === 1760475, 'saldo per komponen terisi');
   }
+  {
+    const wb4 = new ExcelJS.Workbook(); await wb4.xlsx.readFile(TPL);
+    const d4 = dataUji(0);
+    d4.transaksi = [tx(41, 'Operasional', 'Gas', 900000, { catatan: 'Melebihi pagu harian Rp 200.000 (pagu Rp 3.000.000, PM 1.000). Alasan: stok gas habis' }),
+      tx(42, 'Operasional', 'Gaji/honor relawan pekerja SPPG', 500000, { catatan: 'Melebihi pagu harian Rp 50.000. Alasan: lembur' })];
+    L.isiLPDH(wb4, d4, { waktu: new Date(2026, 9, 29, 5, 30) });
+    const m13 = wb4.getWorksheet('C_Operasional').getCell('M13').value, m6 = wb4.getWorksheet('C_Operasional').getCell('M6').value;
+    ok(/^Penjelasan: Melebihi pagu harian Rp 200\.000.*stok gas habis; Uraian 41$/.test(m13), 'alasan melebihi pagu otomatis di Keterangan C_Operasional (' + m13 + ')');
+    ok(/^Penjelasan: Melebihi pagu harian Rp 50\.000. Alasan: lembur$/.test(m6), 'alasan honor relawan di Keterangan baris 6 (' + m6 + ')');
+  }
   ok(v('Identitas', 'B7') === 'SPPG Cipaku 02' && v('Identitas', 'B6') === '32.04.01.0001' && v('Identitas', 'D36') === '3204000000000001', 'identitas & NIK terisi (NIK sebagai teks)');
   ok(v('Identitas', 'B18') === 'HPE' && v('Identitas', 'B19') === 3, 'status hari & HPE ke- terisi');
   ok(['F36', 'F37', 'F38'].every(a => v('Identitas', a) === 'Ya'), 'kolom "sudah tanda tangan" otomatis Ya');

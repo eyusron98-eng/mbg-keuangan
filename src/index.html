@@ -680,6 +680,24 @@ function SaldoCard({ tipe, periode, topups, onTopup, color, onEditAwal }) {
   );
 }
 
+// Pengaturan gaji relawan: daftar tetap dapur (nama, tugas, upah per hari) — bisa diubah kapan saja
+function RelawanTetapCard({ toast }) {
+  const [buka, setBuka] = useState(false);
+  const [ring, setRing] = useState(null);
+  const muat = function() { api('getRelawanTetap', {}).then(function(r) { if (r.ok) { const a = r.data.rows || [], h = a.filter(function(x) { return x.hadir !== false; });
+    setRing({ n: a.length, aktif: h.length, perHari: h.reduce(function(s, x) { return s + (Number(x.upah) || 0) * (Number(x.hari) || 1); }, 0), sumber: r.data.sumber }); } }); };
+  useEffect(muat, []);
+  return <Card className="mb-3">
+    <div className="flex items-center justify-between gap-2">
+      <div><Eyebrow>Gaji relawan</Eyebrow>
+        <div className="text-sm" style={{ color: COLORS.ink }}>{!ring ? 'Memuat…' : ring.n ? ring.aktif + ' relawan aktif · ' + fmt(ring.perHari) + ' per hari' : 'Daftar relawan belum diatur'}</div>
+        <div className="text-xs" style={{ color: COLORS.muted }}>{ring && ring.sumber !== 'tetap' && ring.n ? 'Masih dari pembayaran terakhir — buka & Simpan untuk menetapkan.' : 'Dipakai otomatis untuk setiap pembayaran honor relawan.'}</div></div>
+      <Btn size="sm" kind="ghost" onClick={function() { setBuka(true); }}>{I.edit} Atur</Btn>
+    </div>
+    {buka && <RelawanForm toast={toast} onClose={function() { setBuka(false); }} onSaved={muat}/>}
+  </Card>;
+}
+
 function SetupPeriode({ session, toast }) {
   const [periode, setPeriode] = useState(null);
   const [list, setList] = useState([]);
@@ -733,6 +751,7 @@ function SetupPeriode({ session, toast }) {
   return (
     <div>
       {session.user.role === 'akuntan' && <IdentitasDapurCard session={session} toast={toast}/>}
+      {session.user.role === 'akuntan' && <RelawanTetapCard toast={toast}/>}
       <Card className="mb-3">
         <Eyebrow>Periode Aktif</Eyebrow>
         {!periode ? (
@@ -1468,10 +1487,14 @@ function isiLPDH(wb, data, opsi) {
     set(C, 'C' + r, tgl); set(C, 'E' + r, 1); set(C, 'F' + r, n === 1 ? 'transaksi' : n + ' transaksi'); set(C, 'G' + r, jml(a));
     set(C, 'I' + r, lpdhGabung(a.map(function(t) { return t.no_bukti; }), '; '));
     set(C, 'J' + r, a.map(function(t) { return t.bukti_url; }).filter(Boolean).join(' | '));
-    set(C, 'M' + r, lpdhGabung(a.map(function(t) { return t.kategori === b[1] || b[2].indexOf(t.kategori) >= 0 ? t.uraian : t.kategori + ': ' + t.uraian; }), '; '));
+    // penjelasan melebihi pagu (catatan akuntan di pengajuan) ditaruh paling depan agar tidak terpotong
+    const jelas = a.filter(function(t) { return t.catatan; }).map(function(t) { return 'Penjelasan: ' + t.catatan; });
+    set(C, 'M' + r, lpdhGabung(jelas.concat(a.map(function(t) { return t.kategori === b[1] || b[2].indexOf(t.kategori) >= 0 ? t.uraian : t.kategori + ': ' + t.uraian; })), '; '));
     opsRingkas.push({ baris: b[1], jumlah: n, total: jml(a) });
   });
 
+  { const jl = grup.rl.filter(function(t) { return t.catatan; }).map(function(t) { return 'Penjelasan: ' + t.catatan; });
+    if (jl.length) set(C, 'M6', lpdhGabung(jl, '; ')); }
   // Honor relawan: satu baris per relawan dari daftar penerima (nomor bukti transaksi + /1, /2, …); tanpa daftar → satu baris per transaksi
   const R = S('C1_Relawan'), barisRL = [];
   grup.rl.forEach(function(t) {
@@ -2233,6 +2256,7 @@ function LpdhPage({ session, scope, toast }) {
   const [editIdent, setEditIdent] = useState(false);
   const [editHarian, setEditHarian] = useState(false);
   const [editRelawan, setEditRelawan] = useState(null);
+  const [relawanTetap, setRelawanTetap] = useState(false);
   const [editTopup, setEditTopup] = useState(null);
   const [editInsentif, setEditInsentif] = useState(null);
   const [unggahTtd, setUnggahTtd] = useState('');
@@ -2405,6 +2429,9 @@ function LpdhPage({ session, scope, toast }) {
             </div>
           </div>; })}
         </div>}
+        {bisaIsi && <div className="mt-3 pt-3 flex items-center justify-between gap-2" style={{ borderTop: '1px solid ' + COLORS.line }}>
+          <div className="text-xs" style={{ color: COLORS.muted }}>Nama, tugas & upah relawan bisa diatur kapan saja.</div>
+          <Btn size="sm" kind="ghost" onClick={function() { setRelawanTetap(true); }}>{I.users} Daftar relawan tetap</Btn></div>}
         {grup.rl.length > 0 && <div className="mt-3 pt-3" style={{ borderTop: '1px solid ' + COLORS.line }}>
           <div className="text-sm font-semibold mb-1" style={{ color: COLORS.ink }}>Daftar penerima honor relawan</div>
           {grup.rl.map(function(t) { return <div key={t.id} className="flex items-center justify-between gap-2 py-1.5 text-sm">
@@ -2444,6 +2471,7 @@ function LpdhPage({ session, scope, toast }) {
       fields={[['no_ppk', 'Nomor pernyataan besaran insentif dari PPK'], ['nilai_ppk', 'Nilai pernyataan PPK', 'rupiah'], ['no_kuitansi', 'Nomor kuitansi'],
         ['kuitansi_ttd', 'Kuitansi ditandatangani Mitra?', 'yatidak'], ['ref_va', 'Referensi transaksi VA (maker Mitra, approver Kepala SPPG)']]} awal={editInsentif.insentif || {}}/>}
     {editRelawan && <RelawanForm tx={editRelawan} toast={toast} onClose={function() { setEditRelawan(null); }} onSaved={load}/>}
+    {relawanTetap && <RelawanForm dapur={dapurId} toast={toast} onClose={function() { setRelawanTetap(false); }}/>}
   </div>);
 }
 
@@ -2522,15 +2550,18 @@ function bacaTempelRelawan(teks) {
     return { nama: k[0] || '', tugas: k[1] || '', hari: angka(k[2]) || '1', upah: angka(k[3]), metode: metode };
   }).filter(function(x) { return x.nama && !/^nama$/i.test(x.nama) && Number(x.upah) > 0; });
 }
-function RelawanForm({ tx, toast, onClose, onSaved }) {
+// tx = transaksi honor (centang yang hadir, total harus sama); tanpa tx = daftar relawan tetap dapur (bisa diubah kapan saja)
+function RelawanForm({ tx, dapur, toast, onClose, onSaved }) {
+  const tetap = !tx;
   const [rows, setRows] = useState(null);
   const [sumber, setSumber] = useState('');
   const [saving, setSaving] = useState(false);
   const [tempel, setTempel] = useState(null);   // null = tertutup; string = isi kotak tempel
   const [modeUbah, setModeUbah] = useState(false);   // false = centang hadir; true = ubah nama/tugas/upah
   useEffect(function() {
-    api('getRelawanBayar', { transaksi_id: tx.id }).then(function(r) {
+    (tetap ? api('getRelawanTetap', { dapur: dapur || '' }) : api('getRelawanBayar', { transaksi_id: tx.id })).then(function(r) {
       if (!r.ok) { toast(r.error, 'error'); onClose(); return; }
+      if (tetap && (!r.data.rows || !r.data.rows.length)) setModeUbah(true);
       setRows((r.data.rows || []).map(function(x) { return { nama: x.nama, tugas: x.tugas, hari: String(x.hari || 1), upah: String(x.upah), metode: x.metode || 'Transfer', hadir: x.hadir !== false }; }));
       setSumber(r.data.sumber);
     });
@@ -2538,7 +2569,7 @@ function RelawanForm({ tx, toast, onClose, onSaved }) {
   if (!rows) return <Modal title="Daftar relawan" onClose={onClose}>{I.spinner}</Modal>;
   const hadir = rows.filter(function(x) { return x.hadir; });
   const total = hadir.reduce(function(s, x) { return s + (Number(x.hari) || 0) * (Number(x.upah) || 0); }, 0);
-  const selisih = total - tx.riil;
+  const selisih = tetap ? 0 : total - tx.riil;
   function ubah(i, k, v) { setRows(rows.map(function(x, j) { return j === i ? Object.assign({}, x, { [k]: v }) : x; })); }
   const tambahKosong = function() { setRows(rows.concat([{ nama: '', tugas: '', hari: '1', upah: '', metode: 'Transfer', hadir: true }])); setModeUbah(true); };
   const semua = function(v) { setRows(rows.map(function(x) { return Object.assign({}, x, { hadir: v }); })); };
@@ -2547,14 +2578,17 @@ function RelawanForm({ tx, toast, onClose, onSaved }) {
   function pakaiTempel() { setRows(rows.filter(function(x) { return x.nama.trim(); }).concat(hasilTempel.map(function(x) { return Object.assign({ hadir: true }, x); }))); setTempel(null); }
   async function simpan() {
     setSaving(true);
-    const r = await apiPost('saveRelawanBayar', { transaksi_id: tx.id, rows: rows.map(function(x) { return { nama: x.nama, tugas: x.tugas, hari: Number(x.hari), upah: Number(x.upah), metode: x.metode, hadir: !!x.hadir }; }) });
+    const kirim = rows.map(function(x) { return { nama: x.nama, tugas: x.tugas, hari: Number(x.hari), upah: Number(x.upah), metode: x.metode, hadir: !!x.hadir }; });
+    const r = tetap ? await apiPost('saveRelawanTetap', { dapur: dapur || '', rows: kirim }) : await apiPost('saveRelawanBayar', { transaksi_id: tx.id, rows: kirim });
     setSaving(false);
-    if (r.ok) { toast('Daftar relawan disimpan'); onSaved(); onClose(); } else toast(r.error, 'error');
+    if (r.ok) { toast(tetap ? 'Daftar relawan tetap disimpan — dipakai untuk pembayaran honor berikutnya' : 'Daftar relawan disimpan'); onSaved && onSaved(r.data); onClose(); } else toast(r.error, 'error');
   }
-  return <Modal title="Daftar penerima honor relawan" size="lg" onClose={onClose}>
-    <div className="text-sm mb-1" style={{ color: COLORS.ink }}>{tx.uraian} · <b>{fmt(tx.riil)}</b></div>
+  return <Modal title={tetap ? 'Daftar relawan tetap (pengaturan gaji)' : 'Daftar penerima honor relawan'} size="lg" onClose={onClose}>
+    {tetap ? <div className="text-xs mb-3" style={{ color: COLORS.muted }}>Atur nama, tugas, upah per hari, dan cara bayar kapan saja — tidak perlu menunggu realisasi.
+      Pembayaran honor berikutnya otomatis memakai daftar ini (centang = biasanya hadir). Pembayaran yang sudah tersimpan tidak berubah.{sumber === 'dari pembayaran terakhir' ? ' Saat ini diisi dari pembayaran terakhir — periksa lalu Simpan.' : ''}</div>
+    : <><div className="text-sm mb-1" style={{ color: COLORS.ink }}>{tx.uraian} · <b>{fmt(tx.riil)}</b></div>
     <div className="text-xs mb-3" style={{ color: COLORS.muted }}>{rows.length ? 'Centang yang hadir/dibayar, hapus centang yang tidak hadir. Jumlah yang dicentang harus sama dengan ' + fmt(tx.riil) + '.'
-      : 'Isi daftar relawan sekali (nama, tugas, hari kerja, upah per hari). Pembayaran berikutnya tinggal centang yang hadir.'}</div>
+      : 'Isi daftar relawan sekali (nama, tugas, hari kerja, upah per hari). Pembayaran berikutnya tinggal centang yang hadir.'}</div></>}
     <div className="flex gap-2 flex-wrap mb-3">
       <Btn size="sm" onClick={tambahKosong}>{I.plusSm} Tambah relawan</Btn>
       <Btn size="sm" kind="ghost" onClick={function() { setTempel(tempel === null ? '' : null); }}>{I.file} Tempel daftar</Btn>
@@ -2569,7 +2603,7 @@ function RelawanForm({ tx, toast, onClose, onSaved }) {
       </div>
     </div>}
     {!rows.length && tempel === null && <div className="text-sm rounded-lg p-3 mb-3 text-center" style={{ border: '1.5px dashed ' + COLORS.line, color: COLORS.muted }}>Belum ada relawan. Ketuk <b>Tambah relawan</b> atau <b>Tempel daftar</b>.</div>}
-    {sumber.indexOf('disalin') === 0 && <div className="text-sm rounded-lg p-2.5 mb-3" style={{ background: '#EAF0F8', color: COLORS.blue }}>Daftar {sumber} — semua dicentang hadir. Hapus centang yang tidak hadir; ubah hari kerja bila dibayar per periode.</div>}
+    {sumber.indexOf('disalin') === 0 && <div className="text-sm rounded-lg p-2.5 mb-3" style={{ background: '#EAF0F8', color: COLORS.blue }}>Daftar {sumber}{/tetap/.test(sumber) ? ' (centang = biasanya hadir)' : ' — semua dicentang hadir'}. Sesuaikan centang dengan yang hadir; ubah hari kerja bila dibayar per periode.</div>}
     {rows.length > 0 && !modeUbah && <div className="flex items-center justify-between text-xs mb-1.5" style={{ color: COLORS.muted }}>
       <span>{hadir.length} hadir dari {rows.length}</span>
       <span className="flex gap-3"><button type="button" onClick={function() { semua(true); }} style={{ color: COLORS.blue }}>Centang semua</button>
@@ -2598,9 +2632,9 @@ function RelawanForm({ tx, toast, onClose, onSaved }) {
     </div>; })}
     {modeUbah && rows.length > 0 && <Btn size="sm" kind="ghost" onClick={tambahKosong}>{I.plusSm} Tambah relawan</Btn>}
     <div className="mt-3 pt-3" style={{ borderTop: '1px solid ' + COLORS.line }}>
-      <div className="flex justify-between text-sm"><span style={{ color: COLORS.muted }}>{hadir.length} relawan dibayar · total</span><b className="num">{fmt(total)}</b></div>
+      <div className="flex justify-between text-sm"><span style={{ color: COLORS.muted }}>{tetap ? hadir.length + ' relawan aktif · honor per hari' : hadir.length + ' relawan dibayar · total'}</span><b className="num">{fmt(total)}</b></div>
       {selisih !== 0 && <div className="text-xs mt-1" style={{ color: COLORS.danger }}>Selisih {fmt(selisih)} dari nilai transaksi — harus sama sebelum disimpan.</div>}
-      <div className="flex gap-2 mt-2"><Btn kind="ghost" onClick={onClose}>Batal</Btn><Btn onClick={simpan} disabled={saving || selisih !== 0 || !hadir.length}>{saving ? I.spinner : I.check} Simpan</Btn></div>
+      <div className="flex gap-2 mt-2"><Btn kind="ghost" onClick={onClose}>Batal</Btn><Btn onClick={simpan} disabled={saving || selisih !== 0 || (!tetap && !hadir.length) || (tetap && !rows.length)}>{saving ? I.spinner : I.check} Simpan</Btn></div>
     </div>
   </Modal>;
 }
