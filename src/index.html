@@ -1400,6 +1400,7 @@ const LPDH_BHP_KATA = [
   ['APD', /masker|sarung\s*tangan|hand\s*scoo?n|glove|hair\s*net|penutup\s*kepala|celemek|apron|sepatu\s*boot|\bapd\b/i],
   ['Alat Kebersihan', /mama\s*lemon|sunlight|deterj?en|detergen|soklin|vixal|supersol|kinclong|sabun|wipol|\bpel\b|sapu|sikat|spons|sponge|kanebo|\blap\b|tr[au]?sh\s*bag|thrush\s*bag|plastik\s*sampah|kantong\s*sampah|tis+u|tissue|pembersih|rinso|kebersihan/i],
   ['ATK', /kertas|\bhvs\b|pulpen|\bpena\b|spidol|tinta|\bmap\b|lakban|stapler|amplop|materai|buku\s*tulis|\batk\b|printer|isolasi|cartridge/i],
+  ['Air Minum', /galon|air\s*mineral|le\s*minerale?|leminerale?|\baqua\b|air\s*minum|gelas\s*air/i],
 ];
 function lpdhBarisOps(kategori, uraian) {
   if (kategori === 'Barang Habis Pakai') {
@@ -1492,10 +1493,14 @@ function isiLPDH(wb, data, opsi) {
     // penjelasan melebihi pagu (catatan akuntan di pengajuan) ditaruh paling depan agar tidak terpotong
     const jelas = a.filter(function(t) { return t.catatan; }).map(function(t) { return 'Penjelasan: ' + t.catatan; });
     // biaya admin transfer dirangkum satu kalimat (jumlah transaksi & totalnya) agar terpisah jelas dari pos lain di baris yang sama
-    const adm = a.filter(function(t) { return t.kategori === 'Biaya Admin Bank'; }), lainnya = a.filter(function(t) { return t.kategori !== 'Biaya Admin Bank'; });
+    // di baris Lain-lain: biaya admin & barang habis pakai (yang tak cocok baris lain) masing-masing dirangkum terpisah (jumlah transaksi & total)
+    const adm = a.filter(function(t) { return t.kategori === 'Biaya Admin Bank'; });
+    const bhp = r === 21 ? a.filter(function(t) { return t.kategori === 'Barang Habis Pakai'; }) : [];
+    const lainnya = a.filter(function(t) { return t.kategori !== 'Biaya Admin Bank' && bhp.indexOf(t) < 0; });
     const ringkasAdm = adm.length ? ['Biaya admin transfer bank: ' + adm.length + ' transaksi = ' + lpdhRp(jml(adm))] : [];
-    set(C, 'M' + r, lpdhGabung(jelas.concat(ringkasAdm, lainnya.map(function(t) { return t.kategori === b[1] || b[2].indexOf(t.kategori) >= 0 ? t.uraian : t.kategori + ': ' + t.uraian; })), '; '));
-    opsRingkas.push({ baris: b[1], jumlah: n, total: jml(a), admin: adm.length, adminTotal: jml(adm) });
+    const ringkasBhp = bhp.length ? ['Barang habis pakai: ' + bhp.length + ' transaksi = ' + lpdhRp(jml(bhp)) + ' (' + bhp.map(function(t) { return t.uraian; }).join(', ') + ')'] : [];
+    set(C, 'M' + r, lpdhGabung(jelas.concat(ringkasBhp, ringkasAdm, lainnya.map(function(t) { return t.kategori === b[1] || b[2].indexOf(t.kategori) >= 0 ? t.uraian : t.kategori + ': ' + t.uraian; })), '; '));
+    opsRingkas.push({ baris: b[1], jumlah: n, total: jml(a), admin: adm.length, adminTotal: jml(adm), bhp: bhp.length, bhpTotal: jml(bhp) });
   });
 
   { const jl = grup.rl.filter(function(t) { return t.catatan; }).map(function(t) { return 'Penjelasan: ' + t.catatan; });

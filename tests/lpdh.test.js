@@ -43,6 +43,7 @@ function dataUji(nOp) {
     && L.lpdhBarisOps('Barang Habis Pakai', 'Trash Bag 5 pack')[1] === 'Alat kebersihan'
     && L.lpdhBarisOps('Barang Habis Pakai', 'beli masker & sarung tangan, sabun')[1].startsWith('APD')
     && L.lpdhBarisOps('Barang Habis Pakai', 'kertas HVS & spidol')[1] === 'ATK'
+    && L.lpdhBarisOps('Barang Habis Pakai', 'Pembelian 5 Galon Leminerale, Plastik 12')[0] === 12 && L.lpdhBarisOps('Barang Habis Pakai', 'Air mineral gelas 3 dus')[0] === 12
     && L.lpdhBarisOps('Barang Habis Pakai', 'Plastik 1/2 17 pack')[1] === 'Lain-lain'
     && L.lpdhBarisOps('Barang Habis Pakai', 'Pembelian BHP tgl 6 Okt')[1] === 'Lain-lain'
     && L.lpdhBarisOps('Air Bersih (Sumur)', '')[1] === 'Air PDAM' && L.lpdhBarisOps('Konsumsi Tamu', 'rapat')[1] === 'Lain-lain',
@@ -113,6 +114,18 @@ function dataUji(nOp) {
   ok(v('E_Saldo', 'E10') === 9060000, 'saldo VA rekening dari isian akuntan');
   ok(v('E_Saldo', 'D19') === 'SP2D-9' && v('E_Saldo', 'I19') === 'KW-TU-9' && v('E_Saldo', 'J19') === 'https://cloud/tu9', 'top up: SP2D, kuitansi, link bukti terima');
   ok(v('D_Insentif', 'C19') === 'PPK/1; PPK/2' && v('D_Insentif', 'C20') === 500000 && v('D_Insentif', 'C24') === 'KW-1; KW-2' && v('D_Insentif', 'C25') === 'Ya' && v('D_Insentif', 'C27') === 'TRX-1; TRX-2', 'insentif: pernyataan PPK, kuitansi, ttd, referensi VA');
+  {
+    const wb5 = new ExcelJS.Workbook(); await wb5.xlsx.readFile(TPL);
+    const d5 = dataUji(0);
+    d5.transaksi = [tx(20, 'Operasional', 'Biaya Admin Bank', 6500), tx(21, 'Operasional', 'Biaya Admin Bank', 6500),
+      tx(22, 'Operasional', 'Barang Habis Pakai', 120000, { uraian: 'Plastik 1/2 17 pack' }), tx(23, 'Operasional', 'Barang Habis Pakai', 298000, { uraian: 'Pembelian 5 Galon Leminerale' })];
+    const r5 = L.isiLPDH(wb5, d5, { waktu: new Date(2026, 9, 29, 5, 30) });
+    const w5 = (a) => wb5.getWorksheet('C_Operasional').getCell(a).value;
+    const m21 = String(w5('M21'));
+    ok(w5('G21') === 133000 && w5('G12') === 298000 && w5('F21') === '3 transaksi', 'galon → baris Air minum (Rp 298.000); Lain-lain tinggal plastik + admin (Rp 133.000)');
+    ok(/Barang habis pakai: 1 transaksi = Rp 120\.000 \(Plastik 1\/2 17 pack\)/.test(m21) && /Biaya admin transfer bank: 2 transaksi = Rp 13\.000/.test(m21), 'Lain-lain: barang habis pakai & biaya admin dirangkum terpisah (' + m21.slice(0, 120) + ')');
+    ok(r5.opsRingkas.some(x => x.baris === 'Lain-lain' && x.bhp === 1 && x.adminTotal === 13000), 'ringkasan memuat jumlah BHP & admin di Lain-lain');
+  }
   {
     const wb3 = new ExcelJS.Workbook(); await wb3.xlsx.readFile(TPL);
     const d3 = dataUji(0);
