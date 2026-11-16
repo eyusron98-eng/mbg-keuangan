@@ -402,7 +402,16 @@ async function isiBahanBaku(page, uraian, volume, harga) {
     await page.click('nav:visible >> text=Rencana Ops');
     await page.waitForSelector('[aria-label="Matriks rencana operasional"]');
     assert(!(await page.isVisible('th:has-text("Sewa")')), 'kolom Sewa Kendaraan masih tampil');
-    assert(await page.isVisible('text=sudah lewat >> nth=0'), 'tanggal lewat tidak ditandai');
+    assert(await page.isVisible('text=lewat · >> nth=0'), 'tanggal lewat tidak ditandai');
+    // PM & HPE hari yang sudah lewat tetap bisa diubah; pagu periode penuh ikut berubah
+    await page.waitForSelector('text=Satu periode penuh');
+    const paguAwal = await page.innerText('text=/Pagu periode \\(\\d+ HPE/ >> xpath=..');
+    await page.fill('[aria-label="PM 2026-10-27"]', '500');
+    await page.uncheck('[aria-label="HPE 2026-10-28"]');
+    const paguBaru = await page.innerText('text=/Pagu periode \\(\\d+ HPE/ >> xpath=..');
+    assert(paguAwal !== paguBaru && /9 HPE/.test(paguBaru), 'pagu periode tidak ikut PM/HPE hari lewat: ' + paguAwal + ' → ' + paguBaru);
+    await page.check('[aria-label="HPE 2026-10-28"]');
+    await page.fill('[aria-label="PM 2026-10-27"]', '1000');
     // sel kosong di tanggal lewat tidak membuka form
     await page.click('[aria-label="Gas 2026-10-28"]');
     await page.waitForTimeout(300);

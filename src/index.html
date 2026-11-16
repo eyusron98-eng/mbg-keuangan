@@ -1741,20 +1741,22 @@ function roUsulkan(ctx, setelan, hariSet, seed, tetap, dariTgl) {
 // dariTgl: hari ini — pagu & rencana "aktif" hanya menghitung hari ini s.d. akhir periode (hari yang lewat tidak dihitung)
 function roRingkas(items, ctx, setelan, hariSet, dariTgl) {
   const hari = roHari(ctx.periode, hariSet), pakai = roPakai(items, ctx);
-  let paguTot = 0, rencanaTot = 0, lebih = 0, nLebih = 0, paguAktif = 0, rencanaAktif = 0, nAktif = 0, nLewat = 0, sisaHari = 0;
+  let paguTot = 0, rencanaTot = 0, lebih = 0, nLebih = 0, paguAktif = 0, rencanaAktif = 0, nAktif = 0, nLewat = 0, sisaHari = 0,
+    paguLewat = 0, pakaiLewat = 0, lebihLewat = 0, nLebihLewat = 0, nHpe = 0;
   const per = hari.map(function(h) {
     const pagu = roPagu(h, setelan), batas = roBatas(h, setelan), p = pakai[h.tanggal] || 0;
     const aktif = !dariTgl || h.tanggal >= dariTgl;
     paguTot += pagu; rencanaTot += p;
+    if (!h.libur) nHpe++;
     if (aktif) { paguAktif += pagu; rencanaAktif += p; if (!h.libur) nAktif++; if (p > pagu) { lebih += p - pagu; nLebih++; } else sisaHari += pagu - p; }
-    else if (!h.libur) nLewat++;
+    else { if (!h.libur) nLewat++; paguLewat += pagu; pakaiLewat += p; if (p > pagu) { lebihLewat += p - pagu; nLebihLewat++; } }
     return Object.assign({}, h, { pagu: pagu, batas: batas, pakai: p, lewat: !aktif, aktual: (ctx.aktual || {})[h.tanggal] || 0 });
   });
   const pmap = {}; (ctx.penerima || []).forEach(function(p) { pmap[p.id] = p; });
   const tak = items.filter(function(x) { return !x.tanggal; });
   const takNilai = tak.reduce(function(s, x) { return s + x.nominal + roFee(x, pmap, ctx.bankVA); }, 0);
   return { hari: per, paguTot: paguTot, rencanaTot: rencanaTot, paguAktif: paguAktif, rencanaAktif: rencanaAktif, nAktif: nAktif, nLewat: nLewat,
-    lebih: lebih, nLebih: nLebih, sisaHari: sisaHari, takMuat: tak.length, takNilai: takNilai, kebutuhanAktif: rencanaAktif + takNilai, kurang: lebih + takNilai };
+    lebih: lebih, nLebih: nLebih, sisaHari: sisaHari, paguLewat: paguLewat, pakaiLewat: pakaiLewat, lebihLewat: lebihLewat, nLebihLewat: nLebihLewat, nHpe: nHpe, takMuat: tak.length, takNilai: takNilai, kebutuhanAktif: rencanaAktif + takNilai, kurang: lebih + takNilai };
 }
 // Label pendek kolom tabel (pos operasional)
 const RO_LABEL = { 'Gaji/honor relawan pekerja SPPG': 'Honor relawan', 'Insentif Guru/PIC Sekolah': 'PIC sekolah', 'Insentif Kader Posyandu': 'Kader posyandu',
@@ -2032,8 +2034,20 @@ function RencanaOpsPage({ session, scope, toast }) {
             {ring.kebutuhanAktif > ring.paguAktif ? ' sebesar ' + fmt(ring.kebutuhanAktif - ring.paguAktif) : ''}.
             {ring.takMuat > 0 && ring.paguAktif > ring.rencanaAktif ? ' Sisa pagu ' + fmt(ring.paguAktif - ring.rencanaAktif) + ' tersebar kecil di tiap hari, tidak cukup untuk satu pun barang yang tidak muat.' : ''} Kurangi kebutuhan atau bahas dengan Yayasan.</div>
           : items.length > 0 && <div className="text-xs pt-1" style={{ color: COLORS.green }}>Semua kebutuhan muat di pagu harian.</div>}
-        {ring.nLewat > 0 && <div className="text-xs pt-1" style={{ color: COLORS.muted }}>{ring.nLewat} HPE sudah lewat tidak dihitung · pagu satu periode penuh {fmt(ring.paguTot)}.</div>}
+        {ring.nLewat > 0 && <div className="text-xs pt-1" style={{ color: COLORS.muted }}>{ring.nLewat} HPE sudah lewat tidak dihitung di kotak ini — lihat kotak periode penuh di bawah.</div>}
       </div>
+      {(function() { const tot = ring.pakaiLewat + ring.rencanaAktif + ring.takNilai, sel = ring.paguTot - tot, lebihP = sel < 0;
+        const kosong = ring.hari.filter(function(h) { return h.lewat && !h.libur && !h.pakai; });
+        return <div className="rounded-lg p-3 text-sm space-y-1 mt-2" style={{ background: lebihP || ring.nLebihLewat ? '#FBF1EE' : '#EEF5F0', border: '1px solid ' + (lebihP ? '#E9C3BA' : COLORS.line) }}>
+          <div className="font-semibold" style={{ color: COLORS.ink }}>Satu periode penuh ({fmtDateRange(ctx.periode.tanggal_mulai, ctx.periode.tanggal_akhir)})</div>
+          <div className="flex justify-between"><span style={{ color: COLORS.muted }}>Pagu periode ({ring.nHpe} HPE, mengikuti PM tiap hari)</span><b className="num">{fmt(ring.paguTot)}</b></div>
+          <div className="flex justify-between"><span style={{ color: COLORS.muted }}>Sudah lewat ({ring.nLewat} HPE) — diajukan / terealisasi</span><b className="num">{fmt(ring.pakaiLewat)}</b></div>
+          <div className="flex justify-between"><span style={{ color: COLORS.muted }}>Hari ini – akhir — terjadwal{ring.takNilai ? ' + tidak muat' : ''}</span><b className="num">{fmt(ring.rencanaAktif + ring.takNilai)}</b></div>
+          <div className="flex justify-between font-semibold pt-1" style={{ borderTop: '1px solid ' + COLORS.line }}><span>Perkiraan total operasional periode</span><b className="num">{fmt(tot)}</b></div>
+          <div className="flex justify-between font-bold" style={{ color: lebihP ? COLORS.danger : COLORS.green }}><span>{lebihP ? 'Melebihi pagu periode' : 'Sisa pagu periode'}</span><b className="num">{fmt(Math.abs(sel))}</b></div>
+          {ring.nLebihLewat > 0 && <div className="text-xs" style={{ color: COLORS.danger }}>{ring.nLebihLewat} hari yang sudah lewat melebihi pagu harian (total {fmt(ring.lebihLewat)}): {ring.hari.filter(function(h) { return h.lewat && h.pakai > h.pagu; }).map(function(h) { return h.nama + ' ' + fmtDate(h.tanggal) + ' ' + fmt(h.pakai - h.pagu); }).join(', ')}. Pastikan ada penjelasan di LPDH hari itu.</div>}
+          {kosong.length > 0 && <div className="text-xs" style={{ color: '#9A6A0B' }}>HPE yang sudah lewat tanpa operasional: {kosong.map(function(h) { return h.nama + ' ' + fmtDate(h.tanggal); }).join(', ')}. Bila hari itu tidak ada pelayanan, hapus centang HPE-nya agar pagu periode tidak terhitung lebih.</div>}
+        </div>; })()}
       {catatan && <div className="text-xs mt-2" style={{ color: COLORS.muted }}>{catatan}</div>}
       {bisaUbah && <div className="flex flex-wrap gap-2 mt-3">
         <Btn size="sm" onClick={function() { items.some(function(x) { return !terkunci(x); }) ? setKonfirm(true) : usulkan(); }}>{I.trend} {items.length ? 'Usulkan ulang' : 'Usulkan otomatis'}</Btn>
@@ -2050,7 +2064,7 @@ function RencanaOpsPage({ session, scope, toast }) {
     </div>
 
     {tampil === 'tabel' && <RencanaMatriks m={roMatriks(hitung, ctx, setelan, hariSet, hariIni)} bisaUbah={bisaUbah} ajukanTgl={ajukanTgl} lewat={lewat}
-      onPm={function(t, pm) { ubahHari(t, { pm: pm }); }} pmSetup={ctx.periode.penerima}
+      onPm={function(t, pm) { ubahHari(t, { pm: pm }); }} onHpe={function(t, v) { ubahHari(t, { libur: !v }); }} pmSetup={ctx.periode.penerima}
       waHari={function(t) { const ids = Object.keys(grupAju(t)); return ids.length ? { n: ids.length, belum: ids.some(function(id) { return !waSudah(id); }) } : null; }}
       onWaHari={function(t) { setWaText(waGrup(grupAju(t))); }}
       onSel={function(t, k, c) {
@@ -2077,10 +2091,10 @@ function RencanaOpsPage({ session, scope, toast }) {
         <div className="flex items-center justify-between gap-2">
           <div><div className="font-semibold" style={{ color: COLORS.ink }}>{h.nama}, {fmtDate(h.tanggal)}</div>
             <div className="text-xs" style={{ color: COLORS.muted }}>{sudahLewat ? 'Sudah lewat · ' : ''}{h.libur ? 'Bukan HPE — pagu 0' : 'PM ' + fmtNoRp(h.pm) + ' · pagu ' + fmt(h.pagu)}{h.aktual ? ' · terealisasi ' + fmt(h.aktual) : ''}</div></div>
-          {bisaUbah && !sudahLewat && <label className="text-xs flex items-center gap-1 shrink-0" style={{ color: COLORS.ink }}>
+          {bisaUbah && <label className="text-xs flex items-center gap-1 shrink-0" style={{ color: COLORS.ink }}>
             <input type="checkbox" checked={!h.libur} onChange={function(e) { ubahHari(h.tanggal, { libur: !e.target.checked }); }} aria-label={'HPE ' + h.tanggal}/> HPE</label>}
         </div>
-        {!h.libur && bisaUbah && !sudahLewat && <div className="flex items-center gap-2 mt-2 text-xs" style={{ color: COLORS.muted }}>PM hari ini
+        {!h.libur && bisaUbah && <div className="flex items-center gap-2 mt-2 text-xs" style={{ color: COLORS.muted }}>PM hari ini
           <input value={h.pm} inputMode="numeric" aria-label={'PM ' + h.tanggal} onChange={function(e) { ubahHari(h.tanggal, { pm: Number(e.target.value.replace(/\D/g, '')) || 0 }); }}
             style={Object.assign({}, inputStyle, { width: 90, minHeight: 32, padding: '4px 8px', fontSize: 13 })}/></div>}
         <div className="mt-2 h-2 rounded-full overflow-hidden" style={{ background: COLORS.paper }}>
@@ -2131,7 +2145,7 @@ function RencanaOpsPage({ session, scope, toast }) {
       onDelete={function() { ubah(function(a) { return a.filter(function(x) { return x.id !== edit.id; }); }); setEdit(null); }}/>}
   </div>;
 }
-function RencanaMatriks({ m, bisaUbah, ajukanTgl, onSel, onAjukan, terkunci, lewat, onPm, pmSetup, waHari, onWaHari }) {
+function RencanaMatriks({ m, bisaUbah, ajukanTgl, onSel, onAjukan, terkunci, lewat, onPm, onHpe, pmSetup, waHari, onWaHari }) {
   const r = m.ring, kol = m.kolom;
   const th = { padding: '6px 8px', fontSize: 11, fontWeight: 700, color: COLORS.muted, textAlign: 'right', whiteSpace: 'nowrap', background: COLORS.paper, borderBottom: '1px solid ' + COLORS.line };
   const td = { padding: '6px 8px', fontSize: 12, textAlign: 'right', whiteSpace: 'nowrap', borderBottom: '1px solid ' + COLORS.line, fontVariantNumeric: 'tabular-nums' };
@@ -2143,7 +2157,7 @@ function RencanaMatriks({ m, bisaUbah, ajukanTgl, onSel, onAjukan, terkunci, lew
   const totFee = m.feeAktif;
   return <Card pad={false}>
     <div className="px-4 pt-3 pb-2 text-xs" style={{ color: COLORS.muted }}>Geser ke samping untuk melihat semua pos. Ketuk sel untuk mengubah/menambah; ketuk sel merah "Tidak muat" untuk melihat barangnya.
-      Usulan otomatis hanya mengisi sampai {m.batas}% pagu (cadangan bila PM turun); sisanya boleh diisi manual. Tanggal yang sudah lewat (abu-abu) tidak bisa diisi atau diajukan.
+      Usulan otomatis hanya mengisi sampai {m.batas}% pagu (cadangan bila PM turun); sisanya boleh diisi manual. Tanggal yang sudah lewat (abu-abu) tidak bisa diisi atau diajukan — anggarannya diubah lewat menu Riwayat; PM & HPE-nya tetap bisa diubah.
       Tombol Ajukan mengirim baris yang penerimanya sudah dipilih; satu baris bisa diajukan sendiri dari selnya.
       PM tiap hari bisa diubah langsung di kolom Hari (bingkai kuning = berbeda dari PM setup {fmtNoRp(pmSetup)}); pagu hari itu ikut berubah — jangan lupa Simpan.
       <span className="inline-flex items-center gap-1 ml-2"><span style={{ width: 10, height: 10, background: '#DCEFE3', display: 'inline-block', borderRadius: 2 }}/> sudah diajukan</span>
@@ -2164,13 +2178,15 @@ function RencanaMatriks({ m, bisaUbah, ajukanTgl, onSel, onAjukan, terkunci, lew
             const bg = sudahLewat ? '#EEEEEA' : lebih ? '#F8E9E5' : h.libur ? COLORS.paper : COLORS.surface;
             return <tr key={h.tanggal}>
               <td style={Object.assign({}, td, kiri, { background: bg, fontWeight: 600, color: COLORS.ink })}>{h.nama} {h.tanggal.slice(8)}/{h.tanggal.slice(5, 7)}
-                {bisaUbah && !sudahLewat && !h.libur
-                  ? <div className="flex items-center gap-1 mt-0.5" style={{ fontSize: 10, fontWeight: 400, color: COLORS.muted }}>PM
+                {bisaUbah && !h.libur
+                  ? <div className="flex items-center gap-1 mt-0.5" style={{ fontSize: 10, fontWeight: 400, color: COLORS.muted }}>{sudahLewat ? 'lewat · ' : ''}PM
                       <input value={h.pmIsian} inputMode="numeric" aria-label={'PM ' + h.tanggal} onClick={function(e) { e.stopPropagation(); }}
                         onChange={function(e) { onPm(h.tanggal, Number(e.target.value.replace(/\D/g, '')) || 0); }}
                         style={{ width: 56, padding: '2px 4px', fontSize: 11, border: '1px solid ' + (h.pmUbah && h.pm !== pmSetup ? COLORS.amber : COLORS.line), borderRadius: 6,
                           fontWeight: h.pmUbah && h.pm !== pmSetup ? 700 : 400, color: COLORS.ink, background: '#fff', textAlign: 'right' }}/></div>
-                  : <div style={{ fontSize: 10, fontWeight: 400, color: COLORS.muted }}>{sudahLewat ? 'sudah lewat' : h.libur ? 'bukan HPE' : 'PM ' + fmtNoRp(h.pm)}</div>}</td>
+                  : <div style={{ fontSize: 10, fontWeight: 400, color: COLORS.muted }}>{sudahLewat ? 'sudah lewat · ' : ''}{h.libur ? 'bukan HPE' : 'PM ' + fmtNoRp(h.pm)}</div>}
+                {bisaUbah && <label className="flex items-center gap-1 mt-0.5" style={{ fontSize: 10, fontWeight: 400, color: COLORS.muted }} onClick={function(e) { e.stopPropagation(); }}>
+                  <input type="checkbox" checked={!h.libur} onChange={function(e) { onHpe(h.tanggal, e.target.checked); }} aria-label={'HPE ' + h.tanggal} style={{ width: 12, height: 12 }}/> HPE</label>}</td>
               {kol.map(function(k) { const c = row[k];
                 const bisaTambah = !h.libur && !sudahLewat && bisaUbah;
                 return <td key={k} onClick={function() { if (c || bisaTambah) onSel(h.tanggal, k, c); }} style={Object.assign({}, td, { cursor: c || bisaTambah ? 'pointer' : 'default',

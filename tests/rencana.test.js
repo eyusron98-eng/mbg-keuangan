@@ -85,6 +85,14 @@ ok(!u5.items.some(x => x.bagian && x.nominal < 250000), 'belanja kecil tidak dip
   ok(g.sisaLebih === 0 && r2.nLebih === 0, 'geser otomatis: tidak ada hari melebihi pagu (' + r2.hari.map(h => h.pakai + '/' + h.pagu).join(' ') + ')');
   ok(g.items.find(x => x.id === 'H').tanggal === '2026-11-09' && g.items.find(x => x.id === 'A').tanggal === '2026-11-09', 'baris rutin & yang sudah diajukan tidak digeser');
   ok(g.items.filter(x => x.kategori === 'Gas').reduce((a, x) => a + x.nominal, 0) === 2400000, 'nominal gas utuh setelah dipindah/dipecah'); }
+{ // periode penuh: hari lewat dihitung terpisah; PM & HPE hari lewat bisa diubah (pagu periode ikut)
+  const its = [{ id: 'a', tanggal: '2026-11-09', kategori: 'Gas', nominal: 3500000, penerima_id: 'WANDA', luar: true, status: 'TEREALISASI' },
+    { id: 'b', tanggal: '2026-11-16', kategori: 'Gas', nominal: 2000000, penerima_id: 'WANDA' }];
+  const r1 = R.roRingkas(its, ctx, { indeks: 100, batas: 100 }, {}, '2026-11-16');
+  ok(r1.nHpe === 10 && r1.paguTot === 30000000 && r1.pakaiLewat === 3500000 && r1.nLebihLewat === 1 && r1.lebihLewat === 500000 && r1.rencanaAktif === 2000000,
+    'periode penuh: pagu 10 HPE, pemakaian hari lewat & kelebihannya dihitung (' + [r1.paguTot, r1.pakaiLewat, r1.lebihLewat].join('/') + ')');
+  const r2 = R.roRingkas(its, ctx, { indeks: 100, batas: 100 }, { '2026-11-10': { libur: true }, '2026-11-09': { pm: 1200 } }, '2026-11-16');
+  ok(r2.nHpe === 9 && r2.paguTot === 30000000 - 3000000 + 600000 && r2.nLebihLewat === 0, 'hari lewat bukan HPE & PM hari lewat diubah → pagu periode ikut (' + r2.paguTot + ')'); }
 const kosong = R.roUsulkan(Object.assign({}, ctx, { riwayat: null }), set, {}, 1);
 ok(kosong.items.length === 0 && /manual/.test(kosong.catatan), 'tanpa riwayat: tidak ada usulan, diminta isi manual');
 
