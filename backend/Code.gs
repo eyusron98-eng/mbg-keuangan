@@ -135,7 +135,7 @@ function handleRequest(e, method) {
     }
     let result;
     switch (action) {
-      case 'ping':              result = { ok: true, time: new Date().toISOString(), version: 'v6-ba-sec29' }; break;
+      case 'ping':              result = { ok: true, time: new Date().toISOString(), version: 'v6-ba-sec30' }; break;
       case 'login':             result = login(params); break;
       case 'getPeriodeList':    result = getPeriodeList(params); break;
       case 'getActivePeriode':  result = getActivePeriode(params); break;
@@ -188,6 +188,7 @@ function handleRequest(e, method) {
       case 'getKwitansiCetak':   result = getKwitansiCetak(params); break;
       case 'getTugasHarian':     result = getTugasHarian(params); break;
       case 'getKwitansiPerlu':   result = getKwitansiPerlu(params); break;
+      case 'getTtdPengesahan':   result = getTtdPengesahan(params); break;
       case 'hapusTtd':          result = hapusTtd(params); break;
       case 'getDataPenerima':   result = getDataPenerima(params); break;
       case 'saveDataPenerima':  result = saveDataPenerima(params); break;
@@ -2810,6 +2811,12 @@ function ttdSasaran(me, p) {
     if (!d) return { error: 'Pilih dapur' };
     return { kunci: 'KEPALA_' + d };
   }
+  if (untuk === 'wakil') {   // Perwakilan Mitra/Yayasan (lembar pengesahan LPDH): per dapur, diunggah yayasan/admin/PIC dapur itu
+    if (['yayasan', 'admin', 'pic'].indexOf(me.role) < 0) return { error: 'Tanda tangan Perwakilan Yayasan diunggah oleh Yayasan, admin, atau PIC' };
+    const d = me.role === 'pic' ? me.dapur : String(p.dapur || '');
+    if (!d || !getDapur().data.some(function(x) { return x.id === d; })) return { error: 'Pilih dapur' };
+    return { kunci: 'WAKIL_' + d };
+  }
   if (untuk === 'penerima') {
     const pn = cariDataPenerima(String(p.id || ''));
     if (!pn) return { error: 'Data penerima tidak ditemukan' };
@@ -3014,6 +3021,16 @@ function kwitansiPerlu(k) {
   return JENIS_KW_FILE.filter(function(j) { return adaIsiKwitansi(k, j) && (!k.file[j] || k.file[j].sig !== sigKwitansi(k, j) || k.kw.some(function(x) { return x.jenis === j && !x.nomor; })); });
 }
 // Ringan: dipanggil saat tombol Unduh LPDH ditekan (bukan saat halaman dibuka)
+// Tanda tangan tiga pihak lembar pengesahan LPDH: Pengawas Keuangan (akuntan), Kepala SPPG, Perwakilan Mitra/Yayasan
+function getTtdPengesahan(p) {
+  const me = authUser(p);
+  if (!me) return { ok: false, error: SESI_ERR };
+  const dapurId = lpdhDapur(me, p.dapur);
+  if (!dapurId) return { ok: false, error: 'Pilih dapur' };
+  const props = PropertiesService.getScriptProperties().getProperties();
+  const akn = getSheet(SHEETS.USERS).getDataRange().getValues().slice(1).find(function(x) { return String(x[4]).toLowerCase() === 'akuntan' && x[5] === dapurId && String(x[6]).toUpperCase() === 'YA'; });
+  return { ok: true, data: { pengawas: akn ? readTtdDataUrl(akn[0], props) : null, kepala: readTtdDataUrl('KEPALA_' + dapurId, props), wakil: readTtdDataUrl('WAKIL_' + dapurId, props) } };
+}
 function getKwitansiPerlu(p) {
   const me = authUser(p);
   if (!me) return { ok: false, error: SESI_ERR };

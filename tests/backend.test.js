@@ -93,7 +93,7 @@ const ok = (c, m) => { console.log((c ? 'PASS ' : 'FAIL ') + m); if (!c) fails++
     ['U3', 'off', 'xxxxxxx', 'Nonaktif', 'pic', 'D001', 'TIDAK'],
   ]);
   const B = env.__book;
-  ok(call(env, 'GET', { action: 'ping' }).version === 'v6-ba-sec29', 'ping menampilkan versi baru');
+  ok(call(env, 'GET', { action: 'ping' }).version === 'v6-ba-sec30', 'ping menampilkan versi baru');
 
   // 1. login lama (teks biasa) berhasil via POST dan password otomatis di-hash
   let r = call(env, 'POST', { action: 'login', username: 'AKUN1', password: 'RahasiaKu9' });
@@ -878,6 +878,22 @@ const ok = (c, m) => { console.log((c ? 'PASS ' : 'FAIL ') + m); if (!c) fails++
     ok(sesudah.length && sesudah.every(n => /\/TTUR\//.test(n)) && sesudah.join() !== sebelum, 'kwitansi relawan lama diberi nomor baru saat dicetak; nomor lama tidak dipakai ulang (' + sesudah.join(', ') + ')');
     r = call(e8, 'POST', { action: 'getDataLPDH', token: tA, dapur: 'D001', tanggal: '2026-10-27' });
     ok(Object.values(r.data.kwitansiNomor.RELAWAN).length === sesudah.length, 'LPDH membawa nomor kwitansi relawan per nama');
+  }
+
+
+  // ── Lembar pengesahan LPDH: TTD Perwakilan Mitra/Yayasan per dapur & bahan TTD tiga pihak ──
+  {
+    const png = 'data:image/png;base64,' + Buffer.from('ttd-wakil').toString('base64');
+    let r = call(e8, 'POST', { action: 'saveTtd', token: tk8('akn'), untuk: 'wakil', fileData: png });
+    ok(!r.ok, 'akuntan tidak menyimpan TTD Perwakilan Yayasan');
+    r = call(e8, 'POST', { action: 'saveTtd', token: tk8('yay'), untuk: 'wakil', fileData: png });
+    ok(!r.ok && /dapur/i.test(r.error), 'Yayasan wajib memilih dapur');
+    r = call(e8, 'POST', { action: 'saveTtd', token: tk8('yay'), untuk: 'wakil', dapur: 'D001', fileData: png });
+    ok(r.ok && e8.__props['ttd_WAKIL_D001'], 'Yayasan menyimpan TTD Perwakilan untuk dapur D001: ' + (r.error || ''));
+    r = call(e8, 'POST', { action: 'getTtdPengesahan', token: tk8('pic') });
+    ok(r.ok && /^data:image/.test(r.data.wakil) && /^data:image/.test(r.data.kepala) && 'pengawas' in r.data, 'bahan TTD pengesahan: pengawas, kepala, perwakilan');
+    r = call(e8, 'POST', { action: 'getTtdPengesahan', token: tk8('yay'), dapur: 'D002' });
+    ok(r.ok && r.data.wakil === null, 'dapur lain tidak memakai TTD perwakilan D001');
   }
 
   console.log(fails ? '\n' + fails + ' GAGAL' : '\nSEMUA LULUS');

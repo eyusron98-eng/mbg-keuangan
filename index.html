@@ -3019,6 +3019,7 @@ try {
   const LPDH_SYARAT = [['kontaminasi', 'Terjadi kontaminasi makanan/gagal penyaluran', 'Tidak'], ['fatal', 'Terjadi kejadian fatal (keracunan)', 'Tidak'], ['suspend', 'SPPG dalam status suspend', 'Tidak'], ['verifikasi', 'Hasil verifikasi ketersediaan & mutu layanan memenuhi', 'Ya'], ['sipgn', 'Data penerima manfaat sudah diinput di SIPGN', 'Ya']];
   const LPDH_HARI_LEBIH = 'Melebihi 5 hari dalam seminggu';
   const LPDH_MAKS_TEKS = 250;
+  const LPDH_TARIF_INSENTIF = 2000;
   function lpdhTgl(s) {
     const p = String(s).split('-').map(Number);
     return new Date(Date.UTC(p[0], p[1] - 1, p[2]));
@@ -3552,7 +3553,68 @@ try {
     if (wb.calcProperties) wb.calcProperties.fullCalcOnLoad = true;else wb.calcProperties = {
       fullCalcOnLoad: true
     };
+    const ringkasan = function () {
+      const status = opsi.statusHari || (info.akhirPekan ? LPDH_HARI_LEBIH : 'HPE');
+      const hpeKe = opsi.hpeKe !== undefined && opsi.hpeKe !== '' ? Number(opsi.hpeKe) : info.hpeKe;
+      const hpeYa = status === 'HPE' && hpeKe >= 1 && hpeKe <= 5;
+      const bb = barisBB.slice(0, LPDH_KAP.bb).reduce(function (a, x) {
+        return a + (Number(x.volume) || 0) * (Number(x.harga) || 0);
+      }, 0);
+      const rl = barisRL.slice(0, LPDH_KAP.rl).reduce(function (a, x) {
+        return a + (Number(x.hari) || 0) * (Number(x.upah) || 0);
+      }, 0);
+      const ops = rl + LPDH_OPS_BARIS.reduce(function (a, b) {
+        return a + (perBaris[b[0]] ? jml(perBaris[b[0]]) : 0);
+      }, 0);
+      const insBayar = ins.length ? jml(ins) : 0;
+      let pm = 0;
+      if (h && hpeYa) {
+        const ymd2 = String(data.tanggal).replace(/-/g, ''),
+          pmK = {};
+        (h.pm || []).forEach(function (x) {
+          pmK[x.kode] = x;
+        });
+        LPDH_KELOMPOK.forEach(function (k) {
+          const x = pmK[k[0]];
+          if (!x) return;
+          const g = Number(x.diterima) || 0,
+            ada = g > 0;
+          const bnba = x.bnba || (ada ? 'Ya' : ''),
+            bast = x.bast || (ada ? 'BAST/' + (data.dapur.kode || data.dapur.id) + '/' + ymd2 + '/' + k[0] : ''),
+            link = x.link || (ada ? id.bast_folder : '');
+          if (ada && bnba === 'Ya' && bast && /^https:\/\//.test(String(link || ''))) pm += g;
+        });
+        const pr = h.produksi || {};
+        pm += (Number(pr.organoleptik) || 0) + (Number(pr.sampel) || 0);
+      }
+      const syaratOk = hpeYa && LPDH_SYARAT.every(function (x) {
+        const v = (h && h.syarat ? h.syarat[x[0]] : '') || x[2];
+        return v === x[2];
+      });
+      const insHitung = syaratOk ? pm * LPDH_TARIF_INSENTIF : 0;
+      const awal = (kp.awal || []).reduce(function (a, v) {
+        return a + Math.round(Number(v) || 0);
+      }, 0);
+      const masuk = tu.reduce(function (a, t) {
+        return a + (t.bagi || []).reduce(function (b, v) {
+          return b + (Number(v) || 0);
+        }, 0);
+      }, 0);
+      return {
+        pm: pm,
+        bb: bb,
+        ops: ops,
+        insHitung: insHitung,
+        insBayar: insBayar,
+        saldoAkhir: awal + masuk - bb - ops - insBayar,
+        usulan: bb + ops + insHitung,
+        status: status,
+        hpeKe: hpeKe,
+        hpeYa: hpeYa
+      };
+    }();
     return {
+      ringkasan: ringkasan,
       saldoVaOtomatis: saldoVaOtomatis,
       kelebihan: kelebihan,
       opsRingkas: opsRingkas,
@@ -6056,6 +6118,30 @@ try {
         return s + t.riil;
       }, 0);
     };
+    async function unduhPengesahan() {
+      setBusy(true);
+      try {
+        if (!window.ExcelJS) await loadScriptOnce(EXCELJS_URL);
+        const res = await fetch(LPDH_TEMPLATE_URL);
+        if (!res.ok) throw new Error('template LPDH tidak ditemukan');
+        const wb = new window.ExcelJS.Workbook();
+        await wb.xlsx.load(await res.arrayBuffer());
+        const r = isiLPDH(wb, data, Object.assign({}, opsi, {
+          waktu: new Date()
+        }));
+        const t = await api('getTtdPengesahan', {
+          dapur: dapurId
+        });
+        const ttd = t.ok && t.data ? t.data : {};
+        const nama = r.namaFile.replace(/\.xlsx$/, '');
+        const hasilPdf = await buildPengesahanPdf(data, r.ringkasan, ttd, nama);
+        hasilPdf.doc.save(nama + '_Pengesahan.pdf');
+        toast('Lembar pengesahan diunduh (kode ' + hasilPdf.kode + ')' + (hasilPdf.kurang.length ? ' — belum ada TTD: ' + hasilPdf.kurang.join(', ') : ''), hasilPdf.kurang.length ? 'error' : undefined);
+      } catch (e) {
+        toast('Gagal membuat lembar pengesahan: ' + e.message, 'error');
+      }
+      setBusy(false);
+    }
     async function unduh() {
       setBusy(true);
       try {
@@ -6509,7 +6595,14 @@ try {
         if (saldoBeda) setKonfirmSaldo(true);else unduh();
       },
       disabled: busy
-    }, busy ? I.spinner : I.download, " Unduh LPDH (.xlsx)")), konfirmSaldo && React.createElement(ConfirmModal, {
+    }, busy ? I.spinner : I.download, " Unduh LPDH (.xlsx)")), React.createElement("div", {
+      className: "mt-2"
+    }, React.createElement(Btn, {
+      full: true,
+      kind: "ghost",
+      onClick: unduhPengesahan,
+      disabled: busy
+    }, busy ? I.spinner : I.file, " Lembar Pengesahan (PDF bertanda tangan)")), konfirmSaldo && React.createElement(ConfirmModal, {
       title: "Saldo VA tidak sinkron",
       confirmLabel: "Tetap unduh",
       onClose: function () {
@@ -9444,7 +9537,10 @@ try {
       toast: toast,
       untuk: "kepala",
       judul: "Tanda tangan Kepala SPPG",
-      ket: "Diunggah oleh PIC. Dipasang otomatis di kolom Kepala SPPG (Menyetujui/Menyerahkan) pada kwitansi."
+      ket: "Diunggah oleh PIC. Dipasang otomatis di kolom Kepala SPPG (Menyetujui/Menyerahkan) pada kwitansi dan lembar pengesahan LPDH."
+    }), ['pic', 'yayasan', 'admin'].indexOf(session.user.role) >= 0 && React.createElement(TtdWakilCard, {
+      session: session,
+      toast: toast
     }), React.createElement(Card, {
       className: "mb-3"
     }, React.createElement(Eyebrow, null, "Akun saya"), React.createElement("div", {
@@ -13575,6 +13671,142 @@ try {
       }
     }, "Hanya PIC, akuntan, atau admin yang bisa menerbitkan.")));
   }
+  async function buildPengesahanPdf(data, rk, ttd, namaBerkas) {
+    const JsPDF = await ensureJsPDF();
+    const doc = new JsPDF({
+      unit: 'mm',
+      format: 'a4',
+      orientation: 'portrait'
+    });
+    const W = 210,
+      M = 18,
+      id = data.identitas || {},
+      ink = [33, 37, 41];
+    const tg = String(data.tanggal).split('-'),
+      tgl = tg[2] + '-' + tg[1] + '-' + tg[0];
+    doc.setTextColor.apply(doc, ink);
+    let y = 22;
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(13);
+    doc.text('LEMBAR PENGESAHAN', W / 2, y, {
+      align: 'center'
+    });
+    y += 6;
+    doc.setFontSize(11);
+    doc.text('LAPORAN PENGGUNAAN DANA HARIAN (LPDH) SPPG', W / 2, y, {
+      align: 'center'
+    });
+    y += 5.5;
+    doc.setFontSize(10);
+    doc.text('PROGRAM MAKAN BERGIZI GRATIS TAHUN ANGGARAN ' + tg[0], W / 2, y, {
+      align: 'center'
+    });
+    y += 10;
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(9.5);
+    [['ID SPPG / Nama SPPG', (id.id_sppg || '') + ' / ' + data.dapur.nama], ['Kabupaten/Kota, Provinsi', (id.kabupaten || '') + ', ' + (id.provinsi || '')], ['Mitra/Yayasan', id.yayasan || ''], ['Tanggal pelayanan', tgl], ['Status hari', rk.status + (rk.status === 'HPE' ? ' ke-' + rk.hpeKe : '')], ['Nama berkas', namaBerkas]].forEach(function (b) {
+      doc.text(b[0], M, y);
+      doc.text(':', M + 56, y);
+      const v = doc.splitTextToSize(String(b[1]), W - M - (M + 60));
+      doc.text(v, M + 60, y);
+      y += Math.max(1, v.length) * 4.6;
+    });
+    y += 4;
+    doc.setFont('helvetica', 'bold');
+    doc.text('Ringkasan angka laporan', M, y);
+    y += 5;
+    doc.setFont('helvetica', 'normal');
+    const nf = function (n) {
+      return new Intl.NumberFormat('id-ID').format(Math.round(n || 0));
+    };
+    [['Jumlah penerima manfaat dihitung', nf(rk.pm)], ['Belanja bahan baku pangan (Rp)', nf(rk.bb)], ['Biaya operasional (Rp)', nf(rk.ops)], ['Insentif dihitung (Rp)', nf(rk.insHitung)], ['Insentif dibayarkan ke Mitra/Yayasan (Rp)', nf(rk.insBayar)], ['Saldo akhir VA (Rp)', nf(rk.saldoAkhir)], ['Usulan top up (Rp)', nf(rk.usulan)], ['Hasil daftar periksa', 'lihat lembar G_CekPPK pada berkas LPDH']].forEach(function (b) {
+      doc.text(b[0], M, y);
+      doc.text(b[1], W - M, y, {
+        align: 'right'
+      });
+      doc.setDrawColor(150);
+      doc.setLineWidth(0.1);
+      doc.setLineDashPattern([0.5, 0.6], 0);
+      doc.line(M, y + 1.3, W - M, y + 1.3);
+      doc.setLineDashPattern([], 0);
+      y += 5.2;
+    });
+    y += 6;
+    const pernyataan = doc.splitTextToSize('Kami yang bertanda tangan di bawah ini menyatakan bahwa data dan angka dalam Laporan Penggunaan Dana Harian ini benar, sesuai dengan kondisi riil, dan didukung bukti autentik yang sah. Apabila di kemudian hari ditemukan ketidaksesuaian, kami bersedia mempertanggungjawabkannya sesuai ketentuan peraturan perundang-undangan.', W - 2 * M);
+    doc.text(pernyataan, M, y, {
+      lineHeightFactor: 1.45
+    });
+    y += pernyataan.length * 4.9 + 8;
+    const kol = [M + 26, W / 2, W - M - 26];
+    doc.text((id.kabupaten || '') + ', ' + tgl, kol[2], y, {
+      align: 'center'
+    });
+    y += 9;
+    doc.setFontSize(9.5);
+    const isi = [['Disusun oleh,', 'Pengawas Keuangan SPPG', ttd.pengawas, id.pengawas_nama, 'NIK. ' + (id.pengawas_nik || '')], ['Mengetahui,', 'Kepala SPPG', ttd.kepala, id.kepala_nama, 'NIP. ' + (id.kepala_nip || '')], ['Menyetujui,', 'Perwakilan Mitra/Yayasan', ttd.wakil, id.wakil_nama, 'NIK. ' + (id.wakil_nik || '')]];
+    for (let i = 0; i < 3; i++) {
+      const c = isi[i],
+        cx = kol[i];
+      doc.setFont('helvetica', 'normal');
+      doc.text(c[0], cx, y, {
+        align: 'center'
+      });
+      doc.setFont('helvetica', 'bold');
+      doc.text(c[1], cx, y + 5, {
+        align: 'center',
+        maxWidth: 56
+      });
+      if (c[2]) {
+        const g = await ttdRingkas(c[2]);
+        if (g) {
+          const k = Math.min(46 / g.w, 22 / g.h);
+          try {
+            doc.addImage(g.url, 'JPEG', cx - g.w * k / 2, y + 9 + (22 - g.h * k) / 2, g.w * k, g.h * k);
+          } catch (e) {}
+        }
+      }
+      const nm = c[3] || '..............................';
+      doc.text(nm, cx, y + 37, {
+        align: 'center',
+        maxWidth: 56
+      });
+      const nw = Math.min(doc.getTextWidth(nm), 56);
+      doc.setLineWidth(0.3);
+      doc.line(cx - nw / 2, y + 38, cx + nw / 2, y + 38);
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(8.5);
+      doc.text(c[4], cx, y + 42, {
+        align: 'center'
+      });
+      doc.setFontSize(9.5);
+    }
+    const canon = [id.id_sppg, data.tanggal, rk.pm, rk.bb, rk.ops, rk.insHitung, rk.insBayar, rk.saldoAkhir, rk.usulan, id.pengawas_nama, id.kepala_nama, id.wakil_nama].join('|');
+    let h1 = 2166136261;
+    for (let i = 0; i < canon.length; i++) h1 = Math.imul(h1 ^ canon.charCodeAt(i), 16777619) >>> 0;
+    const kode = ('0000000' + h1.toString(16).toUpperCase()).slice(-8).replace(/(.{4})/, '$1-');
+    const kurang = isi.filter(function (c) {
+      return !c[2];
+    }).map(function (c) {
+      return c[1];
+    });
+    doc.setFontSize(7.5);
+    doc.setTextColor(110);
+    doc.setDrawColor(200);
+    doc.setLineWidth(0.2);
+    doc.line(M, 297 - 16, W - M, 297 - 16);
+    const kaki = doc.splitTextToSize('Ditandatangani elektronik dengan gambar tanda tangan tersimpan melalui aplikasi Keuangan MBG · kode verifikasi ' + kode + ' · dibuat ' + new Date().toLocaleString('id-ID') + (kurang.length ? '. Belum bertanda tangan: ' + kurang.join(', ') + ' — tanda tangani basah sebelum diunggah.' : ''), W - 2 * M);
+    doc.text(kaki, M, 297 - 12);
+    doc.setProperties({
+      title: 'Lembar Pengesahan ' + namaBerkas,
+      subject: 'Lembar Pengesahan LPDH',
+      creator: 'Keuangan MBG'
+    });
+    return {
+      doc: doc,
+      kode: kode,
+      kurang: kurang
+    };
+  }
   function BAButton({
     g,
     toast,
@@ -13812,6 +14044,44 @@ try {
         color: COLORS.danger
       }
     }, "Hapus coretan")));
+  }
+  function TtdWakilCard({
+    session,
+    toast
+  }) {
+    const pic = session.user.role === 'pic';
+    const [daftar, setDaftar] = useState([]);
+    const [dapur, setDapur] = useState(pic ? session.user.dapur : '');
+    useEffect(function () {
+      if (!pic) api('getDapur').then(function (r) {
+        if (r.ok) {
+          setDaftar(r.data);
+          if (!dapur && r.data.length) setDapur(r.data[0].id);
+        }
+      });
+    }, []);
+    return React.createElement("div", null, !pic && daftar.length > 1 && React.createElement("select", {
+      value: dapur,
+      onChange: function (e) {
+        setDapur(e.target.value);
+      },
+      style: Object.assign({}, inputStyle, {
+        marginBottom: 8
+      }),
+      "aria-label": "Dapur perwakilan"
+    }, daftar.map(function (d) {
+      return React.createElement("option", {
+        key: d.id,
+        value: d.id
+      }, d.nama);
+    })), dapur && React.createElement(TtdCard, {
+      key: dapur,
+      toast: toast,
+      untuk: "wakil",
+      dapur: dapur,
+      judul: "Tanda tangan Perwakilan Mitra/Yayasan",
+      ket: "Dipasang otomatis di kolom Menyetujui (Perwakilan Mitra/Yayasan) pada lembar pengesahan LPDH dapur ini."
+    }));
   }
   function TtdCard({
     toast,
