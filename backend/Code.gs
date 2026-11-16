@@ -135,7 +135,7 @@ function handleRequest(e, method) {
     }
     let result;
     switch (action) {
-      case 'ping':              result = { ok: true, time: new Date().toISOString(), version: 'v6-ba-sec19' }; break;
+      case 'ping':              result = { ok: true, time: new Date().toISOString(), version: 'v6-ba-sec20' }; break;
       case 'login':             result = login(params); break;
       case 'getPeriodeList':    result = getPeriodeList(params); break;
       case 'getActivePeriode':  result = getActivePeriode(params); break;
@@ -2962,7 +2962,8 @@ function getRencanaOps(p) {
   return { ok: true, data: {
     dapur: dapurId,
     periode: { id: per.id, periode_no: per.periode_no, tanggal_mulai: per.tanggal_mulai, tanggal_akhir: per.tanggal_akhir, penerima: per.penerima, status: per.status },
-    rencana: rencana, riwayat: riwayat, status: status, luar: luar, bankVA: String(ident.bank || ''),
+    rencana: rencana, riwayat: riwayat, status: status, luar: luar,
+    dapurNama: ((getDapur().data || []).find(function(x) { return x.id === dapurId; }) || {}).nama || '', bankVA: String(ident.bank || ''),
     aktual: opsPerTanggal(dapurId, per.id),
     penerima: readPenerima().filter(function(r) { return r.aktif; }).map(function(r) { return { id: r.id, nama: r.nama, bank: r.bank, no_rek: r.no_rek }; })
       .sort(function(a, b) { return a.nama.localeCompare(b.nama); }),
@@ -3028,6 +3029,15 @@ function getPaguOps(p) {
   const indeks = Number(set.indeks) || 100;
   const dow = new Date(tgl + 'T00:00:00Z').getUTCDay();
   const libur = h.libur !== undefined ? !!h.libur : (dow === 0 || dow === 6);   // Sabtu/Minggu bukan HPE kecuali diatur lain
+  // pengajuan operasional hari H itu yang belum direalisasi (menunggu / revisi / disetujui) — untuk peringatan di form Pengajuan
+  const heads = {}; readAllPengajuan().forEach(function(x) { if (x.dapur === dapurId && x.tanggal === tgl) heads[x.id] = 1; });
+  let diajukan = 0, nDiajukan = 0;
+  readAllItems().forEach(function(it) {
+    if (!heads[it.pengajuan_id] || it.jenis !== 'Operasional' || ['DIAJUKAN', 'REVISI', 'DISETUJUI'].indexOf(it.status) < 0) return;
+    diajukan += it.nominal; nDiajukan++;
+  });
+  const rencanaBelum = ((d.items || []).filter(function(x) { return x.tanggal === tgl && !x.pengajuan_id; })).reduce(function(a, x) { return a + (Number(x.nominal) || 0); }, 0);
+  const ident = readIdentitasLPDH(dapurId) || {};
   return { ok: true, data: { tanggal: tgl, pm: pm, indeks: indeks, libur: libur, pagu: libur ? 0 : Math.round(PAGU_OPS_PER_PM * pm * indeks / 100),
-    terpakai: opsPerTanggal(dapurId, per.id)[tgl] || 0 } };
+    terpakai: opsPerTanggal(dapurId, per.id)[tgl] || 0, diajukan: diajukan, nDiajukan: nDiajukan, rencanaBelum: rencanaBelum, bankVA: String(ident.bank || '') } };
 }

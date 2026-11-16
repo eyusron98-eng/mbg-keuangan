@@ -1808,6 +1808,7 @@ function RencanaOpsPage({ session, scope, toast }) {
   const [pilihSel, setPilihSel] = useState(null);
   const [hapusTak, setHapusTak] = useState(false);
   const [konfirmAju, setKonfirmAju] = useState(null);
+  const [waText, setWaText] = useState(null);
   const seedRef = useRef(0);
   const versiRef = useRef(0);   // versi terbaru (dipakai simpan berturut-turut dalam satu aksi)
   const [kategori, setKategori] = useState([]);
@@ -1886,9 +1887,17 @@ function RencanaOpsPage({ session, scope, toast }) {
     const ok = await simpan(baru);
     setAjukanTgl('');
     toast('Pengajuan ' + res.data.nomor + ' terkirim untuk persetujuan' + (ok ? '' : ' (rencana belum tersimpan — tekan Simpan)'));
+    setWaText(teksWaRencana(res.data.nomor, t, baris));   // langsung siap disalin ke grup WA
     load();
   }
   const stBaris = roStatusBaris(items, ctx.status), idPItem = roIdItemPengajuan(items);
+  // teks WA pengajuan (format sama dengan menu Pengajuan)
+  function teksWaRencana(nomor, t, baris) {
+    return buildWAPesan({ nomor: nomor, tanggal: t, dapurNama: ctx.dapurNama || '', oleh: session.user.nama, items: baris.map(function(x) {
+      const pn = pmap[x.penerima_id] || {};
+      return { uraian: x.uraian + (x.bagian ? ' (bagian ' + x.bagian + ')' : ''), jenis: 'Operasional', nominal: x.nominal, penerima_nama: pn.nama || '', bank: pn.bank || '', no_rek: pn.no_rek || '' }; }) });
+  }
+  function waBaris(x) { setEdit(null); setWaText(teksWaRencana(x.nomor, x.tanggal, items.concat(luarItems).filter(function(y) { return y.pengajuan_id && y.pengajuan_id === x.pengajuan_id; }))); }
   async function batalAju(x, alasan) {
     const r = await apiPost('batalkanItem', { item_id: x.pitem_id || idPItem[x.id], alasan: alasan || 'Dibatalkan dari Rencana Ops' });
     if (!r.ok) { toast('Gagal membatalkan: ' + (r.error || ''), 'error'); return; }
@@ -1997,6 +2006,7 @@ function RencanaOpsPage({ session, scope, toast }) {
       {bisaUbah && <div className="mt-3"><Btn size="sm" kind="ghost" onClick={function() { const p = pilihSel; setPilihSel(null);
         setEdit({ id: 'RO' + Date.now().toString(36), tanggal: p.tanggal, kategori: p.kategori, uraian: roLabel(p.kategori), nominal: 0, penerima_id: '', baru: true }); }}>{I.plus} Tambah baris {roLabel(pilihSel.kategori)}</Btn></div>}
     </Modal>}
+    {waText && <WAModal text={waText} toast={toast} onClose={function() { setWaText(null); }}/>}
     {konfirmAju && <Modal title={'Ajukan ' + konfirmAju.baris.length + ' baris untuk ' + fmtDateLong(konfirmAju.t) + '?'} onClose={function() { setKonfirmAju(null); }}>
       <div className="text-sm mb-2" style={{ color: COLORS.ink }}>Pengajuan akan dikirim ke Yayasan/PIC dengan <b>hari H {fmtDateLong(konfirmAju.t)}</b>{konfirmAju.t !== hariIni ? ' (bukan hari ini)' : ''}.</div>
       {konfirmAju.baris.map(function(x) { return <div key={x.id} className="flex justify-between gap-2 py-1.5 text-sm" style={{ borderTop: '1px solid ' + COLORS.line }}>
@@ -2009,7 +2019,7 @@ function RencanaOpsPage({ session, scope, toast }) {
       onClose={function() { setHapusTak(false); }}/>}
     {konfirm && <ConfirmModal title="Usulkan ulang?" message="Baris yang belum diajukan akan diganti usulan baru (susunan hari berbeda). Baris yang sudah diajukan tetap." confirmLabel="Usulkan ulang" onConfirm={usulkan} onClose={function() { setKonfirm(false); }}/>}
     {edit && <RencanaItemModal x={edit} ctx={ctx} hari={ring.hari} kategori={kategori.filter(function(k) { return RO_TANPA.indexOf(k) < 0; })} bisaUbah={bisaUbah && !terkunci(edit) && !lewat(edit.tanggal)} pmap={pmap}
-      lewat={lewat} busy={!!ajukanTgl} toast={toast} statusBaris={edit.luar ? edit.status : stBaris[edit.id]} bisaBatal={role === 'akuntan' && ctx.periode.status === 'AKTIF'} onBatal={batalAju}
+      lewat={lewat} busy={!!ajukanTgl} toast={toast} statusBaris={edit.luar ? edit.status : stBaris[edit.id]} onWa={waBaris} bisaBatal={role === 'akuntan' && ctx.periode.status === 'AKTIF'} onBatal={batalAju}
       onPenerima={function(saved) { setCtx(function(c) { const ada = c.penerima.some(function(p) { return p.id === saved.id; });
         return Object.assign({}, c, { penerima: (ada ? c.penerima.map(function(p) { return p.id === saved.id ? Object.assign({}, p, saved) : p; }) : c.penerima.concat([saved]))
           .sort(function(a, b) { return a.nama.localeCompare(b.nama); }) }); }); }}
@@ -2094,7 +2104,7 @@ function RencanaMatriks({ m, bisaUbah, ajukanTgl, onSel, onAjukan, terkunci, lew
     </div>
   </Card>;
 }
-function RencanaItemModal({ x, ctx, hari, kategori, bisaUbah, pmap, onClose, onSave, onDelete, onAjukan, lewat, busy, toast, onPenerima, statusBaris, bisaBatal, onBatal }) {
+function RencanaItemModal({ x, ctx, hari, kategori, bisaUbah, pmap, onClose, onSave, onDelete, onAjukan, lewat, busy, toast, onPenerima, statusBaris, bisaBatal, onBatal, onWa }) {
   const [f, setF] = useState(x);
   const [alasan, setAlasan] = useState('');
   const [mauBatal, setMauBatal] = useState(false);
@@ -2111,6 +2121,7 @@ function RencanaItemModal({ x, ctx, hari, kategori, bisaUbah, pmap, onClose, onS
     {x.pengajuan_id && x.luar && <div className="rounded-lg p-2.5 mb-1 text-xs" style={{ background: '#E3ECF7', color: COLORS.blue }}>Diajukan di luar rencana, lewat menu Pengajuan. Ikut dihitung dalam pagu hari itu.</div>}
     {x.pengajuan_id && <div className="rounded-lg p-2.5 mb-3 text-xs" style={{ background: '#E8F1EC', color: COLORS.deep }}>
       Sudah diajukan ({x.nomor}) — <b>{labelSt}</b>, hari H {fmtDateLong(x.tanggal)}. Lihat di menu <b>Pengajuan</b> → tampilan <b>Periode aktif</b>{statusBaris === 'DISETUJUI' ? ', dan di menu Realisasi' : ''}.
+      {['DIAJUKAN', 'REVISI', 'DISETUJUI'].indexOf(statusBaris) >= 0 && <div className="mt-2"><Btn size="sm" kind="ghost" onClick={function() { onWa(x); }}>{I.file} Salin teks WA pengajuan ini</Btn></div>}
       {bolehBatal && <div className="mt-2">
         {!mauBatal ? <Btn size="sm" kind="ghost" onClick={function() { setMauBatal(true); }}>{I.x} Batalkan pengajuan baris ini</Btn>
           : <div><input value={alasan} onChange={function(e) { setAlasan(e.target.value); }} placeholder="Alasan pembatalan (cth. salah tanggal)" style={Object.assign({}, inputStyle, { minHeight: 36, fontSize: 13 })} aria-label="Alasan batal"/>
@@ -3956,6 +3967,18 @@ function PengajuanForm({ kategoriMap, penerima, upsertPenerima, toast, onCreated
   const reqId = useRef('rq-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 10));   // satu ID per form; dikirim agar backend bisa menolak kiriman ulang
   const total = rows.reduce(function(s, r){ return s + (Number(r.nominal) || 0); }, 0);
   const firstErr = rows.map(rowError).findIndex(function(e){ return !!e; });
+  // Pagu operasional harian (LPDH: Rp 3.000 × PM × indeks): peringatan sebelum mengirim
+  const adaOps = rows.some(function(r) { return r.jenis === 'Operasional'; });
+  const [pagu, setPagu] = useState(null);
+  useEffect(function() {
+    if (!adaOps || !tanggal || tglErr || (needDapur && !dapur)) { setPagu(null); return; }
+    let hidup = true;
+    api('getPaguOps', { tanggal: tanggal, dapur: needDapur ? dapur : '' }).then(function(r) { if (hidup) setPagu(r.ok && r.data && typeof r.data.pagu === 'number' ? r.data : null); });
+    return function() { hidup = false; };
+  }, [tanggal, dapur, adaOps, !!tglErr]);
+  const pnMap = {}; (penerima || []).forEach(function(x) { pnMap[x.id] = x; });
+  const opsIni = rows.filter(function(r) { return r.jenis === 'Operasional'; }).reduce(function(a, r) { return a + (Number(r.nominal) || 0) + (r.penerima_id ? roFee({ penerima_id: r.penerima_id }, pnMap, pagu ? pagu.bankVA : '') : 0); }, 0);
+  const opsTot = pagu ? pagu.terpakai + pagu.diajukan + opsIni : 0;
   function update(i, n) { setRows(rows.map(function(r, j){ return j === i ? n : r; })); }
   async function submit(force) {
     if (lockRef.current) return;
@@ -4019,6 +4042,16 @@ function PengajuanForm({ kategoriMap, penerima, upsertPenerima, toast, onCreated
     <div>
       <Btn kind="ghost" onClick={function(){ setRows(rows.concat([newRow()])); }}>{I.plusSm} Tambah baris</Btn>
     </div>
+    {pagu && opsIni > 0 && <div className="rounded-lg p-3 mt-3 text-xs" style={{ background: opsTot > pagu.pagu ? '#F8E9E5' : '#E8F1EC', color: opsTot > pagu.pagu ? COLORS.danger : COLORS.deep }}>
+      <div className="font-semibold mb-1">{opsTot > pagu.pagu ? '⚠️ Operasional ' + fmtDate(tanggal) + ' melebihi pagu harian ' + fmt(opsTot - pagu.pagu) : 'Operasional ' + fmtDate(tanggal) + ' masih dalam pagu harian'}</div>
+      <div className="flex justify-between"><span>Pagu {pagu.libur ? '(bukan HPE)' : '(PM ' + fmtNoRp(pagu.pm) + ')'}</span><b className="num">{fmt(pagu.pagu)}</b></div>
+      {pagu.terpakai > 0 && <div className="flex justify-between"><span>Sudah direalisasi</span><span className="num">{fmt(pagu.terpakai)}</span></div>}
+      {pagu.diajukan > 0 && <div className="flex justify-between"><span>Sudah diajukan, belum direalisasi ({pagu.nDiajukan} baris)</span><span className="num">{fmt(pagu.diajukan)}</span></div>}
+      <div className="flex justify-between"><span>Pengajuan ini (termasuk biaya transfer)</span><span className="num">{fmt(opsIni)}</span></div>
+      <div className="flex justify-between font-bold pt-1" style={{ borderTop: '1px solid rgba(0,0,0,0.1)' }}><span>Jumlah</span><span className="num">{fmt(opsTot)}</span></div>
+      {pagu.rencanaBelum > 0 && <div className="mt-1" style={{ color: '#9A6A0B' }}>Rencana Ops hari itu masih punya {fmt(pagu.rencanaBelum)} yang belum diajukan — pastikan tidak dobel.</div>}
+      {opsTot > pagu.pagu && <div className="mt-1">Pagu LPDH mutlak. Kurangi nominal, pindahkan ke hari lain, atau cek menu Rencana Ops.</div>}
+    </div>}
     <div className="sticky-bar">
       <div className="flex items-end justify-between gap-3">
         <div>
