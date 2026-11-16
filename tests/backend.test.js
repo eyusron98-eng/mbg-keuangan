@@ -92,7 +92,7 @@ const ok = (c, m) => { console.log((c ? 'PASS ' : 'FAIL ') + m); if (!c) fails++
     ['U3', 'off', 'xxxxxxx', 'Nonaktif', 'pic', 'D001', 'TIDAK'],
   ]);
   const B = env.__book;
-  ok(call(env, 'GET', { action: 'ping' }).version === 'v6-ba-sec23', 'ping menampilkan versi baru');
+  ok(call(env, 'GET', { action: 'ping' }).version === 'v6-ba-sec24', 'ping menampilkan versi baru');
 
   // 1. login lama (teks biasa) berhasil via POST dan password otomatis di-hash
   let r = call(env, 'POST', { action: 'login', username: 'AKUN1', password: 'RahasiaKu9' });
@@ -666,6 +666,33 @@ const ok = (c, m) => { console.log((c ? 'PASS ' : 'FAIL ') + m); if (!c) fails++
     r = call(e8, 'POST', { action: 'getDataPenerima', token: tA });
     const rel2 = r.data.rows.filter(x => x.jenis === 'RELAWAN');
     ok(rel2.length === 1 && rel2[0].id === idSiti && rel2[0].nominal === 160000 && rel2[0].ada_ttd, 'ubah daftar relawan lewat pengaturan gaji: id & TTD tetap, yang dihapus hilang');
+  }
+
+  // ── Kwitansi harian: 1 orang 1 kwitansi, BASTI bernomor urut per bulan, nomor tetap saat cetak ulang ──
+  {
+    const tP = tk8('pic'), tA = tk8('akn');
+    const kd = call(e8, 'POST', { action: 'saveDataPenerima', token: tP, jenis: 'KADER', nama: 'Bu Rina', lembaga: 'Posyandu Mawar', pm: 35, nominal: 50000 }).data.id;
+    const ps = call(e8, 'POST', { action: 'saveDataPenerima', token: tP, jenis: 'PIC_SEKOLAH', nama: 'Pak Dedi', lembaga: 'SDN 1', pm: 300, nominal: 100000 }).data.id;
+    let r = call(e8, 'POST', { action: 'getKwitansiHarian', token: tA, tanggal: '2026-10-21' });
+    ok(r.ok && r.data.rows.length === 3 && r.data.rows.every(x => x.pilih) && r.data.sudahTerbit === 0, 'daftar kwitansi: semua penerima aktif terpilih (' + (r.data && r.data.rows.length) + ')');
+    const siti = r.data.rows.find(x => x.jenis === 'RELAWAN');
+    r = call(e8, 'POST', { action: 'terbitkanKwitansi', token: tA, tanggal: '2026-10-21', rows: [{ penerima_id: kd, nominal: 50000, pm: 40 }, { penerima_id: ps, nominal: 100000, pm: 300 }, { penerima_id: siti.penerima_id, nominal: 160000 }] });
+    ok(r.ok && r.data.rows.length === 3, 'kwitansi terbit: ' + (r.error || ''));
+    const nr = Object.fromEntries(r.data.rows.map(x => [x.penerima_id, x.nomor]));
+    ok(r.data.rows[0].jenis === 'RELAWAN' && nr[siti.penerima_id] === '' && nr[ps] === '01/BASTI/SPPG-S1/X/2026' && nr[kd] === '02/BASTI/SPPG-S1/X/2026', 'relawan tanpa nomor; BASTI urut (PIC sekolah lalu kader): ' + JSON.stringify(nr));
+    ok(r.data.rows.find(x => x.penerima_id === kd).pm === 40 && /^data:image/.test(r.data.rows.find(x => x.penerima_id === siti.penerima_id).ttd) && r.data.kepala && r.data.akuntan, 'PM disesuaikan; TTD penerima ikut; data akuntan & kepala tersedia');
+    r = call(e8, 'POST', { action: 'terbitkanKwitansi', token: tA, tanggal: '2026-10-21', rows: [{ penerima_id: kd, nominal: 55000, pm: 40 }] });
+    ok(r.ok && r.data.rows[0].nomor === '02/BASTI/SPPG-S1/X/2026' && r.data.rows[0].nominal === 55000, 'cetak ulang: nomor tetap, nominal ikut berubah');
+    r = call(e8, 'POST', { action: 'getKwitansiHarian', token: tP, tanggal: '2026-10-21' });
+    ok(r.data.sudahTerbit === 1 && r.data.rows.filter(x => x.pilih).length === 1 && r.data.rows.find(x => x.penerima_id === kd).nominal === 55000, 'yang tidak dipilih lagi dibuang dari tanggal itu');
+    r = call(e8, 'POST', { action: 'terbitkanKwitansi', token: tA, tanggal: '2026-10-22', rows: [{ penerima_id: ps, nominal: 100000, pm: 300 }] });
+    ok(r.data.rows[0].nomor === '03/BASTI/SPPG-S1/X/2026', 'nomor yang sempat dibuang tidak dipakai ulang (' + r.data.rows[0].nomor + ')');
+    r = call(e8, 'POST', { action: 'terbitkanKwitansi', token: tA, tanggal: '2026-11-02', rows: [{ penerima_id: kd, nominal: 50000, pm: 35 }] });
+    ok(r.data.rows[0].nomor === '01/BASTI/SPPG-S1/XI/2026', 'bulan baru mulai dari 01 (' + r.data.rows[0].nomor + ')');
+    r = call(e8, 'POST', { action: 'terbitkanKwitansi', token: tA, tanggal: '2026-11-02', rows: [{ penerima_id: kd, nominal: 1 }, { penerima_id: kd, nominal: 1 }] });
+    ok(!r.ok && /dua kali/.test(r.error), '1 orang hanya 1 kwitansi per hari');
+    r = call(e8, 'POST', { action: 'terbitkanKwitansi', token: tk8('yay'), tanggal: '2026-11-02', rows: [{ penerima_id: kd, nominal: 1 }] });
+    ok(!r.ok, 'Yayasan tidak bisa menerbitkan kwitansi');
   }
 
   // ── Catatan akuntan (mis. melebihi pagu harian) ikut ke Yayasan & tidak hilang saat diputuskan ──
