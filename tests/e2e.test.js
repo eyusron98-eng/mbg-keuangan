@@ -370,6 +370,50 @@ async function isiBahanBaku(page, uraian, volume, harga) {
     globalThis.__ro = null;
   });
 
+  all &= await run('Rencana Ops: tanggal lewat terkunci, ajukan baris siap saja, ajukan satu baris', { role: 'akuntan',
+    override: (a, m, p) => {
+      const L = globalThis.__ro2 = globalThis.__ro2 || { save: [], aju: [], versi: 3 };
+      const it = (id, t, kat, nom, pn) => ({ id, tanggal: t, kategori: kat, uraian: kat, nominal: nom, penerima_id: pn || '' });
+      if (a === 'getRencanaOps') return { ok: true, data: { dapur: 'D1', bisaUbah: true, bankVA: 'BSI', status: {}, aktual: {}, riwayat: null,
+        periode: { id: 'P18', periode_no: 18, tanggal_mulai: '2026-10-26', tanggal_akhir: '2026-11-06', penerima: 1000, status: 'AKTIF' },
+        penerima: [{ id: 'W', nama: 'Wanda', bank: 'BSI', no_rek: '1' }],
+        rencana: L.saved || { versi: 3, setelan: { indeks: 100, batas: 95 }, hari: {}, items: [
+          it('A', '2026-10-28', 'Gaji/honor relawan pekerja SPPG', 1500000, 'W'), it('B', '2026-10-30', 'Gaji/honor relawan pekerja SPPG', 1500000, 'W'),
+          it('C', '2026-10-30', 'Gas', 800000, ''), it('D', '2026-11-02', 'Gaji/honor relawan pekerja SPPG', 1500000, 'W'), it('E', '2026-11-02', 'Sewa Kendaraan', 270000, 'W')] } } };
+      if (a === 'getKategori') return { ok: true, data: { 'Operasional': ['Gaji/honor relawan pekerja SPPG', 'Gas', 'Sewa Kendaraan'] } };
+      if (a === 'saveRencanaOps') { if ((p.data.versi || 0) !== L.versi) return { ok: false, error: 'Rencana sudah diubah di perangkat lain.' }; L.versi++; L.save.push(p); L.saved = Object.assign({}, p.data, { versi: L.versi }); return { ok: true, data: { versi: L.versi } }; }
+      if (a === 'createPengajuan') { L.aju.push(p); return { ok: true, data: { id: 'PA' + L.aju.length, nomor: 'BA-PA/S1/2026/10/00' + L.aju.length } }; }
+      return null; } }, async (page, srv) => {
+    await login(page, 'siti');
+    await page.waitForSelector('header');
+    await page.click('nav:visible >> text=Rencana Ops');
+    await page.waitForSelector('[aria-label="Matriks rencana operasional"]');
+    assert(!(await page.isVisible('th:has-text("Sewa")')), 'kolom Sewa Kendaraan masih tampil');
+    assert(await page.isVisible('text=sudah lewat >> nth=0'), 'tanggal lewat tidak ditandai');
+    // sel kosong di tanggal lewat tidak membuka form
+    await page.click('[aria-label="Gas 2026-10-28"]');
+    await page.waitForTimeout(300);
+    assert(!(await page.isVisible('[aria-label="Uraian rencana"]')), 'sel kosong tanggal lewat masih bisa diisi');
+    // baris lama di tanggal lewat: terlihat, tidak bisa diubah/diajukan
+    await page.click('[aria-label="Honor relawan 2026-10-28"]');
+    await page.waitForSelector('text=Tanggal sudah lewat');
+    assert(!(await page.isVisible('text=Ajukan baris ini')), 'baris tanggal lewat masih bisa diajukan');
+    await page.click('[aria-label="Tutup"]');
+    // 30 Okt: honor siap, gas belum ada penerima → hanya honor yang diajukan
+    await page.click('button:has-text("Ajukan 1") >> nth=0');
+    await page.waitForSelector('text=BA-PA/S1/2026/10/001 terkirim');
+    const L = globalThis.__ro2;
+    assert(L.aju[0].tanggal === '2026-10-30' && L.aju[0].items.length === 1 && /honor/i.test(L.aju[0].items[0].kategori), 'ajukan harian harus melewati baris tanpa penerima: ' + JSON.stringify(L.aju[0]));
+    // ajukan satu baris dari selnya (2 Nov)
+    await page.click('[aria-label="Honor relawan 2026-11-02"]');
+    await page.click('text=Ajukan baris ini');
+    await page.waitForSelector('text=BA-PA/S1/2026/10/002 terkirim');
+    assert(L.aju[1].tanggal === '2026-11-02' && L.aju[1].items.length === 1, 'ajukan satu baris salah: ' + JSON.stringify(L.aju[1]));
+    assert(!L.saved.items.some(x => x.kategori === 'Sewa Kendaraan'), 'baris Sewa Kendaraan lama tidak dibuang');
+    assert(L.saved.items.filter(x => x.pengajuan_id).length === 2, 'status diajukan tidak tersimpan');
+    globalThis.__ro2 = null;
+  });
+
   all &= await run('Relawan: daftar kosong bisa diisi (tombol tidak tertutup) & tempel dari Excel', { role: 'akuntan',
     override: (a, m, p) => a === 'getRelawanBayar' ? { ok: true, data: { rows: [], sumber: 'baru', total: 6240000 } }
       : a === 'getDataLPDH' ? { ok: true, data: { dapur: { id: 'D1', nama: 'SPPG Satu', kode: 'S1' }, identitas: {}, tanggal: p.tanggal, harian: null,

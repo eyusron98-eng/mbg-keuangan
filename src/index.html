@@ -1590,7 +1590,8 @@ const LPDH_BAGIAN = { bb: 'Bahan Baku', op: 'Operasional', rl: 'Honor relawan', 
 // Rencana operasional per periode: pagu harian = Rp 3.000 × PM × indeks kemahalan (mutlak, aturan LPDH PPK)
 const RO_PAGU_PM = 3000;
 const RO_FEE = 6500;   // biaya transfer antarbank (sesama bank VA: gratis)
-const RO_RUTIN = ['Gaji/honor relawan pekerja SPPG', 'Insentif Guru/PIC Sekolah', 'Insentif Kader Posyandu', 'Sewa Kendaraan'];
+const RO_RUTIN = ['Gaji/honor relawan pekerja SPPG', 'Insentif Guru/PIC Sekolah', 'Insentif Kader Posyandu'];
+const RO_TANPA = ['Sewa Kendaraan'];   // pos yang sudah tidak dipakai: tidak diusulkan & tidak muncul di matriks
 const RO_MIN_PECAH = 500000;   // hanya belanja besar yang boleh dipecah ke beberapa hari (tiap bagian ≥ Rp 250 rb)
 const RO_NAMA_HARI = ['Min', 'Sen', 'Sel', 'Rab', 'Kam', 'Jum', 'Sab'];
 function roTglList(mulai, akhir) {
@@ -1644,18 +1645,19 @@ function roPakai(items, ctx) {
   return map;
 }
 // Usulan otomatis dari pola periode lalu. seed berbeda → susunan hari berbeda (tiap periode / tiap klik "usulkan lagi").
-function roUsulkan(ctx, setelan, hariSet, seed, tetap) {
+// dariTgl: tanggal paling awal yang boleh diisi (hari yang sudah lewat tidak dijadwalkan)
+function roUsulkan(ctx, setelan, hariSet, seed, tetap, dariTgl) {
   tetap = tetap || [];   // baris yang sudah diajukan: dipertahankan, memakai pagu lebih dulu
   const r = ctx.riwayat;
-  const hari = roHari(ctx.periode, hariSet).filter(function(h) { return !h.libur; });
-  if (!r || !r.tx || !r.tx.length || !hari.length) return { items: [], catatan: !r ? 'Belum ada periode sebelumnya dengan transaksi operasional — isi kebutuhan secara manual.' : 'Tidak ada HPE di periode ini.' };
+  const hari = roHari(ctx.periode, hariSet).filter(function(h) { return !h.libur && (!dariTgl || h.tanggal >= dariTgl); });
+  if (!r || !r.tx || !r.tx.length || !hari.length) return { items: [], catatan: !r ? 'Belum ada periode sebelumnya dengan transaksi operasional — isi kebutuhan secara manual.' : 'Tidak ada HPE tersisa di periode ini.' };
   const rng = roRng(roHash(ctx.periode.id + '|' + (seed || 0)));
   const pmap = {}; (ctx.penerima || []).forEach(function(p) { pmap[p.id] = p; });
   let no = 0; const id = function() { no++; return 'RO' + roHash(ctx.periode.id + seed + no).toString(36) + no; };
   const items = [];
   // 1) rutin harian: kategori rutin yang muncul ≥ 40% hari layanan periode lalu, per penerima
   const grupRutin = {};
-  r.tx.forEach(function(t) { if (RO_RUTIN.indexOf(t.kategori) < 0) return; const k = t.kategori + '|' + t.penerima_id; (grupRutin[k] = grupRutin[k] || []).push(t); });
+  r.tx.forEach(function(t) { if (RO_RUTIN.indexOf(t.kategori) < 0 || RO_TANPA.indexOf(t.kategori) >= 0) return; const k = t.kategori + '|' + t.penerima_id; (grupRutin[k] = grupRutin[k] || []).push(t); });
   const dipakaiRutin = {};
   Object.keys(grupRutin).forEach(function(k) {
     const g = grupRutin[k], perTgl = {};
@@ -1672,7 +1674,7 @@ function roUsulkan(ctx, setelan, hariSet, seed, tetap) {
   // 2) kebutuhan lain: per (kategori, uraian, penerima), jumlah kejadian disesuaikan dengan jumlah HPE
   const grup = {};
   r.tx.forEach(function(t) {
-    if (dipakaiRutin[t.kategori + '|' + t.penerima_id]) return;
+    if (dipakaiRutin[t.kategori + '|' + t.penerima_id] || RO_TANPA.indexOf(t.kategori) >= 0) return;
     const ur = roBersih(t.uraian), k = t.kategori + '|' + ur.toLowerCase() + '|' + t.penerima_id;
     (grup[k] = grup[k] || { kategori: t.kategori, uraian: ur, penerima_id: t.penerima_id, nom: [] }).nom.push(t.nominal);
   });
@@ -1768,6 +1770,7 @@ function RencanaOpsPage({ session, scope, toast }) {
   const [tampil, setTampil] = useState('tabel');
   const [pilihSel, setPilihSel] = useState(null);
   const seedRef = useRef(0);
+  const versiRef = useRef(0);   // versi terbaru (dipakai simpan berturut-turut dalam satu aksi)
   const [kategori, setKategori] = useState([]);
   useEffect(function() { api('getKategori').then(function(r) { if (r.ok) setKategori(r.data['Operasional'] || []); }); }, []);
   async function load() {
@@ -1777,7 +1780,8 @@ function RencanaOpsPage({ session, scope, toast }) {
     setLoading(false);
     if (!r.ok) { toast(r.error || 'Gagal memuat rencana', 'error'); setCtx(null); return; }
     const d = r.data, rc = d.rencana || {};
-    setCtx(d); setItems(rc.items || []); setHariSet(rc.hari || {}); setSetelan(rc.setelan || { indeks: 100, batas: 95 }); setVersi(rc.versi || 0); setDirty(false);
+    const semua = rc.items || [], dipakai = semua.filter(function(x) { return x.pengajuan_id || RO_TANPA.indexOf(x.kategori) < 0; });
+    setCtx(d); setItems(dipakai); setHariSet(rc.hari || {}); setSetelan(rc.setelan || { indeks: 100, batas: 95 }); setVersi(rc.versi || 0); versiRef.current = rc.versi || 0; setDirty(dipakai.length !== semua.length);
     seedRef.current = (rc.versi || 0) * 7;
   }
   useEffect(function() { load(); }, [dapurId]);
@@ -1790,32 +1794,41 @@ function RencanaOpsPage({ session, scope, toast }) {
   const ubah = function(fn) { setItems(fn); setDirty(true); };
   const ubahHari = function(t, patch) { setHariSet(Object.assign({}, hariSet, { [t]: Object.assign({}, hariSet[t] || {}, patch) })); setDirty(true); };
   const terkunci = function(x) { return !!x.pengajuan_id; };
+  const hariIni = todayISO();
+  const lewat = function(t) { return !!t && t < hariIni; };   // tanggal yang sudah lewat: tidak bisa diisi / diajukan
   async function simpan(itemsArg) {
     setSaving(true);
-    const r = await apiPost('saveRencanaOps', { dapur: dapurId, periode_id: ctx.periode.id, data: { versi: versi, setelan: setelan, hari: hariSet, items: itemsArg || items } });
+    const r = await apiPost('saveRencanaOps', { dapur: dapurId, periode_id: ctx.periode.id, data: { versi: versiRef.current, setelan: setelan, hari: hariSet, items: itemsArg || items } });
     setSaving(false);
     if (!r.ok) { toast(r.error || 'Gagal menyimpan', 'error'); return false; }
-    setVersi(r.data.versi); setDirty(false); return true;
+    versiRef.current = r.data.versi; setVersi(r.data.versi); setDirty(false); return true;
   }
   function usulkan() {
     seedRef.current += 1;
-    const tetap = items.filter(terkunci);
-    const u = roUsulkan(ctx, setelan, hariSet, seedRef.current, tetap);
+    const tetap = items.filter(function(x) { return terkunci(x) || lewat(x.tanggal); });
+    const u = roUsulkan(ctx, setelan, hariSet, seedRef.current, tetap, hariIni);
     ubah(function() { return tetap.concat(u.items); });
     setCatatan(u.catatan); setKonfirm(false);
     toast(u.items.length ? 'Usulan dibuat — periksa lalu Simpan' : u.catatan, u.items.length ? undefined : 'error');
   }
-  async function ajukan(t) {
-    const baris = items.filter(function(x) { return x.tanggal === t && !terkunci(x); });
-    if (!baris.length) return;
-    if (baris.some(function(x) { return !x.penerima_id; })) { toast('Lengkapi penerima semua baris tanggal ini dulu', 'error'); return; }
+  // Ajukan baris siap (penerima terisi) di tanggal t; hanyaId = satu baris saja. Baris yang belum lengkap dilewati.
+  async function ajukan(t, hanyaId, daftar) {
+    const semua = daftar || items;
+    if (lewat(t)) { toast('Tanggal sudah lewat — tidak bisa diajukan', 'error'); return; }
+    const baris = semua.filter(function(x) { return x.tanggal === t && !terkunci(x) && x.penerima_id && (!hanyaId || x.id === hanyaId); });
+    if (!baris.length) { toast(hanyaId ? 'Pilih penerima baris ini dulu' : 'Belum ada baris siap diajukan (penerima belum dipilih)', 'error'); return; }
+    const h = roHari(ctx.periode, hariSet).find(function(d) { return d.tanggal === t; });
+    const nilai = function(a) { return a.reduce(function(sm, x) { return sm + x.nominal + roFee(x, pmap, ctx.bankVA); }, 0); };
+    const sudah = nilai(semua.filter(function(x) { return x.tanggal === t && terkunci(x); }));
+    if (sudah + nilai(baris) > roPagu(h, setelan)) { toast('Melebihi pagu harian ' + fmt(roPagu(h, setelan)) + ' (sudah diajukan ' + fmt(sudah) + ') — kurangi atau pindahkan dulu', 'error'); return; }
     setAjukanTgl(t);
-    if (dirty && !(await simpan())) { setAjukanTgl(''); return; }
+    if (daftar) setItems(daftar);
+    if ((dirty || daftar) && !(await simpan(semua))) { setAjukanTgl(''); return; }
     const res = await apiPost('createPengajuan', { tanggal: t, request_id: 'RO-' + ctx.periode.id + '-' + t + '-' + roHash(baris.map(function(x) { return x.id; }).join(',')).toString(36),
       items: baris.map(function(x) { return { jenis: 'Operasional', kategori: x.kategori, uraian: x.uraian + (x.bagian ? ' (bagian ' + x.bagian + ')' : ''), nominal: x.nominal, penerima_id: x.penerima_id }; }) });
     if (!res.ok) { setAjukanTgl(''); toast('Gagal mengajukan: ' + (res.error || ''), 'error'); return; }
     const ids = {}; baris.forEach(function(x) { ids[x.id] = 1; });
-    const baru = items.map(function(x) { return ids[x.id] ? Object.assign({}, x, { pengajuan_id: res.data.id, nomor: res.data.nomor }) : x; });
+    const baru = semua.map(function(x) { return ids[x.id] ? Object.assign({}, x, { pengajuan_id: res.data.id, nomor: res.data.nomor }) : x; });
     setItems(baru);
     const ok = await simpan(baru);
     setAjukanTgl('');
@@ -1870,11 +1883,11 @@ function RencanaOpsPage({ session, scope, toast }) {
         className="flex-1 rounded-lg py-2 text-sm font-semibold" style={{ background: tampil === t[0] ? COLORS.green : COLORS.surface, color: tampil === t[0] ? '#fff' : COLORS.ink, border: '1px solid ' + COLORS.line }}>{t[1]}</button>; })}
     </div>
 
-    {tampil === 'tabel' && <RencanaMatriks m={roMatriks(items, ctx, setelan, hariSet)} bisaUbah={bisaUbah} ajukanTgl={ajukanTgl}
+    {tampil === 'tabel' && <RencanaMatriks m={roMatriks(items, ctx, setelan, hariSet)} bisaUbah={bisaUbah} ajukanTgl={ajukanTgl} lewat={lewat}
       onSel={function(t, k, c) {
         if (c && c.items.length === 1) setEdit(Object.assign({}, c.items[0]));
         else if (c && c.items.length > 1) setPilihSel({ tanggal: t, kategori: k, items: c.items });
-        else if (bisaUbah && t) setEdit({ id: 'RO' + Date.now().toString(36), tanggal: t, kategori: k, uraian: roLabel(k), nominal: 0, penerima_id: '', baru: true });
+        else if (bisaUbah && t && !lewat(t)) setEdit({ id: 'RO' + Date.now().toString(36), tanggal: t, kategori: k, uraian: roLabel(k), nominal: 0, penerima_id: '', baru: true });
       }}
       onAjukan={ajukan} terkunci={terkunci}/>}
 
@@ -1888,16 +1901,17 @@ function RencanaOpsPage({ session, scope, toast }) {
       const baris = items.filter(function(x) { return x.tanggal === h.tanggal; });
       const lebih = h.pakai > h.pagu, warn = !lebih && h.pakai > h.batas;
       const pct = h.pagu ? Math.min(100, Math.round(h.pakai / h.pagu * 100)) : (h.pakai ? 100 : 0);
-      const belum = baris.filter(function(x) { return !terkunci(x); });
+      const belum = baris.filter(function(x) { return !terkunci(x) && x.penerima_id; });
+      const sudahLewat = lewat(h.tanggal);
       if (h.libur && !baris.length && !bisaUbah) return null;
       return <Card key={h.tanggal}>
         <div className="flex items-center justify-between gap-2">
           <div><div className="font-semibold" style={{ color: COLORS.ink }}>{h.nama}, {fmtDate(h.tanggal)}</div>
-            <div className="text-xs" style={{ color: COLORS.muted }}>{h.libur ? 'Bukan HPE — pagu 0' : 'PM ' + fmtNoRp(h.pm) + ' · pagu ' + fmt(h.pagu)}{h.aktual ? ' · terealisasi ' + fmt(h.aktual) : ''}</div></div>
-          {bisaUbah && <label className="text-xs flex items-center gap-1 shrink-0" style={{ color: COLORS.ink }}>
+            <div className="text-xs" style={{ color: COLORS.muted }}>{sudahLewat ? 'Sudah lewat · ' : ''}{h.libur ? 'Bukan HPE — pagu 0' : 'PM ' + fmtNoRp(h.pm) + ' · pagu ' + fmt(h.pagu)}{h.aktual ? ' · terealisasi ' + fmt(h.aktual) : ''}</div></div>
+          {bisaUbah && !sudahLewat && <label className="text-xs flex items-center gap-1 shrink-0" style={{ color: COLORS.ink }}>
             <input type="checkbox" checked={!h.libur} onChange={function(e) { ubahHari(h.tanggal, { libur: !e.target.checked }); }} aria-label={'HPE ' + h.tanggal}/> HPE</label>}
         </div>
-        {!h.libur && bisaUbah && <div className="flex items-center gap-2 mt-2 text-xs" style={{ color: COLORS.muted }}>PM hari ini
+        {!h.libur && bisaUbah && !sudahLewat && <div className="flex items-center gap-2 mt-2 text-xs" style={{ color: COLORS.muted }}>PM hari ini
           <input value={h.pm} inputMode="numeric" aria-label={'PM ' + h.tanggal} onChange={function(e) { ubahHari(h.tanggal, { pm: Number(e.target.value.replace(/\D/g, '')) || 0 }); }}
             style={Object.assign({}, inputStyle, { width: 90, minHeight: 32, padding: '4px 8px', fontSize: 13 })}/></div>}
         <div className="mt-2 h-2 rounded-full overflow-hidden" style={{ background: COLORS.paper }}>
@@ -1905,9 +1919,9 @@ function RencanaOpsPage({ session, scope, toast }) {
         <div className="text-xs mt-1 flex justify-between" style={{ color: lebih ? COLORS.danger : COLORS.muted }}>
           <span>Rencana {fmt(h.pakai)}{lebih ? ' — melebihi pagu ' + fmt(h.pakai - h.pagu) : ''}</span><span>sisa {fmt(Math.max(0, h.pagu - h.pakai))}</span></div>
         {baris.map(function(x) { return <Baris key={x.id} x={x}/>; })}
-        {bisaUbah && belum.length > 0 && <div className="mt-2">
-          <Btn size="sm" full disabled={lebih || !!ajukanTgl} onClick={function() { ajukan(h.tanggal); }}>{ajukanTgl === h.tanggal ? I.spinner : I.file} Ajukan {belum.length} baris ({fmt(belum.reduce(function(s, x) { return s + x.nominal; }, 0))})</Btn>
-          {lebih && <div className="text-xs mt-1" style={{ color: COLORS.danger }}>Pindahkan atau kurangi baris dulu — pagu harian tidak boleh terlampaui.</div>}
+        {bisaUbah && !sudahLewat && belum.length > 0 && <div className="mt-2">
+          <Btn size="sm" full disabled={!!ajukanTgl} onClick={function() { ajukan(h.tanggal); }}>{ajukanTgl === h.tanggal ? I.spinner : I.file} Ajukan {belum.length} baris siap ({fmt(belum.reduce(function(s, x) { return s + x.nominal; }, 0))})</Btn>
+          <div className="text-xs mt-1" style={{ color: COLORS.muted }}>Baris tanpa penerima dilewati. Bisa juga diajukan satu per satu dari baris masing-masing.</div>
         </div>}
       </Card>;
     })}
@@ -1918,13 +1932,16 @@ function RencanaOpsPage({ session, scope, toast }) {
         setEdit({ id: 'RO' + Date.now().toString(36), tanggal: p.tanggal, kategori: p.kategori, uraian: roLabel(p.kategori), nominal: 0, penerima_id: '', baru: true }); }}>{I.plus} Tambah baris {roLabel(pilihSel.kategori)}</Btn></div>}
     </Modal>}
     {konfirm && <ConfirmModal title="Usulkan ulang?" message="Baris yang belum diajukan akan diganti usulan baru (susunan hari berbeda). Baris yang sudah diajukan tetap." confirmLabel="Usulkan ulang" onConfirm={usulkan} onClose={function() { setKonfirm(false); }}/>}
-    {edit && <RencanaItemModal x={edit} ctx={ctx} hari={ring.hari} kategori={kategori} bisaUbah={bisaUbah && !terkunci(edit)} pmap={pmap}
+    {edit && <RencanaItemModal x={edit} ctx={ctx} hari={ring.hari} kategori={kategori.filter(function(k) { return RO_TANPA.indexOf(k) < 0; })} bisaUbah={bisaUbah && !terkunci(edit) && !lewat(edit.tanggal)} pmap={pmap}
+      lewat={lewat} busy={!!ajukanTgl}
+      onAjukan={function(v) { const daftar = items.some(function(x) { return x.id === v.id; }) ? items.map(function(x) { return x.id === v.id ? Object.assign({}, v, { baru: undefined }) : x; }) : items.concat([Object.assign({}, v, { baru: undefined })]);
+        setEdit(null); ajukan(v.tanggal, v.id, daftar); }}
       onClose={function() { setEdit(null); }}
       onSave={function(v) { ubah(function(a) { return v.baru ? a.concat([Object.assign({}, v, { baru: undefined })]) : a.map(function(x) { return x.id === v.id ? v : x; }); }); setEdit(null); }}
       onDelete={function() { ubah(function(a) { return a.filter(function(x) { return x.id !== edit.id; }); }); setEdit(null); }}/>}
   </div>;
 }
-function RencanaMatriks({ m, bisaUbah, ajukanTgl, onSel, onAjukan, terkunci }) {
+function RencanaMatriks({ m, bisaUbah, ajukanTgl, onSel, onAjukan, terkunci, lewat }) {
   const r = m.ring, kol = m.kolom;
   const th = { padding: '6px 8px', fontSize: 11, fontWeight: 700, color: COLORS.muted, textAlign: 'right', whiteSpace: 'nowrap', background: COLORS.paper, borderBottom: '1px solid ' + COLORS.line };
   const td = { padding: '6px 8px', fontSize: 12, textAlign: 'right', whiteSpace: 'nowrap', borderBottom: '1px solid ' + COLORS.line, fontVariantNumeric: 'tabular-nums' };
@@ -1936,7 +1953,8 @@ function RencanaMatriks({ m, bisaUbah, ajukanTgl, onSel, onAjukan, terkunci }) {
   const totFee = Object.keys(m.fee).reduce(function(s, t) { return s + m.fee[t]; }, 0);
   return <Card pad={false}>
     <div className="px-4 pt-3 pb-2 text-xs" style={{ color: COLORS.muted }}>Geser ke samping untuk melihat semua pos. Ketuk sel untuk mengubah/menambah; ketuk sel merah "Tidak muat" untuk melihat barangnya.
-      Usulan otomatis hanya mengisi sampai {m.batas}% pagu (cadangan bila PM turun); sisanya boleh diisi manual.
+      Usulan otomatis hanya mengisi sampai {m.batas}% pagu (cadangan bila PM turun); sisanya boleh diisi manual. Tanggal yang sudah lewat (abu-abu) tidak bisa diisi atau diajukan.
+      Tombol Ajukan mengirim baris yang penerimanya sudah dipilih; satu baris bisa diajukan sendiri dari selnya.
       <span className="inline-flex items-center gap-1 ml-2"><span style={{ width: 10, height: 10, background: '#DCEFE3', display: 'inline-block', borderRadius: 2 }}/> sudah diajukan</span>
       <span className="inline-flex items-center gap-1 ml-2"><span style={{ width: 10, height: 10, background: '#F8E9E5', display: 'inline-block', borderRadius: 2 }}/> melebihi pagu</span></div>
     <div style={{ overflowX: 'auto' }}>
@@ -1949,22 +1967,24 @@ function RencanaMatriks({ m, bisaUbah, ajukanTgl, onSel, onAjukan, terkunci }) {
         <tbody>
           {r.hari.map(function(h) {
             const row = m.sel[h.tanggal] || {}, lebih = h.pakai > h.pagu, sisa = h.pagu - h.pakai;
-            const belum = kol.reduce(function(n, k) { return n + (row[k] ? row[k].n - row[k].aju : 0); }, 0);
-            const bg = lebih ? '#F8E9E5' : h.libur ? COLORS.paper : COLORS.surface;
+            const sudahLewat = lewat(h.tanggal);
+            const belum = kol.reduce(function(n, k) { return n + (row[k] ? row[k].items.filter(function(x) { return !x.pengajuan_id && x.penerima_id; }).length : 0); }, 0);
+            const bg = sudahLewat ? '#EEEEEA' : lebih ? '#F8E9E5' : h.libur ? COLORS.paper : COLORS.surface;
             return <tr key={h.tanggal}>
               <td style={Object.assign({}, td, kiri, { background: bg, fontWeight: 600, color: COLORS.ink })}>{h.nama} {h.tanggal.slice(8)}/{h.tanggal.slice(5, 7)}
-                <div style={{ fontSize: 10, fontWeight: 400, color: COLORS.muted }}>{h.libur ? 'bukan HPE' : 'PM ' + fmtNoRp(h.pm)}</div></td>
+                <div style={{ fontSize: 10, fontWeight: 400, color: COLORS.muted }}>{sudahLewat ? 'sudah lewat' : h.libur ? 'bukan HPE' : 'PM ' + fmtNoRp(h.pm)}</div></td>
               {kol.map(function(k) { const c = row[k];
-                return <td key={k} onClick={function() { if (!h.libur || c) onSel(h.tanggal, k, c); }} style={Object.assign({}, td, { cursor: (!h.libur && bisaUbah) || c ? 'pointer' : 'default',
-                  background: c && c.aju === c.n ? '#DCEFE3' : bg, color: c ? COLORS.ink : COLORS.line })} aria-label={roLabel(k) + ' ' + h.tanggal}>
-                  {c ? singkat(c.nominal) + (c.n > 1 ? ' ×' + c.n : '') : (h.libur ? '' : '·')}</td>; })}
+                const bisaTambah = !h.libur && !sudahLewat && bisaUbah;
+                return <td key={k} onClick={function() { if (c || bisaTambah) onSel(h.tanggal, k, c); }} style={Object.assign({}, td, { cursor: c || bisaTambah ? 'pointer' : 'default',
+                  background: c && c.aju === c.n ? '#DCEFE3' : bg, color: c ? (sudahLewat ? COLORS.muted : COLORS.ink) : COLORS.line })} aria-label={roLabel(k) + ' ' + h.tanggal}>
+                  {c ? singkat(c.nominal) + (c.n > 1 ? ' ×' + c.n : '') : (bisaTambah ? '·' : '')}</td>; })}
               <td style={Object.assign({}, td, { background: bg, color: COLORS.muted })}>{m.fee[h.tanggal] ? singkat(m.fee[h.tanggal]) : ''}</td>
               <td style={Object.assign({}, td, { background: bg, fontWeight: 700 })}>{h.pakai ? singkat(h.pakai) : ''}</td>
               <td style={Object.assign({}, td, { background: bg, color: COLORS.muted })}>{h.pagu ? singkat(h.pagu) : '0'}</td>
               <td style={Object.assign({}, td, { background: bg, fontWeight: 700, color: lebih ? COLORS.danger : COLORS.green })}>{h.libur && !h.pakai ? '' : (lebih ? '−' + singkat(-sisa) : singkat(sisa))}</td>
-              {bisaUbah && <td style={Object.assign({}, td, { background: bg })}>{belum > 0 && <button type="button" disabled={lebih || !!ajukanTgl} onClick={function() { onAjukan(h.tanggal); }}
-                className="rounded-md px-2 py-1 text-[11px] font-semibold" style={{ background: lebih ? COLORS.muted : COLORS.green, color: '#fff', opacity: lebih ? 0.5 : 1 }}
-                title={lebih ? 'Melebihi pagu — kurangi dulu' : 'Ajukan ' + belum + ' baris'}>{ajukanTgl === h.tanggal ? '…' : 'Ajukan'}</button>}</td>}
+              {bisaUbah && <td style={Object.assign({}, td, { background: bg })}>{belum > 0 && !sudahLewat && <button type="button" disabled={!!ajukanTgl} onClick={function() { onAjukan(h.tanggal); }}
+                className="rounded-md px-2 py-1 text-[11px] font-semibold" style={{ background: COLORS.green, color: '#fff' }}
+                title={'Ajukan ' + belum + ' baris yang penerimanya sudah dipilih'}>{ajukanTgl === h.tanggal ? '…' : 'Ajukan ' + belum}</button>}</td>}
             </tr>;
           })}
         </tbody>
@@ -1987,7 +2007,7 @@ function RencanaMatriks({ m, bisaUbah, ajukanTgl, onSel, onAjukan, terkunci }) {
     </div>
   </Card>;
 }
-function RencanaItemModal({ x, ctx, hari, kategori, bisaUbah, pmap, onClose, onSave, onDelete }) {
+function RencanaItemModal({ x, ctx, hari, kategori, bisaUbah, pmap, onClose, onSave, onDelete, onAjukan, lewat, busy }) {
   const [f, setF] = useState(x);
   const set = function(k, v) { setF(Object.assign({}, f, { [k]: v })); };
   const h = hari.find(function(d) { return d.tanggal === f.tanggal; });
@@ -1999,7 +2019,7 @@ function RencanaItemModal({ x, ctx, hari, kategori, bisaUbah, pmap, onClose, onS
     <Field label="Tanggal belanja (= tanggal transfer)">
       <select value={f.tanggal} disabled={!bisaUbah} onChange={function(e) { set('tanggal', e.target.value); }} style={inputStyle} aria-label="Tanggal rencana">
         <option value="">Belum dijadwalkan</option>
-        {hari.filter(function(d) { return !d.libur; }).map(function(d) { const s = d.pagu - d.pakai + (x.tanggal === d.tanggal ? lama : 0);
+        {hari.filter(function(d) { return !d.libur && (!lewat(d.tanggal) || d.tanggal === x.tanggal); }).map(function(d) { const s = d.pagu - d.pakai + (x.tanggal === d.tanggal ? lama : 0);
           return <option key={d.tanggal} value={d.tanggal}>{d.nama} {fmtDate(d.tanggal)} · sisa {fmtNoRp(s)}</option>; })}
       </select>
     </Field>
@@ -2011,10 +2031,14 @@ function RencanaItemModal({ x, ctx, hari, kategori, bisaUbah, pmap, onClose, onS
     <Field label="Penerima / toko" hint={f.penerima_id && roFee(f, pmap, ctx.bankVA) ? 'Beda bank dengan VA → biaya transfer Rp 6.500 ikut dihitung' : f.penerima_id ? 'Sesama bank VA → tanpa biaya transfer' : 'Wajib diisi sebelum diajukan'}>
       <select value={f.penerima_id} disabled={!bisaUbah} onChange={function(e) { set('penerima_id', e.target.value); }} style={inputStyle} aria-label="Penerima rencana">
         <option value="">Pilih…</option>{ctx.penerima.map(function(p) { return <option key={p.id} value={p.id}>{p.nama} · {roKodeBank(p.bank)} {p.no_rek}</option>; })}</select></Field>
+    {x.tanggal && lewat(x.tanggal) && !x.pengajuan_id && <div className="rounded-lg p-2 mb-3 text-xs" style={{ background: COLORS.paper, color: COLORS.muted }}>Tanggal sudah lewat — baris ini tidak bisa diubah atau diajukan.</div>}
     {bisaUbah && <div className="flex gap-2">
       {!x.baru && <Btn kind="ghost" onClick={onDelete}>{I.trash} Hapus</Btn>}
-      <div className="flex-1"><Btn full disabled={!!err} onClick={function() { onSave(Object.assign({}, f, { nominal: Number(f.nominal) || 0, uraian: String(f.uraian).trim() })); }}>{I.check} {err || 'Simpan baris'}</Btn></div>
+      <div className="flex-1"><Btn full kind="ghost" disabled={!!err} onClick={function() { onSave(Object.assign({}, f, { nominal: Number(f.nominal) || 0, uraian: String(f.uraian).trim() })); }}>{I.check} {err || 'Simpan baris'}</Btn></div>
     </div>}
+    {bisaUbah && <div className="mt-2"><Btn full disabled={!!err || !f.tanggal || !f.penerima_id || lewat(f.tanggal) || busy || (h && butuh > sisa)}
+      onClick={function() { onAjukan(Object.assign({}, f, { nominal: Number(f.nominal) || 0, uraian: String(f.uraian).trim() })); }}>{I.file} Ajukan baris ini</Btn>
+      {(!f.tanggal || !f.penerima_id) && <div className="text-xs mt-1" style={{ color: COLORS.muted }}>Pilih tanggal dan penerima untuk mengajukan.</div>}</div>}
   </Modal>;
 }
 
