@@ -357,7 +357,7 @@ async function isiBahanBaku(page, uraian, volume, harga) {
     await page.fill('[aria-label="PM 2026-11-10"]', '');
     await page.type('[aria-label="PM 2026-11-10"]', '800');
     assert((await page.inputValue('[aria-label="PM 2026-11-10"]')) === '800', 'isian PM terputus saat diketik');
-    await page.waitForSelector('td:has-text("2,40 jt")');   // pagu 3.000 × 800
+    await page.waitForSelector('td:has-text("Rp 2.400.000")');   // pagu 3.000 × 800
     await page.fill('[aria-label="PM 2026-11-10"]', '1000');
     await page.click('[aria-label="Gas 2026-11-09"]');
     await page.waitForSelector('text=Tambah kebutuhan >> nth=1');
