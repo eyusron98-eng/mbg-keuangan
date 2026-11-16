@@ -728,6 +728,22 @@ async function isiBahanBaku(page, uraian, volume, harga) {
     globalThis.__ph = null;
   });
 
+  all &= await run('LPDH: saldo VA tersimpan tidak sinkron dengan transaksi → peringatan & konfirmasi sebelum unduh', { role: 'akuntan',
+    override: (a, m, p) => a === 'getDataLPDH' ? { ok: true, data: { dapur: { id: 'D1', nama: 'SPPG Satu', kode: 'S1' }, identitas: { id_sppg: '32.04.01.0001' }, tanggal: p.tanggal,
+        periode: { id: 'P2', periode_no: 2, tanggal_mulai: '2026-10-01', tanggal_akhir: '2026-10-31', status: 'AKTIF' }, saldoAwal: 287633700, topups: [],
+        transaksi: [{ id: 'T1', tanggal: p.tanggal, no_bukti: 'NB-1', jenis: 'Operasional', kategori: 'BBM Operasional Kendaraan', uraian: 'BBM', sumber: 'VA', riil: 37715950, bukti_url: 'https://x' }],
+        komponen: { awal: [169101748, 70333249, 48198703], topups: [], geser: [], nama: ['Bahan Baku', 'Operasional', 'Insentif'] },
+        saldoRekening: { saldo_va: 249351250, penjelasan: '' } } } : null }, async (page, srv) => {
+    await login(page, 'siti');
+    await page.waitForSelector('header');
+    await page.click('nav:visible >> text=LPDH Harian');
+    await page.waitForSelector('[aria-label="Saldo tidak sinkron"] >> text=selisih Rp 566.500');
+    await page.click('text=Unduh LPDH');
+    await page.waitForSelector('.sheet >> text=Saldo VA tidak sinkron');
+    const [dl] = await Promise.all([page.waitForEvent('download'), page.click('.sheet >> button:has-text("Tetap unduh")')]);
+    assert(/\.xlsx$/.test(dl.suggestedFilename()), 'LPDH tetap bisa diunduh setelah konfirmasi');
+  });
+
   all &= await run('Relawan: daftar kosong bisa diisi (tombol tidak tertutup) & tempel dari Excel', { role: 'akuntan',
     override: (a, m, p) => a === 'getRelawanBayar' ? { ok: true, data: { rows: [], sumber: 'baru', total: 6240000 } }
       : a === 'getDataLPDH' ? { ok: true, data: { dapur: { id: 'D1', nama: 'SPPG Satu', kode: 'S1' }, identitas: {}, tanggal: p.tanggal, harian: null,
