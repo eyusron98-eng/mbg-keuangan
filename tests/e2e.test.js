@@ -420,6 +420,37 @@ async function isiBahanBaku(page, uraian, volume, harga) {
     globalThis.__ro2 = null;
   });
 
+  all &= await run('Rencana Ops: pengajuan dibatalkan PIC → baris bisa diubah & diajukan lagi', { role: 'akuntan',
+    override: (a, m, p) => {
+      const L = globalThis.__ro3 = globalThis.__ro3 || { aju: [], versi: 2 };
+      const it = (id, t, kat, nom, pid) => ({ id, tanggal: t, kategori: kat, uraian: kat, nominal: nom, penerima_id: 'W', pengajuan_id: pid || '', nomor: pid ? 'BA-' + pid : '' });
+      if (a === 'getRencanaOps') return { ok: true, data: { dapur: 'D1', bisaUbah: true, bankVA: 'BSI', aktual: {}, riwayat: null,
+        status: { PA1: ['DIBATALKAN'], PA2: ['DISETUJUI'] },
+        periode: { id: 'P19', periode_no: 19, tanggal_mulai: '2026-11-02', tanggal_akhir: '2026-11-13', penerima: 1000, status: 'AKTIF' },
+        penerima: [{ id: 'W', nama: 'Wanda', bank: 'BSI', no_rek: '1' }],
+        rencana: L.saved || { versi: 2, setelan: { indeks: 100, batas: 95 }, hari: {}, items: [it('A', '2026-11-03', 'Gas', 900000, 'PA1'), it('B', '2026-11-04', 'Gas', 500000, 'PA2')] } } };
+      if (a === 'getKategori') return { ok: true, data: { 'Operasional': ['Gas'] } };
+      if (a === 'saveRencanaOps') { if ((p.data.versi || 0) !== L.versi) return { ok: false, error: 'Rencana sudah diubah di perangkat lain.' }; L.versi++; L.saved = Object.assign({}, p.data, { versi: L.versi }); return { ok: true, data: { versi: L.versi } }; }
+      if (a === 'createPengajuan') { L.aju.push(p); return { ok: true, data: { id: 'PA3', nomor: 'BA-PA3' } }; }
+      return null; } }, async (page, srv) => {
+    await login(page, 'siti');
+    await page.waitForSelector('header');
+    await page.click('nav:visible >> text=Rencana Ops');
+    await page.waitForSelector('text=ditolak/dibatalkan — bisa diubah');
+    await page.click('[aria-label="Gas 2026-11-03"]');
+    await page.waitForSelector('text=Pengajuan sebelumnya dibatalkan');
+    assert(!(await page.isVisible('text=Sudah diajukan (BA-PA1)')) && await page.isEnabled('[aria-label="Nominal rencana"]'), 'baris dibatalkan masih terkunci');
+    await page.fill('[aria-label="Nominal rencana"]', '700000');
+    await page.click('text=Ajukan baris ini');
+    await page.waitForSelector('text=Pengajuan BA-PA3 terkirim');
+    const L = globalThis.__ro3;
+    assert(L.aju.length === 1 && L.aju[0].items[0].nominal === 700000 && L.aju[0].tanggal === '2026-11-03', 'pengajuan ulang salah: ' + JSON.stringify(L.aju[0]));
+    assert(L.saved.items.find(x => x.id === 'A').pengajuan_id === 'PA3' && L.saved.items.find(x => x.id === 'B').pengajuan_id === 'PA2', 'status baris tidak tersimpan benar');
+    await page.click('[aria-label="Gas 2026-11-04"]');
+    await page.waitForSelector('text=Sudah diajukan (BA-PA2)');
+    globalThis.__ro3 = null;
+  });
+
   all &= await run('Relawan: daftar kosong bisa diisi (tombol tidak tertutup) & tempel dari Excel', { role: 'akuntan',
     override: (a, m, p) => a === 'getRelawanBayar' ? { ok: true, data: { rows: [], sumber: 'baru', total: 6240000 } }
       : a === 'getDataLPDH' ? { ok: true, data: { dapur: { id: 'D1', nama: 'SPPG Satu', kode: 'S1' }, identitas: {}, tanggal: p.tanggal, harian: null,

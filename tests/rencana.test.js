@@ -2,7 +2,7 @@
 const fs = require('fs'), path = require('path');
 const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'index.html'), 'utf8');
 const blok = src.slice(src.indexOf('// <RENCANA-OPS>'), src.indexOf('// </RENCANA-OPS>'));
-const R = new Function(blok + '\nreturn { roHari, roPagu, roBatas, roFee, roKodeBank, roBersih, roUsulkan, roRingkas, roMatriks, roLabel };')();
+const R = new Function(blok + '\nreturn { roHari, roPagu, roBatas, roFee, roKodeBank, roBersih, roUsulkan, roRingkas, roMatriks, roLabel, roStatusBaris, roLepasBatal };')();
 let fails = 0;
 const ok = (c, m) => { console.log((c ? 'PASS ' : 'FAIL ') + m); if (!c) fails++; };
 
@@ -66,6 +66,14 @@ ok(!u5.items.some(x => x.bagian && x.nominal < 250000), 'belanja kecil tidak dip
   ok(r.rencanaAktif <= r.paguAktif && r.kebutuhanAktif === r.rencanaAktif + r.takNilai, 'rencana aktif & kebutuhan dihitung dari hari tersisa');
   const m = R.roMatriks(ul.items.concat([{ id: 'L', tanggal: '2026-11-10', kategori: 'Gas', uraian: 'lama', nominal: 999000, penerima_id: 'GAS' }]), ctx, set, {}, '2026-11-16');
   ok(!(m.terjadwal['Gas'] >= 999000) || ul.items.filter(x => x.kategori === 'Gas' && x.tanggal).reduce((a, x) => a + x.nominal, 0) === m.terjadwal['Gas'], 'baris Terjadwal di matriks tidak menghitung tanggal yang sudah lewat'); }
+{ const its = [{ id: 'a', pengajuan_id: 'PA1', nomor: 'N1' }, { id: 'b', pengajuan_id: 'PA2', nomor: 'N2' }, { id: 'c', pengajuan_id: 'PA2', nomor: 'N2' }, { id: 'd' }];
+  const st = { PA1: ['DIBATALKAN'], PA2: ['DISETUJUI', 'DITOLAK'] };
+  const sb = R.roStatusBaris(its, st);
+  ok(sb.a === 'DIBATALKAN' && sb.b === 'DISETUJUI' && sb.c === 'DITOLAK' && sb.d === undefined, 'status per baris dipetakan menurut urutan di pengajuan');
+  const l = R.roLepasBatal(its, st);
+  ok(l.lepas === 2 && !l.items[0].pengajuan_id && l.items[0].batal === 'dibatalkan' && l.items[1].pengajuan_id === 'PA2' && !l.items[2].pengajuan_id && l.items[2].batal === 'ditolak',
+    'baris yang dibatalkan/ditolak dilepas (bisa diubah & diajukan lagi), yang disetujui tetap terkunci');
+  ok(R.roLepasBatal(its, {}).lepas === 0, 'status belum diketahui → tetap terkunci'); }
 const kosong = R.roUsulkan(Object.assign({}, ctx, { riwayat: null }), set, {}, 1);
 ok(kosong.items.length === 0 && /manual/.test(kosong.catatan), 'tanpa riwayat: tidak ada usulan, diminta isi manual');
 
