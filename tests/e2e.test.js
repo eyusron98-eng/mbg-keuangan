@@ -19,7 +19,26 @@ const MAP = [
   [/unpkg\.com\/@babel\/standalone@/, NM + '/@babel/standalone/babel.min.js'],
   [/unpkg\.com\/jspdf@/, NM + '/jspdf/dist/jspdf.umd.min.js'],
   [/unpkg\.com\/jspdf-autotable@/, NM + '/jspdf-autotable/dist/jspdf.plugin.autotable.min.js'],
+  [/unpkg\.com\/pdfjs-dist@[^/]+\/legacy\/build\/pdf\.worker\.min\.js/, NM + '/pdfjs-dist/legacy/build/pdf.worker.min.js'],
+  [/unpkg\.com\/pdfjs-dist@[^/]+\/legacy\/build\/pdf\.min\.js/, NM + '/pdfjs-dist/legacy/build/pdf.min.js'],
 ];
+// PDF "Mutasi Transaksi SPPG" sintetis (bukan mutasi asli): 2 transfer keluar (+1 biaya admin), 1 dana masuk
+function pdfMutasiSintetis() {
+  const { jsPDF } = require('jspdf');
+  const d = new jsPDF({ orientation: 'landscape', unit: 'pt', format: 'a4' });
+  d.setFontSize(7);
+  const X = [20, 40, 140, 200, 430, 460, 540, 610, 680, 760];
+  const tulis = (y, k) => k.forEach((t, i) => d.text(String(t), X[i], y));
+  d.text('MUTASI TRANSAKSI SPPG', 20, 30);
+  tulis(60, ['NO', 'TANGGAL', 'NO JURNAL', 'DESKRIPSI', 'TIPE', 'SALDO AWAL', 'DEBET', 'KREDIT', 'SALDO AKHIR', 'CHANNEL']);
+  tulis(80, ['1', '01-Nov-2026 09:00:00', '100003', 'SETORAN DANA BGN', 'K', '1.193.500', '0', '1.000.000', '2.193.500', 'TELLER']);
+  tulis(100, ['2', '27-Okt-2026 10:11:12', '100002', 'PEMINDAHAN KE', 'D', '1.493.500', '300.000', '0', '1.193.500', 'BNIDIRECT']);
+  d.text('9876543210 BUDI SANTOSO', 200, 110);
+  tulis(130, ['3', '26-Okt-2026 08:00:01', '100001', 'BY TRX ATM PRIMA', 'D', '1.500.000', '6.500', '0', '1.493.500', 'BNIDIRECT']);
+  tulis(150, ['4', '26-Okt-2026 08:00:01', '100001', 'TRANSFER KE | |0001234567890 | TOKO SAYUR', 'D', '2.000.000', '500.000', '0', '1.500.000', 'BNIDIRECT']);
+  d.text('Halaman 1 dari 1', 20, 570);
+  return Buffer.from(d.output('arraybuffer'));
+}
 
 const P1 = { id: 'P1', periode_no: 1, dapur: 'D1', status: 'DITUTUP', tanggal_mulai: '2026-09-01', tanggal_akhir: '2026-09-30', penerima: 100, saldoVA: 10000000, saldoPettyAwal: 0 };
 const P2 = { id: 'P2', periode_no: 2, dapur: 'D1', status: 'AKTIF', tanggal_mulai: '2026-10-01', tanggal_akhir: '2026-10-31', penerima: 100, saldoVA: 7000000, saldoPettyAwal: 0,
@@ -793,21 +812,39 @@ async function isiBahanBaku(page, uraian, volume, harga) {
     await page.waitForSelector('text=belum ada TTD: Perwakilan Mitra/Yayasan');
   });
 
-  all &= await run('Realisasi Massal (admin): simulasi, konfirmasi jumlah, eksekusi', { role: 'admin',
+  all &= await run('Realisasi Massal (admin): unggah mutasi, simulasi, konfirmasi jumlah, eksekusi', { role: 'admin',
     override: (a, m, p) => a === 'realisasiMassal' ? (p.eksekusi ? (globalThis.__rm = p, { ok: true, data: { simulasi: false, dibuat: 204, ditautkanUlang: 0, nominal: 399884755, perPeriode: [], saldo: [{ periode_no: 9, saldo_sekarang: 563283290, saldo_sesudah: 261035035 }] } })
-        : { ok: true, data: { simulasi: true, jumlah: 204, nominal: 399884755, sudahTertaut: 0, dilewati: 0, alasanLewat: [], bankVA: 'BNI', admin: 546000, nAdmin: 84,
+        : (globalThis.__rmSim = p, { ok: true, data: { simulasi: true, jumlah: 204, nominal: 399884755, sudahTertaut: 0, dilewati: 0, alasanLewat: [], bankVA: 'BNI', admin: 546000, nAdmin: 84,
+          mutasi: { dari: '2026-10-26', sampai: '2026-11-01', debit: 2, tanpaMutasi: [{ id: 'x1', tanggal: '2026-10-28', uraian: 'Ayam potong', nominal: 80000, penerima: 'Toko Ayam', bank: 'BRI', rek: '111' }], nTanpaMutasi: 1, nilaiTanpaMutasi: 80000,
+            rekBeda: [], nRekBeda: 0, diluarMutasi: 0, nilaiDiluar: 0, sisaDebit: [{ tgl: '2026-10-27', nom: 5000000, fee: 6500, rek: '999', ket: 'GAJI PLOG' }], nSisaDebit: 1, sisaNominal: 5006500, saldoAkhirBank: 2193500 },
+          cekSaldo: { tanggal: '2026-11-01', periode_no: 9, aplikasi: 1193500, bank: 2193500, selisih: -1000000 },
           perPeriode: [{ periode_no: 9, status: 'DITUTUP', baris: 164, nominal: 302248255, jenis: { 'Bahan Baku': 184787115 }, dari: '2026-10-25', sampai: '2026-11-07' }, { periode_no: 10, status: 'AKTIF', baris: 40, nominal: 97636500, jenis: { Operasional: 26142500 }, dari: '2026-11-09', sampai: '2026-11-13' }],
-          saldo: [{ periode_no: 9, saldo_sekarang: 563283290, saldo_sesudah: 261035035 }], contoh: [{ tanggal: '2026-10-25', no_bukti: 'MKS01-20261025-001', jenis: 'Bahan Baku', kategori: 'Semua Kategori', uraian: 'Beras', nominal: 2560000 }] } })
+          saldo: [{ periode_no: 9, saldo_sekarang: 563283290, saldo_sesudah: 261035035 }], contoh: [{ tanggal: '2026-10-25', no_bukti: 'MKS01-20261025-001', jenis: 'Bahan Baku', kategori: 'Semua Kategori', uraian: 'Beras', nominal: 2560000 }] } }))
       : a === 'getDapur' ? { ok: true, data: [{ id: 'D2', nama: 'SPPG Mekarsari', kode: 'MKS01' }] } : null }, async (page, srv) => {
     await login(page, 'siti');
     await page.waitForSelector('header');
     await page.click('nav:visible >> text=Realisasi Massal');
     await page.selectOption('[aria-label="Dapur realisasi massal"]', 'D2');
     await page.check('[aria-label="Sertakan periode ditutup"]');
+    assert(await page.isDisabled('button:has-text("Simulasi")'), 'simulasi harus terkunci sebelum mutasi diunggah');
+    await page.setInputFiles('[aria-label="File mutasi"]', { name: 'mutasi.pdf', mimeType: 'application/pdf', buffer: pdfMutasiSintetis() });
+    await page.waitForSelector('[aria-label="Ringkasan mutasi"] >> text=4 baris mutasi', { timeout: 20000 });
+    const rk = await page.textContent('[aria-label="Ringkasan mutasi"]');
+    assert(/26-10-2026 s\.d\. 01-11-2026/.test(rk) && /2 transfer keluar/.test(rk) && /1 dana masuk \(Rp 1\.000\.000\)/.test(rk) && /Rp 2\.000\.000 → Rp 2\.193\.500/.test(rk) && /bersambung ✓/.test(rk), 'ringkasan mutasi salah: ' + rk);
     await page.click('button:has-text("Simulasi")');
     await page.waitForSelector('text=204 baris akan direalisasi');
+    const ms = globalThis.__rmSim.mutasi;
+    assert(ms && ms.debit.length === 2 && ms.saldoAkhir === 2193500 && ms.saldoAwal === 2000000 && ms.dari === '2026-10-26' && ms.sampai === '2026-11-01', 'mutasi terkirim salah: ' + JSON.stringify(ms));
+    const tk = ms.debit.find(x => x.ref === '100001');
+    assert(tk && tk.nom === 500000 && tk.rek === '1234567890' && tk.fee === 6500 && tk.tgl === '2026-10-26', 'transfer + admin dari PDF salah: ' + JSON.stringify(ms.debit));
+    assert(ms.debit.find(x => x.ref === '100002').rek === '9876543210', 'rekening di baris lanjutan tidak terbaca');
+    await page.waitForSelector('[aria-label="Cek saldo mutasi"] >> text=selisih Rp -1.000.000');
+    await page.click('button:has-text("Pengajuan tanpa transfer di mutasi")');
+    await page.waitForSelector('text=Ayam potong · Rp 80.000 · Toko Ayam (BRI)');
+    await page.click('button:has-text("Transfer di mutasi tanpa pengajuan")');
+    await page.waitForSelector('text=Rp 5.000.000 + admin Rp 6.500 · GAJI PLOG');
     await page.waitForSelector('text=Periode 9 (ditutup)');
-    await page.waitForSelector('text=+ biaya admin Rp 546.000 (84 transfer antarbank × Rp 6.500; sesama BNI gratis)');
+    await page.waitForSelector('text=+ biaya admin Rp 546.000 (potongan nyata di mutasi, 84 transfer)');
     assert(await page.isDisabled('button:has-text("Realisasikan sekarang")'), 'tombol eksekusi harus terkunci sebelum jumlah diketik');
     await page.fill('[aria-label="Ketik jumlah baris untuk konfirmasi"]', '203');
     assert(await page.isDisabled('button:has-text("Realisasikan sekarang")'), 'jumlah salah → tetap terkunci');
@@ -815,8 +852,8 @@ async function isiBahanBaku(page, uraian, volume, harga) {
     await page.click('button:has-text("Realisasikan sekarang")');
     await page.waitForSelector('text=Selesai: 204 transaksi dibuat');
     const p = globalThis.__rm;
-    assert(p.dapur === 'D2' && p.eksekusi === true && p.jumlah_konfirmasi === 204 && p.sertakan_tutup === true, 'kiriman eksekusi salah: ' + JSON.stringify(p));
-    globalThis.__rm = null;
+    assert(p.dapur === 'D2' && p.eksekusi === true && p.jumlah_konfirmasi === 204 && p.sertakan_tutup === true && p.mutasi && p.mutasi.debit.length === 2, 'kiriman eksekusi salah: ' + JSON.stringify(p).slice(0, 300));
+    globalThis.__rm = null; globalThis.__rmSim = null;
   });
 
   all &= await run('Relawan: daftar kosong bisa diisi (tombol tidak tertutup) & tempel dari Excel', { role: 'akuntan',

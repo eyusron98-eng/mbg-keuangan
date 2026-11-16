@@ -135,7 +135,7 @@ function handleRequest(e, method) {
     }
     let result;
     switch (action) {
-      case 'ping':              result = { ok: true, time: new Date().toISOString(), version: 'v6-ba-sec31' }; break;
+      case 'ping':              result = { ok: true, time: new Date().toISOString(), version: 'v6-ba-sec32' }; break;
       case 'login':             result = login(params); break;
       case 'getPeriodeList':    result = getPeriodeList(params); break;
       case 'getActivePeriode':  result = getActivePeriode(params); break;
@@ -3285,7 +3285,7 @@ function getTugasHarian(p) {
 //  bukti dikosongkan (kecuali nota pengajuan bahan baku). Selalu simulasi dulu; eksekusi butuh jumlah baris yang sama dengan simulasi.
 //  Aman diulang: baris yang sudah punya transaksi tertaut tidak dibuat dua kali.
 // ============================================================
-function rencanaRealisasiMassal(dapurId, sertakanTutup) {
+function rencanaRealisasiMassal(dapurId, sertakanTutup, mutasi) {
   const items = readAllItems().filter(function(i) { return i.dapur === dapurId && i.status === 'DISETUJUI' && !i.transaksi_id; });
   const heads = {}; readAllPengajuan().forEach(function(h) { heads[h.id] = h; });
   const periode = {}; readAllPeriode(dapurId).forEach(function(r) { periode[r.id] = r; });
@@ -3313,7 +3313,69 @@ function rencanaRealisasiMassal(dapurId, sertakanTutup) {
     dipakai[normNB(nb)] = 1;
     siap.push({ it: it, tanggal: h.tanggal, no_bukti: nb, periode: per, bukti: it.jenis === 'Bahan Baku' && it.nota_url ? it.nota_url : '', fee: feeTransfer(it.bank, bankVA) });
   });
-  return { siap: siap, lewat: lewat, perbaiki: perbaiki, periode: periode, txAda: txAda };
+  const hasil = { siap: siap, lewat: lewat, perbaiki: perbaiki, periode: periode, txAda: txAda };
+  return mutasi ? cocokkanMutasi(hasil, dapurId, mutasi, heads) : hasil;
+}
+// ── Pencocokan dengan mutasi rekening (PDF BNI dibaca di aplikasi): hanya pengajuan yang benar-benar ada transfernya yang direalisasi ──
+// Kunci: nominal sama persis + rekening tujuan + tanggal bank paling dekat dengan tanggal pengajuan (maks. 5 hari). Biaya admin = potongan nyata di mutasi.
+function normRek(v) { return String(v == null ? '' : v).replace(/\D/g, '').replace(/^0+/, ''); }
+function selisihHari(a, b) { return Math.round((new Date(a + 'T00:00:00Z') - new Date(b + 'T00:00:00Z')) / 864e5); }
+function cocokkanMutasi(h, dapurId, mutasi, heads) {
+  const deb = (mutasi.debit || []).map(function(d, i) { return { i: i, tgl: String(d.tgl || '').substring(0, 10), nom: Math.round(Number(d.nom) || 0), rek: normRek(d.rek), fee: Math.round(Number(d.fee) || 0),
+    ref: String(d.ref || '').substring(0, 30), ket: String(d.ket || '').substring(0, 120), pakai: null }; }).filter(function(d) { return /^\d{4}-\d{2}-\d{2}$/.test(d.tgl) && d.nom > 0; });
+  const tgls = deb.map(function(d) { return d.tgl; }).sort(), dari = tgls[0] || '', sampai = tgls[tgls.length - 1] || '';
+  const dalam = function(t) { return dari && selisihHari(t, dari) >= -5 && selisihHari(t, sampai) <= 5; };
+  const pilih = function(nom, rek, tgl) {
+    const c = deb.filter(function(d) { return d.pakai === null && d.nom === nom && Math.abs(selisihHari(d.tgl, tgl)) <= 5; });
+    c.sort(function(a, b) { return ((a.rek && a.rek === rek) ? 0 : 1) - ((b.rek && b.rek === rek) ? 0 : 1) || Math.abs(selisihHari(a.tgl, tgl)) - Math.abs(selisihHari(b.tgl, tgl)); });
+    return c[0] || null;
+  };
+  // 1) transfer yang sudah tercatat di aplikasi memakai baris mutasinya lebih dulu (agar tidak dipasangkan dua kali)
+  const items = {}; readAllItems().forEach(function(i) { items[i.id] = i; });
+  h.txAda.filter(function(t) { return t.sumber !== 'Petty Cash' && !isFeeLink(t.pengajuan_item_id) && dalam(t.tanggal); })
+    .sort(function(a, b) { return a.tanggal.localeCompare(b.tanggal); }).forEach(function(t) {
+      const it = items[String(t.pengajuan_item_id || '')], d = pilih(Math.round(t.riil), it ? normRek(it.no_rek) : '', t.tanggal);
+      if (d) d.pakai = 'TX:' + t.id;
+    });
+  // 2) pengajuan yang belum direalisasi
+  const cocok = [], tanpa = [], beda = [], luar = [];
+  h.siap.forEach(function(x) {
+    const rek = normRek(x.it.no_rek), ringkas = { id: x.it.id, tanggal: x.tanggal, uraian: x.it.uraian, nominal: x.it.nominal, penerima: x.it.penerima_nama, bank: x.it.bank, rek: x.it.no_rek };
+    if (!dalam(x.tanggal)) { luar.push(ringkas); return; }
+    const d = pilih(x.it.nominal, rek, x.tanggal);
+    if (!d) { tanpa.push(ringkas); return; }
+    if (d.rek && rek && d.rek !== rek) { beda.push(Object.assign(ringkas, { rekMutasi: d.rek, tglMutasi: d.tgl, ket: d.ket })); return; }
+    d.pakai = x.it.id;
+    cocok.push(Object.assign({}, x, { fee: d.fee, mutasi: { tgl: d.tgl, ref: d.ref, fee: d.fee } }));
+  });
+  const sisa = deb.filter(function(d) { return d.pakai === null; });
+  return Object.assign({}, h, { siap: cocok, mutasi: { dari: dari, sampai: sampai, debit: deb.length, tanpaMutasi: tanpa, rekBeda: beda, diluarMutasi: luar,
+    sisaDebit: sisa.map(function(d) { return { tgl: d.tgl, nom: d.nom, rek: d.rek, fee: d.fee, ket: d.ket }; }), sisaNominal: sisa.reduce(function(a, d) { return a + d.nom + d.fee; }, 0),
+    saldoAkhirBank: Math.round(Number(mutasi.saldoAkhir) || 0), saldoAwalBank: Math.round(Number(mutasi.saldoAwal) || 0) } });
+}
+function bacaMutasiParam(v) {
+  if (!v) return null;
+  const m = typeof v === 'string' ? bacaJson(v) : v;
+  if (!m || !Array.isArray(m.debit)) return null;
+  if (m.debit.length > 3000) return null;
+  return m;
+}
+function ringkasMutasiHasil(m) {
+  const pot = function(a) { return a.slice(0, 60); }, jml = function(a) { return a.reduce(function(s, x) { return s + (x.nominal || 0); }, 0); };
+  return { dari: m.dari, sampai: m.sampai, debit: m.debit, tanpaMutasi: pot(m.tanpaMutasi), nTanpaMutasi: m.tanpaMutasi.length, nilaiTanpaMutasi: jml(m.tanpaMutasi),
+    rekBeda: pot(m.rekBeda), nRekBeda: m.rekBeda.length, diluarMutasi: m.diluarMutasi.length, nilaiDiluar: jml(m.diluarMutasi),
+    sisaDebit: pot(m.sisaDebit), nSisaDebit: m.sisaDebit.length, sisaNominal: m.sisaNominal, saldoAkhirBank: m.saldoAkhirBank };
+}
+// Saldo VA menurut aplikasi pada tanggal terakhir mutasi (setelah realisasi) dibandingkan saldo akhir di mutasi
+function cekSaldoMutasi(dapurId, r) {
+  const t = r.mutasi.sampai; if (!t) return null;
+  const per = Object.keys(r.periode).map(function(k) { return r.periode[k]; }).find(function(x) { return t >= x.tanggal_mulai && t <= x.tanggal_akhir; });
+  if (!per) return null;
+  const tu = readVATopups(dapurId, per.id).filter(function(x) { return x.tanggal <= t; }).reduce(function(a, x) { return a + x.jumlah; }, 0);
+  const lama = r.txAda.filter(function(x) { return x.periode_id === per.id && x.tanggal <= t; }).reduce(function(a, x) { return a + nilaiLPDH(x); }, 0);
+  const baru = r.siap.filter(function(x) { return x.periode.id === per.id && x.tanggal <= t; }).reduce(function(a, x) { return a + x.it.nominal + (x.fee || 0); }, 0);
+  const app = per.saldoVA + per.saldoPettyAwal + tu - lama - baru;
+  return { tanggal: t, periode_no: per.periode_no, aplikasi: app, bank: r.mutasi.saldoAkhirBank, selisih: app - r.mutasi.saldoAkhirBank };
 }
 function bankVAdapur(dapurId) { return String((readIdentitasLPDH(dapurId) || {}).bank || ''); }
 function realisasiMassal(p) {
@@ -3324,8 +3386,10 @@ function realisasiMassal(p) {
   if (!dapurId || !getDapur().data.some(function(x) { return x.id === dapurId; })) return { ok: false, error: 'Pilih dapur' };
   const sertakanTutup = p.sertakan_tutup === true || p.sertakan_tutup === 'true';
   const eksekusi = p.eksekusi === true || p.eksekusi === 'true';
+  const mutasi = bacaMutasiParam(p.mutasi);
+  if (!mutasi) return { ok: false, error: 'Unggah mutasi rekening dulu — realisasi massal hanya untuk pengajuan yang transfernya ada di mutasi' };
   const hitung = function() {
-    const r = rencanaRealisasiMassal(dapurId, sertakanTutup), ringkas = {};
+    const r = rencanaRealisasiMassal(dapurId, sertakanTutup, mutasi), ringkas = {};
     r.siap.forEach(function(x) { const k = x.periode.id; const o = ringkas[k] = ringkas[k] || { periode_no: x.periode.periode_no, status: x.periode.status, baris: 0, nominal: 0, jenis: {}, dari: x.tanggal, sampai: x.tanggal };
       o.baris++; o.nominal += x.it.nominal; o.admin = (o.admin || 0) + x.fee; o.nAdmin = (o.nAdmin || 0) + (x.fee > 0 ? 1 : 0); o.jenis[x.it.jenis] = (o.jenis[x.it.jenis] || 0) + x.it.nominal; if (x.tanggal < o.dari) o.dari = x.tanggal; if (x.tanggal > o.sampai) o.sampai = x.tanggal; });
     const topup = readVATopups(dapurId), saldo = Object.keys(ringkas).map(function(k) { const per = r.periode[k];
@@ -3338,7 +3402,7 @@ function realisasiMassal(p) {
     const h = hitung();
     return { ok: true, data: { simulasi: true, jumlah: h.r.siap.length, nominal: h.r.siap.reduce(function(a, x) { return a + x.it.nominal; }, 0), perPeriode: h.ringkas, saldo: h.saldo,
       bankVA: bankVAdapur(dapurId), admin: h.r.siap.reduce(function(a, x) { return a + x.fee; }, 0), nAdmin: h.r.siap.filter(function(x) { return x.fee > 0; }).length,
-      sudahTertaut: h.r.perbaiki.length, dilewati: h.r.lewat.length, alasanLewat: h.r.lewat.slice(0, 40),
+      sudahTertaut: h.r.perbaiki.length, dilewati: h.r.lewat.length, alasanLewat: h.r.lewat.slice(0, 40), mutasi: ringkasMutasiHasil(h.r.mutasi), cekSaldo: cekSaldoMutasi(dapurId, h.r),
       contoh: h.r.siap.slice(0, 5).map(function(x) { return { tanggal: x.tanggal, no_bukti: x.no_bukti, jenis: x.it.jenis, kategori: x.it.kategori, uraian: x.it.uraian, nominal: x.it.nominal }; }) } };
   }
   return withLock(function() {
@@ -3363,7 +3427,7 @@ function realisasiMassal(p) {
     }
     const nUtama = h.r.siap.length, nominal = h.r.siap.reduce(function(a, x) { return a + x.it.nominal; }, 0);
     logActivity(me.id, 'realisasiMassal', dapurId + ' ' + nUtama + ' baris Rp ' + nominal + ' + admin Rp ' + admin + (h.r.perbaiki.length ? ' (+' + h.r.perbaiki.length + ' ditautkan ulang)' : ''));
-    return { ok: true, data: { simulasi: false, dibuat: nUtama, nominal: nominal, admin: admin, nAdmin: baris.length - nUtama, ditautkanUlang: h.r.perbaiki.length, perPeriode: h.ringkas, saldo: h.saldo } };
+    return { ok: true, data: { simulasi: false, dibuat: nUtama, nominal: nominal, admin: admin, nAdmin: baris.length - nUtama, ditautkanUlang: h.r.perbaiki.length, perPeriode: h.ringkas, saldo: h.saldo, cekSaldo: cekSaldoMutasi(dapurId, h.r) } };
   });
 }
 
