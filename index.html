@@ -3860,6 +3860,7 @@ try {
     const [pilihSel, setPilihSel] = useState(null);
     const [hapusTak, setHapusTak] = useState(false);
     const [konfirmAju, setKonfirmAju] = useState(null);
+    const [waText, setWaText] = useState(null);
     const seedRef = useRef(0);
     const versiRef = useRef(0);
     const [kategori, setKategori] = useState([]);
@@ -4080,10 +4081,36 @@ try {
       const ok = await simpan(baru);
       setAjukanTgl('');
       toast('Pengajuan ' + res.data.nomor + ' terkirim untuk persetujuan' + (ok ? '' : ' (rencana belum tersimpan — tekan Simpan)'));
+      setWaText(teksWaRencana(res.data.nomor, t, baris));
       load();
     }
     const stBaris = roStatusBaris(items, ctx.status),
       idPItem = roIdItemPengajuan(items);
+    function teksWaRencana(nomor, t, baris) {
+      return buildWAPesan({
+        nomor: nomor,
+        tanggal: t,
+        dapurNama: ctx.dapurNama || '',
+        oleh: session.user.nama,
+        items: baris.map(function (x) {
+          const pn = pmap[x.penerima_id] || {};
+          return {
+            uraian: x.uraian + (x.bagian ? ' (bagian ' + x.bagian + ')' : ''),
+            jenis: 'Operasional',
+            nominal: x.nominal,
+            penerima_nama: pn.nama || '',
+            bank: pn.bank || '',
+            no_rek: pn.no_rek || ''
+          };
+        })
+      });
+    }
+    function waBaris(x) {
+      setEdit(null);
+      setWaText(teksWaRencana(x.nomor, x.tanggal, items.concat(luarItems).filter(function (y) {
+        return y.pengajuan_id && y.pengajuan_id === x.pengajuan_id;
+      })));
+    }
     async function batalAju(x, alasan) {
       const r = await apiPost('batalkanItem', {
         item_id: x.pitem_id || idPItem[x.id],
@@ -4507,7 +4534,13 @@ try {
           baru: true
         });
       }
-    }, I.plus, " Tambah baris ", roLabel(pilihSel.kategori)))), konfirmAju && React.createElement(Modal, {
+    }, I.plus, " Tambah baris ", roLabel(pilihSel.kategori)))), waText && React.createElement(WAModal, {
+      text: waText,
+      toast: toast,
+      onClose: function () {
+        setWaText(null);
+      }
+    }), konfirmAju && React.createElement(Modal, {
       title: 'Ajukan ' + konfirmAju.baris.length + ' baris untuk ' + fmtDateLong(konfirmAju.t) + '?',
       onClose: function () {
         setKonfirmAju(null);
@@ -4587,6 +4620,7 @@ try {
       busy: !!ajukanTgl,
       toast: toast,
       statusBaris: edit.luar ? edit.status : stBaris[edit.id],
+      onWa: waBaris,
       bisaBatal: role === 'akuntan' && ctx.periode.status === 'AKTIF',
       onBatal: batalAju,
       onPenerima: function (saved) {
@@ -5014,7 +5048,8 @@ try {
     onPenerima,
     statusBaris,
     bisaBatal,
-    onBatal
+    onBatal,
+    onWa
   }) {
     const [f, setF] = useState(x);
     const [alasan, setAlasan] = useState('');
@@ -5059,7 +5094,15 @@ try {
         background: '#E8F1EC',
         color: COLORS.deep
       }
-    }, "Sudah diajukan (", x.nomor, ") \u2014 ", React.createElement("b", null, labelSt), ", hari H ", fmtDateLong(x.tanggal), ". Lihat di menu ", React.createElement("b", null, "Pengajuan"), " \u2192 tampilan ", React.createElement("b", null, "Periode aktif"), statusBaris === 'DISETUJUI' ? ', dan di menu Realisasi' : '', ".", bolehBatal && React.createElement("div", {
+    }, "Sudah diajukan (", x.nomor, ") \u2014 ", React.createElement("b", null, labelSt), ", hari H ", fmtDateLong(x.tanggal), ". Lihat di menu ", React.createElement("b", null, "Pengajuan"), " \u2192 tampilan ", React.createElement("b", null, "Periode aktif"), statusBaris === 'DISETUJUI' ? ', dan di menu Realisasi' : '', ".", ['DIAJUKAN', 'REVISI', 'DISETUJUI'].indexOf(statusBaris) >= 0 && React.createElement("div", {
+      className: "mt-2"
+    }, React.createElement(Btn, {
+      size: "sm",
+      kind: "ghost",
+      onClick: function () {
+        onWa(x);
+      }
+    }, I.file, " Salin teks WA pengajuan ini")), bolehBatal && React.createElement("div", {
       className: "mt-2"
     }, !mauBatal ? React.createElement(Btn, {
       size: "sm",
@@ -9881,6 +9924,38 @@ try {
     const firstErr = rows.map(rowError).findIndex(function (e) {
       return !!e;
     });
+    const adaOps = rows.some(function (r) {
+      return r.jenis === 'Operasional';
+    });
+    const [pagu, setPagu] = useState(null);
+    useEffect(function () {
+      if (!adaOps || !tanggal || tglErr || needDapur && !dapur) {
+        setPagu(null);
+        return;
+      }
+      let hidup = true;
+      api('getPaguOps', {
+        tanggal: tanggal,
+        dapur: needDapur ? dapur : ''
+      }).then(function (r) {
+        if (hidup) setPagu(r.ok && r.data && typeof r.data.pagu === 'number' ? r.data : null);
+      });
+      return function () {
+        hidup = false;
+      };
+    }, [tanggal, dapur, adaOps, !!tglErr]);
+    const pnMap = {};
+    (penerima || []).forEach(function (x) {
+      pnMap[x.id] = x;
+    });
+    const opsIni = rows.filter(function (r) {
+      return r.jenis === 'Operasional';
+    }).reduce(function (a, r) {
+      return a + (Number(r.nominal) || 0) + (r.penerima_id ? roFee({
+        penerima_id: r.penerima_id
+      }, pnMap, pagu ? pagu.bankVA : '') : 0);
+    }, 0);
+    const opsTot = pagu ? pagu.terpakai + pagu.diajukan + opsIni : 0;
     function update(i, n) {
       setRows(rows.map(function (r, j) {
         return j === i ? n : r;
@@ -10042,7 +10117,45 @@ try {
       onClick: function () {
         setRows(rows.concat([newRow()]));
       }
-    }, I.plusSm, " Tambah baris")), React.createElement("div", {
+    }, I.plusSm, " Tambah baris")), pagu && opsIni > 0 && React.createElement("div", {
+      className: "rounded-lg p-3 mt-3 text-xs",
+      style: {
+        background: opsTot > pagu.pagu ? '#F8E9E5' : '#E8F1EC',
+        color: opsTot > pagu.pagu ? COLORS.danger : COLORS.deep
+      }
+    }, React.createElement("div", {
+      className: "font-semibold mb-1"
+    }, opsTot > pagu.pagu ? '⚠️ Operasional ' + fmtDate(tanggal) + ' melebihi pagu harian ' + fmt(opsTot - pagu.pagu) : 'Operasional ' + fmtDate(tanggal) + ' masih dalam pagu harian'), React.createElement("div", {
+      className: "flex justify-between"
+    }, React.createElement("span", null, "Pagu ", pagu.libur ? '(bukan HPE)' : '(PM ' + fmtNoRp(pagu.pm) + ')'), React.createElement("b", {
+      className: "num"
+    }, fmt(pagu.pagu))), pagu.terpakai > 0 && React.createElement("div", {
+      className: "flex justify-between"
+    }, React.createElement("span", null, "Sudah direalisasi"), React.createElement("span", {
+      className: "num"
+    }, fmt(pagu.terpakai))), pagu.diajukan > 0 && React.createElement("div", {
+      className: "flex justify-between"
+    }, React.createElement("span", null, "Sudah diajukan, belum direalisasi (", pagu.nDiajukan, " baris)"), React.createElement("span", {
+      className: "num"
+    }, fmt(pagu.diajukan))), React.createElement("div", {
+      className: "flex justify-between"
+    }, React.createElement("span", null, "Pengajuan ini (termasuk biaya transfer)"), React.createElement("span", {
+      className: "num"
+    }, fmt(opsIni))), React.createElement("div", {
+      className: "flex justify-between font-bold pt-1",
+      style: {
+        borderTop: '1px solid rgba(0,0,0,0.1)'
+      }
+    }, React.createElement("span", null, "Jumlah"), React.createElement("span", {
+      className: "num"
+    }, fmt(opsTot))), pagu.rencanaBelum > 0 && React.createElement("div", {
+      className: "mt-1",
+      style: {
+        color: '#9A6A0B'
+      }
+    }, "Rencana Ops hari itu masih punya ", fmt(pagu.rencanaBelum), " yang belum diajukan \u2014 pastikan tidak dobel."), opsTot > pagu.pagu && React.createElement("div", {
+      className: "mt-1"
+    }, "Pagu LPDH mutlak. Kurangi nominal, pindahkan ke hari lain, atau cek menu Rencana Ops.")), React.createElement("div", {
       className: "sticky-bar"
     }, React.createElement("div", {
       className: "flex items-end justify-between gap-3"

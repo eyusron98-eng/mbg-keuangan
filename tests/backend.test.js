@@ -85,7 +85,7 @@ const ok = (c, m) => { console.log((c ? 'PASS ' : 'FAIL ') + m); if (!c) fails++
     ['U3', 'off', 'xxxxxxx', 'Nonaktif', 'pic', 'D001', 'TIDAK'],
   ]);
   const B = env.__book;
-  ok(call(env, 'GET', { action: 'ping' }).version === 'v6-ba-sec19', 'ping menampilkan versi baru');
+  ok(call(env, 'GET', { action: 'ping' }).version === 'v6-ba-sec20', 'ping menampilkan versi baru');
 
   // 1. login lama (teks biasa) berhasil via POST dan password otomatis di-hash
   let r = call(env, 'POST', { action: 'login', username: 'AKUN1', password: 'RahasiaKu9' });
@@ -630,6 +630,7 @@ const ok = (c, m) => { console.log((c ? 'PASS ' : 'FAIL ') + m); if (!c) fails++
     r = call(e8, 'GET', { action: 'getPaguOps', token: tAkn, tanggal: '2026-10-09' });
     ok(r.ok && r.data.pagu === 600000 && r.data.pm === 200, 'pagu harian = 3.000 × PM hari itu (PM disesuaikan 200): ' + JSON.stringify(r.data));
     ok(r.data.terpakai === 100000, 'operasional terpakai hari itu memakai nilai anggaran (' + r.data.terpakai + ')');
+    ok(r.data.diajukan === 0 && r.data.rencanaBelum === 300000, 'pagu hari: rencana yang belum diajukan ikut dilaporkan (' + r.data.rencanaBelum + ')');
     r = call(e8, 'GET', { action: 'getPaguOps', token: tAkn, tanggal: '2026-10-10' });
     ok(r.data.libur === true && r.data.pagu === 0, 'Sabtu bukan HPE → pagu 0');
     r = call(e8, 'GET', { action: 'getPaguOps', token: tAkn, tanggal: '2026-10-13' });

@@ -373,6 +373,10 @@ async function isiBahanBaku(page, uraian, volume, harga) {
     assert(globalThis.__ro.aju.length === 0, 'pengajuan terkirim sebelum dikonfirmasi');
     await page.click('text=Ya, ajukan');
     await page.waitForSelector('text=Pengajuan BA-PA/S1/2026/11/009 terkirim');
+    await page.waitForSelector('text=Kabari Yayasan lewat WhatsApp');
+    const wa = await page.inputValue('.sheet textarea');
+    assert(/BA-PA\/S1\/2026\/11\/009/.test(wa) && /Transfer ke: Wanda/.test(wa) && /Senin, 9 November 2026/.test(wa), 'teks WA salah: ' + wa);
+    await page.click('button:has-text("Tutup")');
     const aj = L.aju[0];
     assert(aj && aj.tanggal === '2026-11-09' && aj.items.every(i => i.jenis === 'Operasional' && i.penerima_id) && aj.items.some(i => /honor/i.test(i.kategori)), 'pengajuan salah: ' + JSON.stringify(aj));
     assert(L.save.length >= 2 && L.save[L.save.length - 1].data.items.filter(x => x.pengajuan_id === 'PA9').length === aj.items.length, 'baris yang diajukan tidak ditandai di rencana');
@@ -412,6 +416,7 @@ async function isiBahanBaku(page, uraian, volume, harga) {
     await page.click('button:has-text("Ajukan 1") >> nth=0');
     await page.click('text=Ya, ajukan');
     await page.waitForSelector('text=BA-PA/S1/2026/10/001 terkirim');
+    await page.click('button:has-text("Tutup")');
     const L = globalThis.__ro2;
     assert(L.aju[0].tanggal === '2026-10-30' && L.aju[0].items.length === 1 && /honor/i.test(L.aju[0].items[0].kategori), 'ajukan harian harus melewati baris tanpa penerima: ' + JSON.stringify(L.aju[0]));
     // ajukan satu baris dari selnya (2 Nov)
@@ -419,6 +424,7 @@ async function isiBahanBaku(page, uraian, volume, harga) {
     await page.click('text=Ajukan baris ini');
     await page.click('text=Ya, ajukan');
     await page.waitForSelector('text=BA-PA/S1/2026/10/002 terkirim');
+    await page.click('button:has-text("Tutup")');
     assert(L.aju[1].tanggal === '2026-11-02' && L.aju[1].items.length === 1, 'ajukan satu baris salah: ' + JSON.stringify(L.aju[1]));
     assert(!L.saved.items.some(x => x.kategori === 'Sewa Kendaraan'), 'baris Sewa Kendaraan lama tidak dibuang');
     assert(L.saved.items.filter(x => x.pengajuan_id).length === 2, 'status diajukan tidak tersimpan');
@@ -450,6 +456,7 @@ async function isiBahanBaku(page, uraian, volume, harga) {
     await page.click('text=Ajukan baris ini');
     await page.click('text=Ya, ajukan');
     await page.waitForSelector('text=Pengajuan BA-PA3 terkirim');
+    await page.click('button:has-text("Tutup")');
     const L = globalThis.__ro3;
     assert(L.aju.length === 1 && L.aju[0].items[0].nominal === 700000 && L.aju[0].tanggal === '2026-11-03', 'pengajuan ulang salah: ' + JSON.stringify(L.aju[0]));
     assert(L.saved.items.find(x => x.id === 'A').pengajuan_id === 'PA3' && L.saved.items.find(x => x.id === 'B').pengajuan_id === 'PA2', 'status baris tidak tersimpan benar');
@@ -755,6 +762,27 @@ async function isiBahanBaku(page, uraian, volume, harga) {
     assert(/mode=periode/.test(u3) && /periode_id=P1/.test(u3), 'permintaan harus mode=periode&periode_id=P1: ' + u3);
     assert(srv.log.urls.filter(u => u.includes('action=getBADaftar')).length === n + 1, 'memilih tab ditutup tidak boleh memuat sebelum periode dipilih');
   });
+  all &= await run('Pengajuan: peringatan pagu operasional harian sebelum dikirim', { role: 'akuntan', existing: true, tanggal: '2026-10-15',
+    override: (a, m, p) => a === 'getKategori' ? { ok: true, data: { 'Bahan Baku': ['Beras'], 'Operasional': ['Gas', 'Listrik'] } }
+      : a === 'getPaguOps' ? (globalThis.__pg = p, { ok: true, data: { tanggal: p.tanggal, pm: 1000, indeks: 100, libur: false, pagu: 3000000, terpakai: 1000000, diajukan: 1500000, nDiajukan: 2, rencanaBelum: 400000, bankVA: 'BCA' } })
+      : null }, async (page, srv) => {
+    await login(page, 'siti');
+    await page.waitForSelector('header');
+    await page.click('nav:visible >> text=Pengajuan');
+    await page.click('button:has-text("Buat pengajuan")');
+    await page.selectOption('.rounded-lg select >> nth=0', 'Operasional');
+    await page.selectOption('.rounded-lg select >> nth=1', 'Gas');
+    await page.fill('input[placeholder="cth. Beras 50 kg"]', 'Isi gas 12 kg');
+    await page.fill('.rounded-lg input[inputmode=numeric] >> nth=0', '400000');
+    await page.selectOption('select >> nth=-1', 'pn1');
+    await page.waitForSelector('text=masih dalam pagu harian');
+    assert(await page.isVisible('text=Sudah diajukan, belum direalisasi (2 baris)') && await page.isVisible('text=belum diajukan — pastikan tidak dobel'), 'rincian pagu tidak lengkap');
+    await page.fill('.rounded-lg input[inputmode=numeric] >> nth=0', '600000');
+    await page.waitForSelector('text=melebihi pagu harian Rp 100.000');
+    assert(globalThis.__pg && globalThis.__pg.tanggal, 'getPaguOps tidak dipanggil');
+    globalThis.__pg = null;
+  });
+
   all &= await run('Pengajuan: daftar memakai Berita Acara periode aktif saja', { role: 'akuntan', existing: true, tanggal: '2026-10-15' }, async (page, srv) => {
     await login(page, 'siti');
     await page.waitForSelector('header');
