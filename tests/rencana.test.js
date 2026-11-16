@@ -2,7 +2,7 @@
 const fs = require('fs'), path = require('path');
 const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'index.html'), 'utf8');
 const blok = src.slice(src.indexOf('// <RENCANA-OPS>'), src.indexOf('// </RENCANA-OPS>'));
-const R = new Function(blok + '\nreturn { roHari, roPagu, roBatas, roFee, roKodeBank, roBersih, roUsulkan, roRingkas, roMatriks, roLabel, roStatusBaris, roLepasBatal };')();
+const R = new Function(blok + '\nreturn { roHari, roPagu, roBatas, roFee, roKodeBank, roBersih, roUsulkan, roRingkas, roMatriks, roLabel, roStatusBaris, roLepasBatal, roGeserLebih };')();
 let fails = 0;
 const ok = (c, m) => { console.log((c ? 'PASS ' : 'FAIL ') + m); if (!c) fails++; };
 
@@ -74,6 +74,17 @@ ok(!u5.items.some(x => x.bagian && x.nominal < 250000), 'belanja kecil tidak dip
   ok(l.lepas === 2 && !l.items[0].pengajuan_id && l.items[0].batal === 'dibatalkan' && l.items[1].pengajuan_id === 'PA2' && !l.items[2].pengajuan_id && l.items[2].batal === 'ditolak',
     'baris yang dibatalkan/ditolak dilepas (bisa diubah & diajukan lagi), yang disetujui tetap terkunci');
   ok(R.roLepasBatal(its, {}).lepas === 0, 'status belum diketahui → tetap terkunci'); }
+{ // Senin PM diturunkan → lebih pagu; geser memindah/memecah ke hari lain, rutin & yang diajukan tetap
+  const its = [{ id: 'H', tanggal: '2026-11-09', kategori: 'Gaji/honor relawan pekerja SPPG', nominal: 1500000, penerima_id: 'WANDA', rutin: true },
+    { id: 'G', tanggal: '2026-11-09', kategori: 'Gas', nominal: 2400000, penerima_id: 'WANDA' }, { id: 'A', tanggal: '2026-11-09', kategori: 'APD', nominal: 300000, penerima_id: 'WANDA', pengajuan_id: 'PA1' }]
+    .concat(['2026-11-10', '2026-11-11', '2026-11-12', '2026-11-13'].map(t => ({ id: 'H' + t, tanggal: t, kategori: 'Gaji/honor relawan pekerja SPPG', nominal: 1500000, penerima_id: 'WANDA', rutin: true })));
+  const hs = { '2026-11-09': { pm: 700 } };   // pagu Senin 2,1 jt; isi 4,2 jt
+  const pr = Object.assign({}, periode, { tanggal_akhir: '2026-11-13' }), c2 = Object.assign({}, ctx, { periode: pr });
+  const g = R.roGeserLebih(its, c2, { indeks: 100, batas: 100 }, hs, '2026-11-09');
+  const r2 = R.roRingkas(g.items, c2, { indeks: 100, batas: 100 }, hs, '2026-11-09');
+  ok(g.sisaLebih === 0 && r2.nLebih === 0, 'geser otomatis: tidak ada hari melebihi pagu (' + r2.hari.map(h => h.pakai + '/' + h.pagu).join(' ') + ')');
+  ok(g.items.find(x => x.id === 'H').tanggal === '2026-11-09' && g.items.find(x => x.id === 'A').tanggal === '2026-11-09', 'baris rutin & yang sudah diajukan tidak digeser');
+  ok(g.items.filter(x => x.kategori === 'Gas').reduce((a, x) => a + x.nominal, 0) === 2400000, 'nominal gas utuh setelah dipindah/dipecah'); }
 const kosong = R.roUsulkan(Object.assign({}, ctx, { riwayat: null }), set, {}, 1);
 ok(kosong.items.length === 0 && /manual/.test(kosong.catatan), 'tanpa riwayat: tidak ada usulan, diminta isi manual');
 

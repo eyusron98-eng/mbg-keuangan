@@ -3658,7 +3658,8 @@ try {
       paguAktif = 0,
       rencanaAktif = 0,
       nAktif = 0,
-      nLewat = 0;
+      nLewat = 0,
+      sisaHari = 0;
     const per = hari.map(function (h) {
       const pagu = roPagu(h, setelan),
         batas = roBatas(h, setelan),
@@ -3673,7 +3674,7 @@ try {
         if (p > pagu) {
           lebih += p - pagu;
           nLebih++;
-        }
+        } else sisaHari += pagu - p;
       } else if (!h.libur) nLewat++;
       return Object.assign({}, h, {
         pagu: pagu,
@@ -3703,6 +3704,7 @@ try {
       nLewat: nLewat,
       lebih: lebih,
       nLebih: nLebih,
+      sisaHari: sisaHari,
       takMuat: tak.length,
       takNilai: takNilai,
       kebutuhanAktif: rencanaAktif + takNilai,
@@ -3832,6 +3834,111 @@ try {
       items: hasil,
       lepas: lepas,
       nomor: nomor
+    };
+  }
+  function roGeserLebih(items, ctx, setelan, hariSet, dariTgl, luar) {
+    luar = luar || [];
+    const pmap = {};
+    (ctx.penerima || []).forEach(function (p) {
+      pmap[p.id] = p;
+    });
+    const fee = function (x) {
+      return roFee(x, pmap, ctx.bankVA);
+    };
+    const hari = roHari(ctx.periode, hariSet).filter(function (h) {
+      return !h.libur && (!dariTgl || h.tanggal >= dariTgl);
+    });
+    const pagu = {},
+      pakai = {};
+    hari.forEach(function (h) {
+      pagu[h.tanggal] = roPagu(h, setelan);
+      pakai[h.tanggal] = 0;
+    });
+    items.concat(luar).forEach(function (x) {
+      if (pakai[x.tanggal] !== undefined) pakai[x.tanggal] += x.nominal + fee(x);
+    });
+    let hasil = items.slice(),
+      pindah = 0;
+    hari.forEach(function (h) {
+      const t = h.tanggal;
+      const calon = hasil.filter(function (x) {
+        return x.tanggal === t && !x.pengajuan_id && !x.rutin;
+      }).sort(function (a, b) {
+        return b.nominal - a.nominal;
+      });
+      calon.forEach(function (x) {
+        if (pakai[t] <= pagu[t]) return;
+        const butuh = x.nominal + fee(x);
+        const tujuan = hari.map(function (d) {
+          return d.tanggal;
+        }).filter(function (d) {
+          return d !== t && pagu[d] - pakai[d] >= butuh;
+        }).sort(function (a, b) {
+          return pagu[b] - pakai[b] - (pagu[a] - pakai[a]);
+        })[0];
+        if (tujuan) {
+          hasil = hasil.map(function (y) {
+            return y.id === x.id ? Object.assign({}, y, {
+              tanggal: tujuan
+            }) : y;
+          });
+          pakai[t] -= butuh;
+          pakai[tujuan] += butuh;
+          pindah++;
+          return;
+        }
+        if (x.nominal < RO_MIN_PECAH) return;
+        const f = fee(x),
+          lain = hari.map(function (d) {
+            return d.tanggal;
+          }).filter(function (d) {
+            return d !== t;
+          }).sort(function (a, b) {
+            return pagu[b] - pakai[b] - (pagu[a] - pakai[a]);
+          });
+        const ruangSini = pagu[t] - (pakai[t] - butuh) - f;
+        const bagian = [];
+        let sisa = x.nominal;
+        if (ruangSini >= RO_MIN_PECAH / 2) {
+          const v = Math.min(sisa, Math.floor(ruangSini / 1000) * 1000);
+          bagian.push([t, v]);
+          sisa -= v;
+        }
+        for (let i = 0; i < lain.length && sisa > 0 && bagian.length < 4; i++) {
+          const ruang = pagu[lain[i]] - pakai[lain[i]] - f;
+          if (ruang < RO_MIN_PECAH / 2) continue;
+          const v = Math.min(sisa, Math.floor(ruang / 1000) * 1000);
+          bagian.push([lain[i], v]);
+          sisa -= v;
+        }
+        if (sisa > 0 || bagian.length < 2) return;
+        pakai[t] -= butuh;
+        const k = bagian.length;
+        bagian.sort(function (a, b) {
+          return a[0] < b[0] ? -1 : 1;
+        });
+        const baru = bagian.map(function (b, i) {
+          pakai[b[0]] += b[1] + f;
+          return Object.assign({}, x, {
+            id: x.id + '-' + (i + 1),
+            tanggal: b[0],
+            nominal: b[1],
+            bagian: i + 1 + '/' + k
+          });
+        });
+        hasil = hasil.filter(function (y) {
+          return y.id !== x.id;
+        }).concat(baru);
+        pindah += k;
+      });
+    });
+    const sisaLebih = hari.reduce(function (a, h) {
+      return a + Math.max(0, pakai[h.tanggal] - pagu[h.tanggal]);
+    }, 0);
+    return {
+      items: hasil,
+      pindah: pindah,
+      sisaLebih: sisaLebih
     };
   }
   function RencanaOpsPage({
@@ -3976,6 +4083,21 @@ try {
       setVersi(r.data.versi);
       setDirty(false);
       return true;
+    }
+    function geserOtomatis() {
+      const g = roGeserLebih(items, ctx, setelan, hariSet, hariIni, (ctx.luar || []).map(function (x) {
+        return Object.assign({
+          luar: true
+        }, x);
+      }));
+      if (!g.pindah) {
+        toast('Tidak ada baris yang bisa digeser (baris rutin/sudah diajukan tidak digeser, atau tidak ada hari dengan sisa cukup)', 'error');
+        return;
+      }
+      ubah(function () {
+        return g.items;
+      });
+      toast(g.pindah + ' baris dipindah' + (g.sisaLebih > 0 ? ' — masih lebih ' + fmt(g.sisaLebih) + ', kurangi nominal/baris manual' : ' — semua hari dalam pagu') + '. Tekan Simpan.', g.sisaLebih > 0 ? 'error' : undefined);
     }
     function usulkan() {
       seedRef.current += 1;
@@ -4267,23 +4389,39 @@ try {
       style: {
         color: COLORS.muted
       }
-    }, "Sisa pagu belum terpakai"), React.createElement("b", {
+    }, "Sisa pagu di hari yang belum penuh"), React.createElement("b", {
       className: "num"
-    }, fmt(Math.max(0, ring.paguAktif - ring.rencanaAktif)))), ring.nLebih > 0 && React.createElement("div", {
+    }, fmt(ring.sisaHari))), ring.nLebih > 0 && React.createElement("div", {
       className: "flex justify-between",
       style: {
         color: COLORS.danger
       }
-    }, React.createElement("span", null, ring.nLebih, " hari melebihi pagu"), React.createElement("b", {
+    }, React.createElement("span", null, ring.nLebih, " hari melebihi pagu harian"), React.createElement("b", {
       className: "num"
-    }, fmt(ring.lebih))), ring.takMuat > 0 && React.createElement("div", {
+    }, "\u2212", fmt(ring.lebih))), ring.nLebih > 0 && React.createElement("div", {
+      className: "flex justify-between font-semibold",
+      style: {
+        color: ring.sisaHari >= ring.lebih ? COLORS.ink : COLORS.danger
+      }
+    }, React.createElement("span", null, "Bersih (sisa \u2212 lebih)"), React.createElement("b", {
+      className: "num"
+    }, fmt(ring.sisaHari - ring.lebih))), ring.takMuat > 0 && React.createElement("div", {
       className: "flex justify-between",
       style: {
         color: COLORS.danger
       }
     }, React.createElement("span", null, "Tidak muat (", ring.takMuat, " baris)"), React.createElement("b", {
       className: "num"
-    }, fmt(ring.takNilai))), ring.kurang > 0 ? React.createElement("div", {
+    }, fmt(ring.takNilai))), ring.nLebih > 0 && ring.takMuat === 0 && ring.sisaHari >= ring.lebih ? React.createElement("div", {
+      className: "text-xs pt-1",
+      style: {
+        color: COLORS.danger
+      }
+    }, "Total periode masih muat, tetapi pagu LPDH berlaku ", React.createElement("b", null, "per hari"), ": ", ring.hari.filter(function (h) {
+      return !h.lewat && h.pakai > h.pagu;
+    }).map(function (h) {
+      return h.nama + ' ' + fmtDate(h.tanggal) + ' lebih ' + fmt(h.pakai - h.pagu);
+    }).join('; '), ". Pindahkan sebagian baris ke hari yang masih ada sisa \u2014 tekan ", React.createElement("b", null, "Geser otomatis"), " atau pindahkan manual.") : ring.kurang > 0 ? React.createElement("div", {
       className: "text-xs pt-1",
       style: {
         color: COLORS.danger
@@ -4326,7 +4464,11 @@ try {
           baru: true
         });
       }
-    }, I.plus, " Tambah kebutuhan"), tak.length > 0 && React.createElement(Btn, {
+    }, I.plus, " Tambah kebutuhan"), ring.nLebih > 0 && React.createElement(Btn, {
+      size: "sm",
+      kind: "amber",
+      onClick: geserOtomatis
+    }, I.trend, " Geser otomatis yang melebihi pagu"), tak.length > 0 && React.createElement(Btn, {
       size: "sm",
       kind: "ghost",
       onClick: function () {
@@ -4941,9 +5083,15 @@ try {
       style: Object.assign({}, td, {
         background: COLORS.paper,
         fontWeight: 700,
-        color: r.lebih ? COLORS.danger : COLORS.green
+        color: r.paguAktif - r.rencanaAktif < 0 ? COLORS.danger : COLORS.green
       })
-    }, r.lebih ? '−' + singkat(r.lebih) : singkat(r.paguAktif - r.rencanaAktif)), bisaUbah && React.createElement("td", {
+    }, (r.paguAktif - r.rencanaAktif < 0 ? '−' : '') + singkat(Math.abs(r.paguAktif - r.rencanaAktif)), r.lebih > 0 && React.createElement("div", {
+      style: {
+        fontSize: 10,
+        fontWeight: 600,
+        color: COLORS.danger
+      }
+    }, r.nLebih, " hari lebih \u2212", singkat(r.lebih))), bisaUbah && React.createElement("td", {
       style: Object.assign({}, td, {
         background: COLORS.paper
       })
@@ -5025,7 +5173,7 @@ try {
         fontWeight: 700,
         color: r.kurang ? COLORS.danger : COLORS.green
       })
-    }, r.kurang ? 'kurang ' + singkat(r.kurang) : 'cukup'), bisaUbah && React.createElement("td", {
+    }, r.takNilai > 0 || r.paguAktif < r.rencanaAktif ? 'kurang ' + singkat(r.takNilai + Math.max(0, r.rencanaAktif - r.paguAktif)) : r.lebih > 0 ? 'cukup, geser ' + singkat(r.lebih) : 'cukup'), bisaUbah && React.createElement("td", {
       style: Object.assign({}, td, {
         background: COLORS.paper
       })
