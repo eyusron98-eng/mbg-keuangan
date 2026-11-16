@@ -3726,7 +3726,12 @@ try {
       rencanaAktif = 0,
       nAktif = 0,
       nLewat = 0,
-      sisaHari = 0;
+      sisaHari = 0,
+      paguLewat = 0,
+      pakaiLewat = 0,
+      lebihLewat = 0,
+      nLebihLewat = 0,
+      nHpe = 0;
     const per = hari.map(function (h) {
       const pagu = roPagu(h, setelan),
         batas = roBatas(h, setelan),
@@ -3734,6 +3739,7 @@ try {
       const aktif = !dariTgl || h.tanggal >= dariTgl;
       paguTot += pagu;
       rencanaTot += p;
+      if (!h.libur) nHpe++;
       if (aktif) {
         paguAktif += pagu;
         rencanaAktif += p;
@@ -3742,7 +3748,15 @@ try {
           lebih += p - pagu;
           nLebih++;
         } else sisaHari += pagu - p;
-      } else if (!h.libur) nLewat++;
+      } else {
+        if (!h.libur) nLewat++;
+        paguLewat += pagu;
+        pakaiLewat += p;
+        if (p > pagu) {
+          lebihLewat += p - pagu;
+          nLebihLewat++;
+        }
+      }
       return Object.assign({}, h, {
         pagu: pagu,
         batas: batas,
@@ -3772,6 +3786,11 @@ try {
       lebih: lebih,
       nLebih: nLebih,
       sisaHari: sisaHari,
+      paguLewat: paguLewat,
+      pakaiLewat: pakaiLewat,
+      lebihLewat: lebihLewat,
+      nLebihLewat: nLebihLewat,
+      nHpe: nHpe,
       takMuat: tak.length,
       takNilai: takNilai,
       kebutuhanAktif: rencanaAktif + takNilai,
@@ -4536,7 +4555,80 @@ try {
       style: {
         color: COLORS.muted
       }
-    }, ring.nLewat, " HPE sudah lewat tidak dihitung \xB7 pagu satu periode penuh ", fmt(ring.paguTot), ".")), catatan && React.createElement("div", {
+    }, ring.nLewat, " HPE sudah lewat tidak dihitung di kotak ini \u2014 lihat kotak periode penuh di bawah.")), function () {
+      const tot = ring.pakaiLewat + ring.rencanaAktif + ring.takNilai,
+        sel = ring.paguTot - tot,
+        lebihP = sel < 0;
+      const kosong = ring.hari.filter(function (h) {
+        return h.lewat && !h.libur && !h.pakai;
+      });
+      return React.createElement("div", {
+        className: "rounded-lg p-3 text-sm space-y-1 mt-2",
+        style: {
+          background: lebihP || ring.nLebihLewat ? '#FBF1EE' : '#EEF5F0',
+          border: '1px solid ' + (lebihP ? '#E9C3BA' : COLORS.line)
+        }
+      }, React.createElement("div", {
+        className: "font-semibold",
+        style: {
+          color: COLORS.ink
+        }
+      }, "Satu periode penuh (", fmtDateRange(ctx.periode.tanggal_mulai, ctx.periode.tanggal_akhir), ")"), React.createElement("div", {
+        className: "flex justify-between"
+      }, React.createElement("span", {
+        style: {
+          color: COLORS.muted
+        }
+      }, "Pagu periode (", ring.nHpe, " HPE, mengikuti PM tiap hari)"), React.createElement("b", {
+        className: "num"
+      }, fmt(ring.paguTot))), React.createElement("div", {
+        className: "flex justify-between"
+      }, React.createElement("span", {
+        style: {
+          color: COLORS.muted
+        }
+      }, "Sudah lewat (", ring.nLewat, " HPE) \u2014 diajukan / terealisasi"), React.createElement("b", {
+        className: "num"
+      }, fmt(ring.pakaiLewat))), React.createElement("div", {
+        className: "flex justify-between"
+      }, React.createElement("span", {
+        style: {
+          color: COLORS.muted
+        }
+      }, "Hari ini \u2013 akhir \u2014 terjadwal", ring.takNilai ? ' + tidak muat' : ''), React.createElement("b", {
+        className: "num"
+      }, fmt(ring.rencanaAktif + ring.takNilai))), React.createElement("div", {
+        className: "flex justify-between font-semibold pt-1",
+        style: {
+          borderTop: '1px solid ' + COLORS.line
+        }
+      }, React.createElement("span", null, "Perkiraan total operasional periode"), React.createElement("b", {
+        className: "num"
+      }, fmt(tot))), React.createElement("div", {
+        className: "flex justify-between font-bold",
+        style: {
+          color: lebihP ? COLORS.danger : COLORS.green
+        }
+      }, React.createElement("span", null, lebihP ? 'Melebihi pagu periode' : 'Sisa pagu periode'), React.createElement("b", {
+        className: "num"
+      }, fmt(Math.abs(sel)))), ring.nLebihLewat > 0 && React.createElement("div", {
+        className: "text-xs",
+        style: {
+          color: COLORS.danger
+        }
+      }, ring.nLebihLewat, " hari yang sudah lewat melebihi pagu harian (total ", fmt(ring.lebihLewat), "): ", ring.hari.filter(function (h) {
+        return h.lewat && h.pakai > h.pagu;
+      }).map(function (h) {
+        return h.nama + ' ' + fmtDate(h.tanggal) + ' ' + fmt(h.pakai - h.pagu);
+      }).join(', '), ". Pastikan ada penjelasan di LPDH hari itu."), kosong.length > 0 && React.createElement("div", {
+        className: "text-xs",
+        style: {
+          color: '#9A6A0B'
+        }
+      }, "HPE yang sudah lewat tanpa operasional: ", kosong.map(function (h) {
+        return h.nama + ' ' + fmtDate(h.tanggal);
+      }).join(', '), ". Bila hari itu tidak ada pelayanan, hapus centang HPE-nya agar pagu periode tidak terhitung lebih."));
+    }(), catatan && React.createElement("div", {
       className: "text-xs mt-2",
       style: {
         color: COLORS.muted
@@ -4607,6 +4699,11 @@ try {
       onPm: function (t, pm) {
         ubahHari(t, {
           pm: pm
+        });
+      },
+      onHpe: function (t, v) {
+        ubahHari(t, {
+          libur: !v
         });
       },
       pmSetup: ctx.periode.penerima,
@@ -4680,7 +4777,7 @@ try {
         style: {
           color: COLORS.muted
         }
-      }, sudahLewat ? 'Sudah lewat · ' : '', h.libur ? 'Bukan HPE — pagu 0' : 'PM ' + fmtNoRp(h.pm) + ' · pagu ' + fmt(h.pagu), h.aktual ? ' · terealisasi ' + fmt(h.aktual) : '')), bisaUbah && !sudahLewat && React.createElement("label", {
+      }, sudahLewat ? 'Sudah lewat · ' : '', h.libur ? 'Bukan HPE — pagu 0' : 'PM ' + fmtNoRp(h.pm) + ' · pagu ' + fmt(h.pagu), h.aktual ? ' · terealisasi ' + fmt(h.aktual) : '')), bisaUbah && React.createElement("label", {
         className: "text-xs flex items-center gap-1 shrink-0",
         style: {
           color: COLORS.ink
@@ -4694,7 +4791,7 @@ try {
           });
         },
         "aria-label": 'HPE ' + h.tanggal
-      }), " HPE")), !h.libur && bisaUbah && !sudahLewat && React.createElement("div", {
+      }), " HPE")), !h.libur && bisaUbah && React.createElement("div", {
         className: "flex items-center gap-2 mt-2 text-xs",
         style: {
           color: COLORS.muted
@@ -4967,6 +5064,7 @@ try {
     terkunci,
     lewat,
     onPm,
+    onHpe,
     pmSetup,
     waHari,
     onWaHari
@@ -5022,7 +5120,7 @@ try {
       style: {
         color: COLORS.muted
       }
-    }, "Geser ke samping untuk melihat semua pos. Ketuk sel untuk mengubah/menambah; ketuk sel merah \"Tidak muat\" untuk melihat barangnya. Usulan otomatis hanya mengisi sampai ", m.batas, "% pagu (cadangan bila PM turun); sisanya boleh diisi manual. Tanggal yang sudah lewat (abu-abu) tidak bisa diisi atau diajukan. Tombol Ajukan mengirim baris yang penerimanya sudah dipilih; satu baris bisa diajukan sendiri dari selnya. PM tiap hari bisa diubah langsung di kolom Hari (bingkai kuning = berbeda dari PM setup ", fmtNoRp(pmSetup), "); pagu hari itu ikut berubah \u2014 jangan lupa Simpan.", React.createElement("span", {
+    }, "Geser ke samping untuk melihat semua pos. Ketuk sel untuk mengubah/menambah; ketuk sel merah \"Tidak muat\" untuk melihat barangnya. Usulan otomatis hanya mengisi sampai ", m.batas, "% pagu (cadangan bila PM turun); sisanya boleh diisi manual. Tanggal yang sudah lewat (abu-abu) tidak bisa diisi atau diajukan \u2014 anggarannya diubah lewat menu Riwayat; PM & HPE-nya tetap bisa diubah. Tombol Ajukan mengirim baris yang penerimanya sudah dipilih; satu baris bisa diajukan sendiri dari selnya. PM tiap hari bisa diubah langsung di kolom Hari (bingkai kuning = berbeda dari PM setup ", fmtNoRp(pmSetup), "); pagu hari itu ikut berubah \u2014 jangan lupa Simpan.", React.createElement("span", {
       className: "inline-flex items-center gap-1 ml-2"
     }, React.createElement("span", {
       style: {
@@ -5103,14 +5201,14 @@ try {
           fontWeight: 600,
           color: COLORS.ink
         })
-      }, h.nama, " ", h.tanggal.slice(8), "/", h.tanggal.slice(5, 7), bisaUbah && !sudahLewat && !h.libur ? React.createElement("div", {
+      }, h.nama, " ", h.tanggal.slice(8), "/", h.tanggal.slice(5, 7), bisaUbah && !h.libur ? React.createElement("div", {
         className: "flex items-center gap-1 mt-0.5",
         style: {
           fontSize: 10,
           fontWeight: 400,
           color: COLORS.muted
         }
-      }, "PM", React.createElement("input", {
+      }, sudahLewat ? 'lewat · ' : '', "PM", React.createElement("input", {
         value: h.pmIsian,
         inputMode: "numeric",
         "aria-label": 'PM ' + h.tanggal,
@@ -5137,7 +5235,28 @@ try {
           fontWeight: 400,
           color: COLORS.muted
         }
-      }, sudahLewat ? 'sudah lewat' : h.libur ? 'bukan HPE' : 'PM ' + fmtNoRp(h.pm))), kol.map(function (k) {
+      }, sudahLewat ? 'sudah lewat · ' : '', h.libur ? 'bukan HPE' : 'PM ' + fmtNoRp(h.pm)), bisaUbah && React.createElement("label", {
+        className: "flex items-center gap-1 mt-0.5",
+        style: {
+          fontSize: 10,
+          fontWeight: 400,
+          color: COLORS.muted
+        },
+        onClick: function (e) {
+          e.stopPropagation();
+        }
+      }, React.createElement("input", {
+        type: "checkbox",
+        checked: !h.libur,
+        onChange: function (e) {
+          onHpe(h.tanggal, e.target.checked);
+        },
+        "aria-label": 'HPE ' + h.tanggal,
+        style: {
+          width: 12,
+          height: 12
+        }
+      }), " HPE")), kol.map(function (k) {
         const c = row[k];
         const bisaTambah = !h.libur && !sudahLewat && bisaUbah;
         return React.createElement("td", {
