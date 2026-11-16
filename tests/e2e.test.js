@@ -315,6 +315,33 @@ async function isiBahanBaku(page, uraian, volume, harga) {
     assert(await page.isDisabled('text=Simpan realisasi'), 'gas tanpa unggahan seharusnya belum bisa disimpan');
   });
 
+  all &= await run('Realisasi: tanggal terkunci = tanggal pengajuan; biaya admin direkomendasikan dari bank VA', { role: 'akuntan',
+    override: (a, m, p) => a === 'getRealisasiList' ? { ok: true, data: [
+        { id: 'RX', urut: 1, nomor: 'BA-PA/S1/2026/10/009', tanggal_pengajuan: '2026-10-28', jenis: 'Operasional', kategori: 'Gas', uraian: 'Gas antarbank', nominal: 300000, penerima_nama: 'Toko Gas', bank: 'BRI', no_rek: '9', status: 'DISETUJUI', nota_url: '' },
+        { id: 'RY', urut: 2, nomor: 'BA-PA/S1/2026/10/009', tanggal_pengajuan: '2026-10-28', jenis: 'Operasional', kategori: 'Gas', uraian: 'Gas sesama bank', nominal: 200000, penerima_nama: 'Toko BNI', bank: 'BNI', no_rek: '8', status: 'DISETUJUI', nota_url: '' }] }
+      : a === 'getBankVA' ? { ok: true, data: { bank: 'Bank Negara Indonesia (BNI)', fee: 6500 } } : null }, async (page, srv) => {
+    await login(page, 'siti');
+    await page.waitForSelector('header');
+    await page.click('nav:visible >> text=Realisasi');
+    await page.click('text=Gas antarbank');
+    await page.waitForSelector('[aria-label="Rekomendasi biaya admin"] >> text=Antarbank BRI → VA BNI: biaya admin Rp 6.500');
+    assert(await page.isDisabled('[aria-label="Tanggal transfer"]') && (await page.inputValue('[aria-label="Tanggal transfer"]')) === '2026-10-28', 'tanggal harus terkunci ke tanggal pengajuan');
+    await page.fill('.sheet input[inputmode=numeric] >> nth=1', '300000');
+    await page.setInputFiles('.sheet input[type=file] >> nth=0', { name: 'tf.jpg', mimeType: 'image/jpeg', buffer: Buffer.from('ffd8ffe0', 'hex') });
+    await page.click('text=Simpan realisasi');
+    await page.waitForSelector('text=Realisasi tersimpan');
+    const r1 = srv.log.real[0];
+    assert(r1.tanggal === '2026-10-28' && Number(r1.biaya_admin) === 6500, 'antarbank: biaya admin 6.500 tercentang otomatis & tanggal pengajuan: ' + JSON.stringify(r1));
+    await page.waitForSelector('.sheet', { state: 'detached' });
+    await page.click('text=Gas sesama bank');
+    await page.waitForSelector('[aria-label="Rekomendasi biaya admin"] >> text=Sesama BNI: tanpa biaya admin');
+    await page.fill('.sheet input[inputmode=numeric] >> nth=1', '200000');
+    await page.setInputFiles('.sheet input[type=file] >> nth=0', { name: 'tf.jpg', mimeType: 'image/jpeg', buffer: Buffer.from('ffd8ffe0', 'hex') });
+    await page.click('text=Simpan realisasi');
+    await page.waitForSelector('text=Realisasi tersimpan');
+    assert(Number(srv.log.real[1].biaya_admin) === 0, 'sesama bank: tanpa biaya admin');
+  });
+
   all &= await run('Realisasi Barang Habis Pakai: boleh dipindah ke baris LPDH (opsional)', { role: 'akuntan',
     override: (a) => a === 'getRealisasiList' ? { ok: true, data: [{ id: 'RH', urut: 1, nomor: 'BA-PA/S1/2026/11/001', jenis: 'Operasional', kategori: 'Barang Habis Pakai', uraian: 'Pembelian barang habis pakai 4 november', nominal: 1380000, penerima_nama: 'Fahmi', bank: 'BNI', no_rek: '1', status: 'DISETUJUI', nota_url: '' }] } : null }, async (page, srv) => {
     await login(page, 'siti');
@@ -764,6 +791,32 @@ async function isiBahanBaku(page, uraian, volume, harga) {
     const isi = fs.readFileSync(f, 'latin1');
     assert(/DCTDecode/.test(isi) && (isi.match(/\/Type \/Page\b/g) || []).length === 1, 'PDF 1 halaman dengan gambar TTD');
     await page.waitForSelector('text=belum ada TTD: Perwakilan Mitra/Yayasan');
+  });
+
+  all &= await run('Realisasi Massal (admin): simulasi, konfirmasi jumlah, eksekusi', { role: 'admin',
+    override: (a, m, p) => a === 'realisasiMassal' ? (p.eksekusi ? (globalThis.__rm = p, { ok: true, data: { simulasi: false, dibuat: 204, ditautkanUlang: 0, nominal: 399884755, perPeriode: [], saldo: [{ periode_no: 9, saldo_sekarang: 563283290, saldo_sesudah: 261035035 }] } })
+        : { ok: true, data: { simulasi: true, jumlah: 204, nominal: 399884755, sudahTertaut: 0, dilewati: 0, alasanLewat: [], bankVA: 'BNI', admin: 546000, nAdmin: 84,
+          perPeriode: [{ periode_no: 9, status: 'DITUTUP', baris: 164, nominal: 302248255, jenis: { 'Bahan Baku': 184787115 }, dari: '2026-10-25', sampai: '2026-11-07' }, { periode_no: 10, status: 'AKTIF', baris: 40, nominal: 97636500, jenis: { Operasional: 26142500 }, dari: '2026-11-09', sampai: '2026-11-13' }],
+          saldo: [{ periode_no: 9, saldo_sekarang: 563283290, saldo_sesudah: 261035035 }], contoh: [{ tanggal: '2026-10-25', no_bukti: 'MKS01-20261025-001', jenis: 'Bahan Baku', kategori: 'Semua Kategori', uraian: 'Beras', nominal: 2560000 }] } })
+      : a === 'getDapur' ? { ok: true, data: [{ id: 'D2', nama: 'SPPG Mekarsari', kode: 'MKS01' }] } : null }, async (page, srv) => {
+    await login(page, 'siti');
+    await page.waitForSelector('header');
+    await page.click('nav:visible >> text=Realisasi Massal');
+    await page.selectOption('[aria-label="Dapur realisasi massal"]', 'D2');
+    await page.check('[aria-label="Sertakan periode ditutup"]');
+    await page.click('button:has-text("Simulasi")');
+    await page.waitForSelector('text=204 baris akan direalisasi');
+    await page.waitForSelector('text=Periode 9 (ditutup)');
+    await page.waitForSelector('text=+ biaya admin Rp 546.000 (84 transfer antarbank × Rp 6.500; sesama BNI gratis)');
+    assert(await page.isDisabled('button:has-text("Realisasikan sekarang")'), 'tombol eksekusi harus terkunci sebelum jumlah diketik');
+    await page.fill('[aria-label="Ketik jumlah baris untuk konfirmasi"]', '203');
+    assert(await page.isDisabled('button:has-text("Realisasikan sekarang")'), 'jumlah salah → tetap terkunci');
+    await page.fill('[aria-label="Ketik jumlah baris untuk konfirmasi"]', '204');
+    await page.click('button:has-text("Realisasikan sekarang")');
+    await page.waitForSelector('text=Selesai: 204 transaksi dibuat');
+    const p = globalThis.__rm;
+    assert(p.dapur === 'D2' && p.eksekusi === true && p.jumlah_konfirmasi === 204 && p.sertakan_tutup === true, 'kiriman eksekusi salah: ' + JSON.stringify(p));
+    globalThis.__rm = null;
   });
 
   all &= await run('Relawan: daftar kosong bisa diisi (tombol tidak tertutup) & tempel dari Excel', { role: 'akuntan',
