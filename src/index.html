@@ -1920,17 +1920,18 @@ function RencanaOpsPage({ session, scope, toast }) {
     const h = roHari(ctx.periode, hariSet).find(function(d) { return d.tanggal === t; });
     const nilai = function(a) { return a.reduce(function(sm, x) { return sm + x.nominal + roFee(x, pmap, ctx.bankVA); }, 0); };
     const sudah = nilai(semua.concat(luarItems).filter(function(x) { return x.tanggal === t && terkunci(x); }));
-    if (sudah + nilai(baris) > roPagu(h, setelan)) { toast('Melebihi pagu harian ' + fmt(roPagu(h, setelan)) + ' (sudah diajukan ' + fmt(sudah) + ') — kurangi atau pindahkan dulu', 'error'); return; }
+    const lebih = sudah + nilai(baris) - roPagu(h, setelan);   // > 0: tetap boleh diajukan dengan catatan untuk Yayasan
     if (daftar) setItems(daftar);
-    setKonfirmAju({ t: t, baris: baris, semua: semua, perluSimpan: !!(dirty || daftar) });   // konfirmasi dulu — cegah terkirim tak sengaja
+    setKonfirmAju({ t: t, baris: baris, semua: semua, perluSimpan: !!(dirty || daftar), lebih: Math.max(0, lebih), pagu: roPagu(h, setelan), pm: h.pm, sudah: sudah, catatan: '' });   // konfirmasi dulu — cegah terkirim tak sengaja
   }
   async function kirimAju(k) {
     setKonfirmAju(null);
     const t = k.t, baris = k.baris, semua = k.semua, daftar = k.perluSimpan;
+    const catatan = k.lebih > 0 ? 'Melebihi pagu harian ' + fmt(k.lebih) + ' (pagu ' + fmt(k.pagu) + ', PM ' + fmtNoRp(k.pm) + '). Alasan: ' + k.catatan.trim() : '';
     setAjukanTgl(t);
     if (daftar && !(await simpan(semua))) { setAjukanTgl(''); return; }
     const res = await apiPost('createPengajuan', { tanggal: t, request_id: 'RO-' + ctx.periode.id + '-' + t + '-' + roHash(baris.map(function(x) { return x.id + ':' + x.nominal + ':' + x.penerima_id; }).join(',') + '|' + Math.floor(Date.now() / 60000)).toString(36),   // kirim ulang dalam 1 menit = sama; ajukan ulang setelah dibatalkan = pengajuan baru
-      items: baris.map(function(x) { return { jenis: 'Operasional', kategori: x.kategori, uraian: x.uraian + (x.bagian ? ' (bagian ' + x.bagian + ')' : ''), nominal: x.nominal, penerima_id: x.penerima_id }; }) });
+      items: baris.map(function(x) { return { jenis: 'Operasional', kategori: x.kategori, uraian: x.uraian + (x.bagian ? ' (bagian ' + x.bagian + ')' : ''), nominal: x.nominal, penerima_id: x.penerima_id, catatan: catatan }; }) });
     if (!res.ok) { setAjukanTgl(''); toast('Gagal mengajukan: ' + (res.error || ''), 'error'); return; }
     const ids = {}; baris.forEach(function(x) { ids[x.id] = 1; });
     const baru = semua.map(function(x) { return ids[x.id] ? Object.assign({}, x, { pengajuan_id: res.data.id, nomor: res.data.nomor, batal: undefined }) : x; });
@@ -1938,13 +1939,13 @@ function RencanaOpsPage({ session, scope, toast }) {
     const ok = await simpan(baru);
     setAjukanTgl('');
     toast('Pengajuan ' + res.data.nomor + ' terkirim untuk persetujuan' + (ok ? '' : ' (rencana belum tersimpan — tekan Simpan)'));
-    setWaText(teksWaRencana(res.data.nomor, t, baris));   // langsung siap disalin ke grup WA
+    setWaText(teksWaRencana(res.data.nomor, t, baris, catatan));   // langsung siap disalin ke grup WA
     load();
   }
   const stBaris = roStatusBaris(items, ctx.status), idPItem = roIdItemPengajuan(items);
   // teks WA pengajuan (format sama dengan menu Pengajuan)
-  function teksWaRencana(nomor, t, baris) {
-    return buildWAPesan({ nomor: nomor, tanggal: t, dapurNama: ctx.dapurNama || '', oleh: session.user.nama, items: baris.map(function(x) {
+  function teksWaRencana(nomor, t, baris, catatan) {
+    return buildWAPesan({ nomor: nomor, tanggal: t, dapurNama: ctx.dapurNama || '', oleh: session.user.nama, catatan: catatan, items: baris.map(function(x) {
       const pn = pmap[x.penerima_id] || {};
       return { uraian: x.uraian + (x.bagian ? ' (bagian ' + x.bagian + ')' : ''), jenis: 'Operasional', nominal: x.nominal, penerima_nama: pn.nama || '', bank: pn.bank || '', no_rek: pn.no_rek || '' }; }) });
   }
@@ -2068,7 +2069,14 @@ function RencanaOpsPage({ session, scope, toast }) {
       {konfirmAju.baris.map(function(x) { return <div key={x.id} className="flex justify-between gap-2 py-1.5 text-sm" style={{ borderTop: '1px solid ' + COLORS.line }}>
         <span className="min-w-0 truncate">{x.uraian} · {(pmap[x.penerima_id] || {}).nama}</span><b className="num shrink-0">{fmt(x.nominal)}</b></div>; })}
       <div className="flex justify-between py-1.5 text-sm font-bold" style={{ borderTop: '1px solid ' + COLORS.line }}><span>Jumlah</span><span className="num">{fmt(konfirmAju.baris.reduce(function(a, x) { return a + x.nominal; }, 0))}</span></div>
-      <div className="flex gap-2 justify-end mt-3"><Btn kind="ghost" onClick={function() { setKonfirmAju(null); }}>Batal</Btn><Btn onClick={function() { kirimAju(konfirmAju); }}>{I.file} Ya, ajukan</Btn></div>
+      {konfirmAju.lebih > 0 && <div className="rounded-lg p-2.5 mt-2 text-xs" style={{ background: '#F8E9E5', color: COLORS.danger }}>
+        <div className="font-semibold">⚠️ Melebihi pagu harian {fmt(konfirmAju.lebih)}</div>
+        <div>Pagu {fmt(konfirmAju.pagu)} (PM {fmtNoRp(konfirmAju.pm)}){konfirmAju.sudah ? ' · sudah diajukan ' + fmt(konfirmAju.sudah) : ''}. Tetap bisa diajukan dengan catatan untuk Yayasan; di LPDH hari ini akan tertulis "Melebihi pagu" dan perlu dijelaskan.</div>
+        <textarea value={konfirmAju.catatan} onChange={function(e) { setKonfirmAju(Object.assign({}, konfirmAju, { catatan: e.target.value })); }} rows={3} aria-label="Catatan untuk Yayasan"
+          placeholder="Alasan melebihi pagu (wajib), cth. stok gas habis, harga naik, PM hari ini turun" style={Object.assign({}, inputStyle, { marginTop: 8, fontSize: 13, minHeight: 64 })}/>
+      </div>}
+      <div className="flex gap-2 justify-end mt-3"><Btn kind="ghost" onClick={function() { setKonfirmAju(null); }}>Batal</Btn>
+        <Btn kind={konfirmAju.lebih > 0 ? 'danger' : 'solid'} disabled={konfirmAju.lebih > 0 && konfirmAju.catatan.trim().length < 10} onClick={function() { kirimAju(konfirmAju); }}>{I.file} {konfirmAju.lebih > 0 ? 'Ajukan dengan catatan' : 'Ya, ajukan'}</Btn></div>
     </Modal>}
     {hapusTak && <ConfirmModal title="Hapus yang tidak muat?" danger confirmLabel="Hapus" message={'Hapus ' + tak.length + ' baris yang tidak muat (' + fmt(ring.takNilai) + ') dari rencana? Baris terjadwal tidak berubah.'}
       onConfirm={function() { ubah(function(a) { return a.filter(function(x) { return x.tanggal || x.pengajuan_id; }); }); setHapusTak(false); toast('Baris tidak muat dihapus — tekan Simpan'); }}
@@ -2207,7 +2215,7 @@ function RencanaItemModal({ x, ctx, hari, kategori, bisaUbah, pmap, onClose, onS
       {!x.baru && <Btn kind="ghost" onClick={onDelete}>{I.trash} Hapus</Btn>}
       <div className="flex-1"><Btn full kind="ghost" disabled={!!err} onClick={function() { onSave(Object.assign({}, f, { nominal: Number(f.nominal) || 0, uraian: String(f.uraian).trim() })); }}>{I.check} {err || 'Simpan baris'}</Btn></div>
     </div>}
-    {bisaUbah && <div className="mt-2"><Btn full disabled={!!err || !f.tanggal || !f.penerima_id || lewat(f.tanggal) || busy || (h && butuh > sisa)}
+    {bisaUbah && <div className="mt-2"><Btn full disabled={!!err || !f.tanggal || !f.penerima_id || lewat(f.tanggal) || busy}
       onClick={function() { onAjukan(Object.assign({}, f, { nominal: Number(f.nominal) || 0, uraian: String(f.uraian).trim() })); }}>{I.file} Ajukan baris ini</Btn>
       {(!f.tanggal || !f.penerima_id) && <div className="text-xs mt-1" style={{ color: COLORS.muted }}>Pilih tanggal dan penerima untuk mengajukan.</div>}</div>}
   </Modal>;
@@ -4036,12 +4044,17 @@ function PengajuanForm({ kategoriMap, penerima, upsertPenerima, toast, onCreated
   const pnMap = {}; (penerima || []).forEach(function(x) { pnMap[x.id] = x; });
   const opsIni = rows.filter(function(r) { return r.jenis === 'Operasional'; }).reduce(function(a, r) { return a + (Number(r.nominal) || 0) + (r.penerima_id ? roFee({ penerima_id: r.penerima_id }, pnMap, pagu ? pagu.bankVA : '') : 0); }, 0);
   const opsTot = pagu ? pagu.terpakai + pagu.diajukan + opsIni : 0;
+  const lebihPagu = pagu && opsIni > 0 && opsTot > pagu.pagu ? opsTot - pagu.pagu : 0;
+  const [catatanPagu, setCatatanPagu] = useState('');
+  const catatanKirim = lebihPagu ? 'Melebihi pagu harian ' + fmt(lebihPagu) + ' (pagu ' + fmt(pagu.pagu) + ', PM ' + fmtNoRp(pagu.pm) + '). Alasan: ' + catatanPagu.trim() : '';
   function update(i, n) { setRows(rows.map(function(r, j){ return j === i ? n : r; })); }
   async function submit(force) {
     if (lockRef.current) return;
     lockRef.current = true; setSaving(true);
     try {
+      if (lebihPagu && catatanPagu.trim().length < 10) { setConfirm(false); toast('Melebihi pagu harian — isi alasan untuk Yayasan dulu', 'error'); return; }
       const items = rows.map(function(r){ return { jenis: r.jenis, kategori: r.kategori, uraian: r.uraian.trim(), nominal: Number(r.nominal), penerima_id: r.penerima_id, susulan: !!r.susulan,
+        catatan: r.jenis === 'Operasional' ? catatanKirim : '',
         rincian: r.jenis === 'Bahan Baku' ? rincianKirim(r.rincian) : undefined, nota_no: r.jenis === 'Bahan Baku' ? String(r.nota_no || '').trim() : undefined }; });
       if (!force) {
         const d = await cariDuplikatPengajuan(items, needDapur ? dapur : ownDapur, tanggal);
@@ -4058,7 +4071,7 @@ function PengajuanForm({ kategoriMap, penerima, upsertPenerima, toast, onCreated
       if (res.ok) {
         toast('Pengajuan ' + res.data.nomor + ' terkirim untuk persetujuan');
         const pmap = {}; (penerima || []).forEach(function(x){ pmap[x.id] = x; });
-        onCreated({ nomor: res.data.nomor, tanggal: tanggal, dapur: dapur, items: items.map(function(it){
+        onCreated({ nomor: res.data.nomor, tanggal: tanggal, dapur: dapur, catatan: catatanKirim, items: items.map(function(it){
           const pn = pmap[it.penerima_id] || {};
           return Object.assign({}, it, { penerima_nama: pn.nama || '', bank: pn.bank || '', no_rek: pn.no_rek || '' }); }) });
       }
@@ -4107,7 +4120,9 @@ function PengajuanForm({ kategoriMap, penerima, upsertPenerima, toast, onCreated
       <div className="flex justify-between"><span>Pengajuan ini (termasuk biaya transfer)</span><span className="num">{fmt(opsIni)}</span></div>
       <div className="flex justify-between font-bold pt-1" style={{ borderTop: '1px solid rgba(0,0,0,0.1)' }}><span>Jumlah</span><span className="num">{fmt(opsTot)}</span></div>
       {pagu.rencanaBelum > 0 && <div className="mt-1" style={{ color: '#9A6A0B' }}>Rencana Ops hari itu masih punya {fmt(pagu.rencanaBelum)} yang belum diajukan — pastikan tidak dobel.</div>}
-      {opsTot > pagu.pagu && <div className="mt-1">Pagu LPDH mutlak. Kurangi nominal, pindahkan ke hari lain, atau cek menu Rencana Ops.</div>}
+      {opsTot > pagu.pagu && <div className="mt-1">Sebaiknya kurangi nominal atau pindahkan ke hari lain. Bila tetap diajukan, <b>alasan wajib diisi</b> — dikirim ke Yayasan bersama pengajuan.
+        <textarea value={catatanPagu} onChange={function(e) { setCatatanPagu(e.target.value); }} rows={2} aria-label="Alasan melebihi pagu"
+          placeholder="Alasan melebihi pagu (wajib), cth. stok gas habis" style={Object.assign({}, inputStyle, { marginTop: 6, fontSize: 13, minHeight: 56, borderColor: catatanPagu.trim().length >= 10 ? COLORS.line : COLORS.danger })}/></div>}
     </div>}
     <div className="sticky-bar">
       <div className="flex items-end justify-between gap-3">
@@ -4206,6 +4221,8 @@ function ItemRow({ it, actions, children }) {
         <div className="flex flex-wrap gap-1 mt-1.5"><StatusBadge status={it.status}/><ItemFlags it={it}/>{it.putaran > 1 && <MiniBadge bg={COLORS.paper} fg={COLORS.muted}>Putaran {it.putaran}</MiniBadge>}</div>
         {pendingSt(it) && it.rek_berubah && <div className="text-[11px] mt-1.5 rounded p-1.5" style={{ background: '#F8E9E5', color: COLORS.danger }}>
           Rekening berbeda dari pembayaran terakhir yang disetujui: {it.rek_berubah.dari} → <b>{it.rek_berubah.ke}</b></div>}
+        {it.catatan && /^Catatan akuntan: /.test(it.catatan) && (it.status === 'DIAJUKAN' || it.status === 'DISETUJUI' || it.status === 'TEREALISASI') &&
+          <div className="text-[11px] mt-1.5 rounded-md px-2 py-1" style={{ background: '#FBF3E3', color: '#9A6A0B' }}>⚠️ {it.catatan}</div>}
         {it.catatan && (it.status === 'REVISI' || it.status === 'DITOLAK' || it.status === 'DIBATALKAN') &&
           <div className="text-[11px] mt-1.5" style={{ color: it.status === 'DIBATALKAN' ? COLORS.muted : (it.status === 'REVISI' ? COLORS.blue : COLORS.danger) }}>Catatan: {it.catatan}</div>}
       </div>
@@ -4370,7 +4387,7 @@ function PengajuanPage({ session, scope, dapurList, toast }) {
       <PengajuanForm key={formKey} kategoriMap={kategoriMap} penerima={penerima} upsertPenerima={upsertPenerima} toast={toast} dapurOptions={dapurOptions}
         periodeRange={data.periodeRange || {}} ownDapur={session.user.dapur}
         onCreated={function(d){ setFormKey(function(k){ return k + 1; }); setTab('daftar'); setBaru(d ? d.nomor : null); load();
-          if (d) setWaText(buildWAPesan({ nomor: d.nomor, tanggal: d.tanggal, dapurNama: dapurMap[d.dapur || session.user.dapur] || '', oleh: session.user.nama, items: d.items })); }}
+          if (d) setWaText(buildWAPesan({ nomor: d.nomor, tanggal: d.tanggal, dapurNama: dapurMap[d.dapur || session.user.dapur] || '', oleh: session.user.nama, items: d.items, catatan: d.catatan })); }}
         onCancel={function(){ setFormKey(function(k){ return k + 1; }); setTab('daftar'); }}/>
     </div>}
 
@@ -4569,6 +4586,7 @@ function buildWAPesan(d) {
   });
   lines.push('');
   lines.push('*Total: ' + fmt(total) + '* (' + items.length + ' baris)');
+  if (d.catatan) { lines.push(''); lines.push('⚠️ *Catatan:* ' + d.catatan); }
   lines.push('');
   lines.push('Mohon persetujuan dan transfernya melalui aplikasi Keuangan MBG. Terima kasih.');
   if (d.oleh) lines.push('- ' + d.oleh);

@@ -135,7 +135,7 @@ function handleRequest(e, method) {
     }
     let result;
     switch (action) {
-      case 'ping':              result = { ok: true, time: new Date().toISOString(), version: 'v6-ba-sec20' }; break;
+      case 'ping':              result = { ok: true, time: new Date().toISOString(), version: 'v6-ba-sec21' }; break;
       case 'login':             result = login(params); break;
       case 'getPeriodeList':    result = getPeriodeList(params); break;
       case 'getActivePeriode':  result = getActivePeriode(params); break;
@@ -1455,7 +1455,7 @@ function createPengajuan(p) {
     const rows = items.map(function(it, idx) {
       const pn = penerimaMap[it.penerima_id];
       return [pid + '-' + (idx + 1), pid, dapurId, periode.id, idx + 1, it.jenis, it.kategori, String(it.uraian).trim(),
-        Number(it.nominal), pn.id, pn.nama, pn.bank, "'" + pn.no_rek, it.susulan ? 'YA' : 'TIDAK', 'DIAJUKAN', '', 1,
+        Number(it.nominal), pn.id, pn.nama, pn.bank, "'" + pn.no_rek, it.susulan ? 'YA' : 'TIDAK', 'DIAJUKAN', catatanPengaju(it.catatan), 1,
         '', '', '', now, now].concat(tambahan[idx]);
     });
     const sh = getSheet(SHEETS.PITEM);
@@ -1467,6 +1467,10 @@ function createPengajuan(p) {
     return hasil;
   });
 }
+
+// Catatan dari akuntan untuk Yayasan (mis. alasan melebihi pagu harian); disimpan di kolom catatan dengan awalan tetap
+const AWALAN_CATATAN_AKUNTAN = 'Catatan akuntan: ';
+function catatanPengaju(v) { const t = String(v || '').replace(/\s+/g, ' ').trim().substring(0, 400); return t ? AWALAN_CATATAN_AKUNTAN + t : ''; }
 
 // Tandai penerima baru & rekening berubah dibanding pembayaran terakhir yang disetujui
 function annotateItems(items, allItems) {
@@ -1651,7 +1655,10 @@ function decidePengajuan(p) {
     const now = new Date();
     pending.forEach(function(it) {
       const d = map[it.id];
-      sh.getRange(it._row, 15, 1, 2).setValues([[d.status, String(d.catatan || '').trim()]]);
+      // catatan akuntan tetap disimpan; catatan Yayasan (revisi/tolak) ditaruh di depan
+      const lama = String(it.catatan || ''), dariAkuntan = lama.indexOf(AWALAN_CATATAN_AKUNTAN) === 0 ? lama : '';
+      const baru = String(d.catatan || '').trim();
+      sh.getRange(it._row, 15, 1, 2).setValues([[d.status, baru && dariAkuntan ? baru + ' | ' + dariAkuntan : (baru || dariAkuntan)]]);
       sh.getRange(it._row, 18, 1, 2).setValues([[now, me.id]]);
     });
     const hs = getSheet(SHEETS.PENGAJUAN);

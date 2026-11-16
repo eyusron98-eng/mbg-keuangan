@@ -4145,16 +4145,18 @@ try {
       const sudah = nilai(semua.concat(luarItems).filter(function (x) {
         return x.tanggal === t && terkunci(x);
       }));
-      if (sudah + nilai(baris) > roPagu(h, setelan)) {
-        toast('Melebihi pagu harian ' + fmt(roPagu(h, setelan)) + ' (sudah diajukan ' + fmt(sudah) + ') — kurangi atau pindahkan dulu', 'error');
-        return;
-      }
+      const lebih = sudah + nilai(baris) - roPagu(h, setelan);
       if (daftar) setItems(daftar);
       setKonfirmAju({
         t: t,
         baris: baris,
         semua: semua,
-        perluSimpan: !!(dirty || daftar)
+        perluSimpan: !!(dirty || daftar),
+        lebih: Math.max(0, lebih),
+        pagu: roPagu(h, setelan),
+        pm: h.pm,
+        sudah: sudah,
+        catatan: ''
       });
     }
     async function kirimAju(k) {
@@ -4163,6 +4165,7 @@ try {
         baris = k.baris,
         semua = k.semua,
         daftar = k.perluSimpan;
+      const catatan = k.lebih > 0 ? 'Melebihi pagu harian ' + fmt(k.lebih) + ' (pagu ' + fmt(k.pagu) + ', PM ' + fmtNoRp(k.pm) + '). Alasan: ' + k.catatan.trim() : '';
       setAjukanTgl(t);
       if (daftar && !(await simpan(semua))) {
         setAjukanTgl('');
@@ -4179,7 +4182,8 @@ try {
             kategori: x.kategori,
             uraian: x.uraian + (x.bagian ? ' (bagian ' + x.bagian + ')' : ''),
             nominal: x.nominal,
-            penerima_id: x.penerima_id
+            penerima_id: x.penerima_id,
+            catatan: catatan
           };
         })
       });
@@ -4203,17 +4207,18 @@ try {
       const ok = await simpan(baru);
       setAjukanTgl('');
       toast('Pengajuan ' + res.data.nomor + ' terkirim untuk persetujuan' + (ok ? '' : ' (rencana belum tersimpan — tekan Simpan)'));
-      setWaText(teksWaRencana(res.data.nomor, t, baris));
+      setWaText(teksWaRencana(res.data.nomor, t, baris, catatan));
       load();
     }
     const stBaris = roStatusBaris(items, ctx.status),
       idPItem = roIdItemPengajuan(items);
-    function teksWaRencana(nomor, t, baris) {
+    function teksWaRencana(nomor, t, baris, catatan) {
       return buildWAPesan({
         nomor: nomor,
         tanggal: t,
         dapurNama: ctx.dapurNama || '',
         oleh: session.user.nama,
+        catatan: catatan,
         items: baris.map(function (x) {
           const pn = pmap[x.penerima_id] || {};
           return {
@@ -4713,7 +4718,30 @@ try {
       className: "num"
     }, fmt(konfirmAju.baris.reduce(function (a, x) {
       return a + x.nominal;
-    }, 0)))), React.createElement("div", {
+    }, 0)))), konfirmAju.lebih > 0 && React.createElement("div", {
+      className: "rounded-lg p-2.5 mt-2 text-xs",
+      style: {
+        background: '#F8E9E5',
+        color: COLORS.danger
+      }
+    }, React.createElement("div", {
+      className: "font-semibold"
+    }, "\u26A0\uFE0F Melebihi pagu harian ", fmt(konfirmAju.lebih)), React.createElement("div", null, "Pagu ", fmt(konfirmAju.pagu), " (PM ", fmtNoRp(konfirmAju.pm), ")", konfirmAju.sudah ? ' · sudah diajukan ' + fmt(konfirmAju.sudah) : '', ". Tetap bisa diajukan dengan catatan untuk Yayasan; di LPDH hari ini akan tertulis \"Melebihi pagu\" dan perlu dijelaskan."), React.createElement("textarea", {
+      value: konfirmAju.catatan,
+      onChange: function (e) {
+        setKonfirmAju(Object.assign({}, konfirmAju, {
+          catatan: e.target.value
+        }));
+      },
+      rows: 3,
+      "aria-label": "Catatan untuk Yayasan",
+      placeholder: "Alasan melebihi pagu (wajib), cth. stok gas habis, harga naik, PM hari ini turun",
+      style: Object.assign({}, inputStyle, {
+        marginTop: 8,
+        fontSize: 13,
+        minHeight: 64
+      })
+    })), React.createElement("div", {
       className: "flex gap-2 justify-end mt-3"
     }, React.createElement(Btn, {
       kind: "ghost",
@@ -4721,10 +4749,12 @@ try {
         setKonfirmAju(null);
       }
     }, "Batal"), React.createElement(Btn, {
+      kind: konfirmAju.lebih > 0 ? 'danger' : 'solid',
+      disabled: konfirmAju.lebih > 0 && konfirmAju.catatan.trim().length < 10,
       onClick: function () {
         kirimAju(konfirmAju);
       }
-    }, I.file, " Ya, ajukan"))), hapusTak && React.createElement(ConfirmModal, {
+    }, I.file, " ", konfirmAju.lebih > 0 ? 'Ajukan dengan catatan' : 'Ya, ajukan'))), hapusTak && React.createElement(ConfirmModal, {
       title: "Hapus yang tidak muat?",
       danger: true,
       confirmLabel: "Hapus",
@@ -5407,7 +5437,7 @@ try {
       className: "mt-2"
     }, React.createElement(Btn, {
       full: true,
-      disabled: !!err || !f.tanggal || !f.penerima_id || lewat(f.tanggal) || busy || h && butuh > sisa,
+      disabled: !!err || !f.tanggal || !f.penerima_id || lewat(f.tanggal) || busy,
       onClick: function () {
         onAjukan(Object.assign({}, f, {
           nominal: Number(f.nominal) || 0,
@@ -10104,6 +10134,9 @@ try {
       }, pnMap, pagu ? pagu.bankVA : '') : 0);
     }, 0);
     const opsTot = pagu ? pagu.terpakai + pagu.diajukan + opsIni : 0;
+    const lebihPagu = pagu && opsIni > 0 && opsTot > pagu.pagu ? opsTot - pagu.pagu : 0;
+    const [catatanPagu, setCatatanPagu] = useState('');
+    const catatanKirim = lebihPagu ? 'Melebihi pagu harian ' + fmt(lebihPagu) + ' (pagu ' + fmt(pagu.pagu) + ', PM ' + fmtNoRp(pagu.pm) + '). Alasan: ' + catatanPagu.trim() : '';
     function update(i, n) {
       setRows(rows.map(function (r, j) {
         return j === i ? n : r;
@@ -10114,6 +10147,11 @@ try {
       lockRef.current = true;
       setSaving(true);
       try {
+        if (lebihPagu && catatanPagu.trim().length < 10) {
+          setConfirm(false);
+          toast('Melebihi pagu harian — isi alasan untuk Yayasan dulu', 'error');
+          return;
+        }
         const items = rows.map(function (r) {
           return {
             jenis: r.jenis,
@@ -10122,6 +10160,7 @@ try {
             nominal: Number(r.nominal),
             penerima_id: r.penerima_id,
             susulan: !!r.susulan,
+            catatan: r.jenis === 'Operasional' ? catatanKirim : '',
             rincian: r.jenis === 'Bahan Baku' ? rincianKirim(r.rincian) : undefined,
             nota_no: r.jenis === 'Bahan Baku' ? String(r.nota_no || '').trim() : undefined
           };
@@ -10162,6 +10201,7 @@ try {
             nomor: res.data.nomor,
             tanggal: tanggal,
             dapur: dapur,
+            catatan: catatanKirim,
             items: items.map(function (it) {
               const pn = pmap[it.penerima_id] || {};
               return Object.assign({}, it, {
@@ -10303,7 +10343,21 @@ try {
       }
     }, "Rencana Ops hari itu masih punya ", fmt(pagu.rencanaBelum), " yang belum diajukan \u2014 pastikan tidak dobel."), opsTot > pagu.pagu && React.createElement("div", {
       className: "mt-1"
-    }, "Pagu LPDH mutlak. Kurangi nominal, pindahkan ke hari lain, atau cek menu Rencana Ops.")), React.createElement("div", {
+    }, "Sebaiknya kurangi nominal atau pindahkan ke hari lain. Bila tetap diajukan, ", React.createElement("b", null, "alasan wajib diisi"), " \u2014 dikirim ke Yayasan bersama pengajuan.", React.createElement("textarea", {
+      value: catatanPagu,
+      onChange: function (e) {
+        setCatatanPagu(e.target.value);
+      },
+      rows: 2,
+      "aria-label": "Alasan melebihi pagu",
+      placeholder: "Alasan melebihi pagu (wajib), cth. stok gas habis",
+      style: Object.assign({}, inputStyle, {
+        marginTop: 6,
+        fontSize: 13,
+        minHeight: 56,
+        borderColor: catatanPagu.trim().length >= 10 ? COLORS.line : COLORS.danger
+      })
+    }))), React.createElement("div", {
       className: "sticky-bar"
     }, React.createElement("div", {
       className: "flex items-end justify-between gap-3"
@@ -10615,7 +10669,13 @@ try {
         background: '#F8E9E5',
         color: COLORS.danger
       }
-    }, "Rekening berbeda dari pembayaran terakhir yang disetujui: ", it.rek_berubah.dari, " \u2192 ", React.createElement("b", null, it.rek_berubah.ke)), it.catatan && (it.status === 'REVISI' || it.status === 'DITOLAK' || it.status === 'DIBATALKAN') && React.createElement("div", {
+    }, "Rekening berbeda dari pembayaran terakhir yang disetujui: ", it.rek_berubah.dari, " \u2192 ", React.createElement("b", null, it.rek_berubah.ke)), it.catatan && /^Catatan akuntan: /.test(it.catatan) && (it.status === 'DIAJUKAN' || it.status === 'DISETUJUI' || it.status === 'TEREALISASI') && React.createElement("div", {
+      className: "text-[11px] mt-1.5 rounded-md px-2 py-1",
+      style: {
+        background: '#FBF3E3',
+        color: '#9A6A0B'
+      }
+    }, "\u26A0\uFE0F ", it.catatan), it.catatan && (it.status === 'REVISI' || it.status === 'DITOLAK' || it.status === 'DIBATALKAN') && React.createElement("div", {
       className: "text-[11px] mt-1.5",
       style: {
         color: it.status === 'DIBATALKAN' ? COLORS.muted : it.status === 'REVISI' ? COLORS.blue : COLORS.danger
@@ -10990,7 +11050,8 @@ try {
           tanggal: d.tanggal,
           dapurNama: dapurMap[d.dapur || session.user.dapur] || '',
           oleh: session.user.nama,
-          items: d.items
+          items: d.items,
+          catatan: d.catatan
         }));
       },
       onCancel: function () {
@@ -11450,6 +11511,10 @@ try {
     });
     lines.push('');
     lines.push('*Total: ' + fmt(total) + '* (' + items.length + ' baris)');
+    if (d.catatan) {
+      lines.push('');
+      lines.push('⚠️ *Catatan:* ' + d.catatan);
+    }
     lines.push('');
     lines.push('Mohon persetujuan dan transfernya melalui aplikasi Keuangan MBG. Terima kasih.');
     if (d.oleh) lines.push('- ' + d.oleh);
