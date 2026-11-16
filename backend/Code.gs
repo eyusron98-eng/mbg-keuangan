@@ -135,7 +135,7 @@ function handleRequest(e, method) {
     }
     let result;
     switch (action) {
-      case 'ping':              result = { ok: true, time: new Date().toISOString(), version: 'v6-ba-sec18' }; break;
+      case 'ping':              result = { ok: true, time: new Date().toISOString(), version: 'v6-ba-sec19' }; break;
       case 'login':             result = login(params); break;
       case 'getPeriodeList':    result = getPeriodeList(params); break;
       case 'getActivePeriode':  result = getActivePeriode(params); break;
@@ -2940,11 +2940,29 @@ function getRencanaOps(p) {
     const pids = {}; rencana.items.forEach(function(x) { if (x.pengajuan_id) pids[x.pengajuan_id] = 1; });
     Object.keys(items).forEach(function(k) { const it = items[k]; if (pids[it.pengajuan_id]) (status[it.pengajuan_id] = status[it.pengajuan_id] || []).push(it.status); });
   }
+  // Operasional di luar rencana (pengajuan dari menu Pengajuan, input darurat/manual) — ikut menghabiskan pagu harian
+  const pidRencana = {}; ((rencana && rencana.items) || []).forEach(function(x) { if (x.pengajuan_id) pidRencana[x.pengajuan_id] = 1; });
+  const headMap = {}; readAllPengajuan().forEach(function(h) { headMap[h.id] = h; });
+  const txPer = semuaTx.filter(function(t) { return t.periode_id === per.id; }), txMap = {}; txPer.forEach(function(t) { txMap[t.id] = t; });
+  const luar = [];
+  Object.keys(items).forEach(function(k) {
+    const it = items[k];
+    if (it.dapur !== dapurId || it.periode_id !== per.id || it.jenis !== 'Operasional' || pidRencana[it.pengajuan_id]) return;
+    if (['DIAJUKAN', 'REVISI', 'DISETUJUI', 'TEREALISASI'].indexOf(it.status) < 0) return;
+    const h = headMap[it.pengajuan_id] || {}, tx = it.transaksi_id ? txMap[it.transaksi_id] : null;
+    luar.push({ id: 'LUAR-' + it.id, pitem_id: it.id, tanggal: tx ? tx.tanggal : h.tanggal, kategori: it.kategori, uraian: it.uraian, nominal: tx ? nilaiLPDH(tx) : it.nominal,
+      penerima_id: it.penerima_id, pengajuan_id: it.pengajuan_id, nomor: h.nomor || '', status: it.status });
+  });
+  txPer.forEach(function(t) {   // transaksi operasional tanpa pengajuan (darurat / manual)
+    const l = String(t.pengajuan_item_id || '');
+    if (t.jenis !== 'Operasional' || t.sumber === 'Petty Cash' || (l && l.indexOf('DARURAT') !== 0)) return;   // biaya admin manual ikut dihitung
+    luar.push({ id: 'LUAR-' + t.id, tanggal: t.tanggal, kategori: t.kategori, uraian: String(t.uraian || ''), nominal: nilaiLPDH(t), penerima_id: '', pengajuan_id: '', nomor: String(t.no_bukti || ''), status: 'TRANSAKSI' });
+  });
   const ident = readIdentitasLPDH(dapurId) || {};
   return { ok: true, data: {
     dapur: dapurId,
     periode: { id: per.id, periode_no: per.periode_no, tanggal_mulai: per.tanggal_mulai, tanggal_akhir: per.tanggal_akhir, penerima: per.penerima, status: per.status },
-    rencana: rencana, riwayat: riwayat, status: status, bankVA: String(ident.bank || ''),
+    rencana: rencana, riwayat: riwayat, status: status, luar: luar, bankVA: String(ident.bank || ''),
     aktual: opsPerTanggal(dapurId, per.id),
     penerima: readPenerima().filter(function(r) { return r.aktif; }).map(function(r) { return { id: r.id, nama: r.nama, bank: r.bank, no_rek: r.no_rek }; })
       .sort(function(a, b) { return a.nama.localeCompare(b.nama); }),

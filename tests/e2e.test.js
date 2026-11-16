@@ -504,6 +504,40 @@ async function isiBahanBaku(page, uraian, volume, harga) {
     globalThis.__ro4 = null;
   });
 
+  all &= await run('Rencana Ops: pengajuan dari menu Pengajuan masuk matriks & mengurangi pagu', { role: 'akuntan',
+    override: (a, m, p) => {
+      const L = globalThis.__ro5 = globalThis.__ro5 || { aju: [], batal: null };
+      if (a === 'getRencanaOps') return { ok: true, data: { dapur: 'D1', bisaUbah: true, bankVA: 'BSI', aktual: {}, status: {}, riwayat: null,
+        periode: { id: 'P19', periode_no: 19, tanggal_mulai: '2026-11-02', tanggal_akhir: '2026-11-06', penerima: 1000, status: 'AKTIF' },
+        penerima: [{ id: 'W', nama: 'Wanda', bank: 'BSI', no_rek: '1' }],
+        luar: [{ id: 'LUAR-X1', pitem_id: 'PAX-1', tanggal: '2026-11-03', kategori: 'Gas', uraian: 'Gas dari menu Pengajuan', nominal: 2500000, penerima_id: 'W', pengajuan_id: 'PAX', nomor: 'BA-X', status: 'DISETUJUI' },
+          { id: 'LUAR-T9', tanggal: '2026-11-03', kategori: 'Listrik', uraian: 'Token darurat', nominal: 300000, penerima_id: '', pengajuan_id: '', nomor: 'NB-9', status: 'TRANSAKSI' }],
+        rencana: { versi: 1, setelan: { indeks: 100, batas: 100 }, hari: {}, items: [{ id: 'R1', tanggal: '2026-11-03', kategori: 'APD', uraian: 'Masker', nominal: 400000, penerima_id: 'W' }] } } };
+      if (a === 'getKategori') return { ok: true, data: { 'Operasional': ['Gas', 'Listrik', 'APD'] } };
+      if (a === 'saveRencanaOps') return { ok: true, data: { versi: (p.data.versi || 0) + 1 } };
+      if (a === 'createPengajuan') { L.aju.push(p); return { ok: true, data: { id: 'PA9', nomor: 'BA-9' } }; }
+      if (a === 'batalkanItem') { L.batal = p; return { ok: true }; }
+      return null; } }, async (page, srv) => {
+    await login(page, 'siti');
+    await page.waitForSelector('header');
+    await page.click('nav:visible >> text=Rencana Ops');
+    await page.waitForSelector('[aria-label="Matriks rencana operasional"]');
+    assert(await page.isVisible('th:has-text("Gas")') && await page.isVisible('th:has-text("Listrik")'), 'pos di luar rencana tidak tampil di matriks');
+    await page.waitForSelector('text=termasuk di luar rencana');
+    // 3 Nov: 2,5 jt + 0,3 jt di luar rencana + APD 0,4 jt = 3,2 jt > pagu 3 jt → ajukan APD ditolak
+    await page.click('button:has-text("Ajukan 1") >> nth=0');
+    await page.waitForSelector('text=Melebihi pagu harian');
+    assert(globalThis.__ro5.aju.length === 0, 'pengajuan melebihi pagu tetap terkirim');
+    await page.click('[aria-label="Gas 2026-11-03"]');
+    await page.waitForSelector('text=Diajukan di luar rencana');
+    assert(!(await page.isEnabled('[aria-label="Nominal rencana"]')), 'baris di luar rencana bisa diubah di matriks');
+    await page.click('text=Batalkan pengajuan baris ini');
+    await page.click('text=Ya, batalkan');
+    await page.waitForSelector('text=Pengajuan BA-X dibatalkan');
+    assert(globalThis.__ro5.batal && globalThis.__ro5.batal.item_id === 'PAX-1', 'pembatalan baris luar salah');
+    globalThis.__ro5 = null;
+  });
+
   all &= await run('Relawan: daftar kosong bisa diisi (tombol tidak tertutup) & tempel dari Excel', { role: 'akuntan',
     override: (a, m, p) => a === 'getRelawanBayar' ? { ok: true, data: { rows: [], sumber: 'baru', total: 6240000 } }
       : a === 'getDataLPDH' ? { ok: true, data: { dapur: { id: 'D1', nama: 'SPPG Satu', kode: 'S1' }, identitas: {}, tanggal: p.tanggal, harian: null,

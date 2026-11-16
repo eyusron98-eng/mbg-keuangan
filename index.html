@@ -3429,6 +3429,7 @@ try {
     return s.trim();
   }
   function roFee(item, penerimaMap, bankVA) {
+    if (item.status === 'TRANSAKSI') return 0;
     const pn = penerimaMap && penerimaMap[item.penerima_id];
     if (!pn) return RO_FEE;
     const a = roKodeBank(pn.bank),
@@ -3751,11 +3752,12 @@ try {
           nominal: 0,
           n: 0,
           aju: 0,
+          luar: 0,
           items: []
         };
       c.nominal += x.nominal;
       c.n++;
-      if (x.pengajuan_id) c.aju++;
+      if (x.luar) c.luar++;else if (x.pengajuan_id) c.aju++;
       c.items.push(x);
       fee[x.tanggal] = (fee[x.tanggal] || 0) + f;
     });
@@ -3924,7 +3926,11 @@ try {
     ctx.penerima.forEach(function (p) {
       pmap[p.id] = p;
     });
-    const ring = roRingkas(items, ctx, setelan, hariSet, todayISO());
+    const ring = roRingkas(items.concat((ctx.luar || []).map(function (x) {
+      return Object.assign({
+        luar: true
+      }, x);
+    })), ctx, setelan, hariSet, todayISO());
     const ubah = function (fn) {
       setItems(fn);
       setDirty(true);
@@ -3936,8 +3942,14 @@ try {
       setDirty(true);
     };
     const terkunci = function (x) {
-      return !!x.pengajuan_id;
+      return !!x.pengajuan_id || !!x.luar;
     };
+    const luarItems = (ctx.luar || []).map(function (x) {
+      return Object.assign({
+        luar: true
+      }, x);
+    });
+    const hitung = items.concat(luarItems);
     const hariIni = todayISO();
     const lewat = function (t) {
       return !!t && t < hariIni;
@@ -3969,7 +3981,7 @@ try {
       const tetap = items.filter(function (x) {
         return terkunci(x) || lewat(x.tanggal);
       });
-      const u = roUsulkan(ctx, setelan, hariSet, seedRef.current, tetap, hariIni);
+      const u = roUsulkan(ctx, setelan, hariSet, seedRef.current, tetap.concat(luarItems), hariIni);
       const muat = u.items.filter(function (x) {
         return x.tanggal;
       });
@@ -4007,7 +4019,7 @@ try {
           return sm + x.nominal + roFee(x, pmap, ctx.bankVA);
         }, 0);
       };
-      const sudah = nilai(semua.filter(function (x) {
+      const sudah = nilai(semua.concat(luarItems).filter(function (x) {
         return x.tanggal === t && terkunci(x);
       }));
       if (sudah + nilai(baris) > roPagu(h, setelan)) {
@@ -4074,7 +4086,7 @@ try {
       idPItem = roIdItemPengajuan(items);
     async function batalAju(x, alasan) {
       const r = await apiPost('batalkanItem', {
-        item_id: idPItem[x.id],
+        item_id: x.pitem_id || idPItem[x.id],
         alasan: alasan || 'Dibatalkan dari Rencana Ops'
       });
       if (!r.ok) {
@@ -4086,12 +4098,13 @@ try {
       load();
     }
     const statusAju = function (x) {
-      return {
+      return (x.luar ? 'Di luar rencana · ' : '') + ({
         DIAJUKAN: 'Menunggu persetujuan',
         DISETUJUI: 'Disetujui',
         REVISI: 'Perlu revisi — ubah di menu Pengajuan',
-        TEREALISASI: 'Terealisasi'
-      }[stBaris[x.id]] || 'Diajukan';
+        TEREALISASI: 'Terealisasi',
+        TRANSAKSI: 'Transaksi tercatat'
+      }[x.luar ? x.status : stBaris[x.id]] || 'Diajukan');
     };
     const Baris = function ({
       x
@@ -4119,12 +4132,12 @@ try {
         style: {
           color: pn ? COLORS.muted : COLORS.danger
         }
-      }, x.kategori, " \xB7 ", pn ? pn.nama + ' (' + roKodeBank(pn.bank) + ')' : 'penerima belum dipilih', fee ? ' · admin ' + fmtNoRp(fee) : ''), x.pengajuan_id && React.createElement("div", {
+      }, x.kategori, " \xB7 ", pn ? pn.nama + ' (' + roKodeBank(pn.bank) + ')' : 'penerima belum dipilih', fee ? ' · admin ' + fmtNoRp(fee) : ''), (x.pengajuan_id || x.luar) && React.createElement("div", {
         className: "text-[11px] font-semibold",
         style: {
-          color: stBaris[x.id] === 'REVISI' ? COLORS.amber : COLORS.green
+          color: x.luar ? COLORS.blue : stBaris[x.id] === 'REVISI' ? COLORS.amber : COLORS.green
         }
-      }, x.nomor, " \xB7 ", statusAju(x)), !x.pengajuan_id && x.batal && React.createElement("div", {
+      }, x.nomor ? x.nomor + ' · ' : '', statusAju(x)), !x.pengajuan_id && x.batal && React.createElement("div", {
         className: "text-[11px] font-semibold",
         style: {
           color: COLORS.amber
@@ -4204,7 +4217,24 @@ try {
       }
     }, "Terjadwal di hari tersisa (termasuk biaya transfer)"), React.createElement("b", {
       className: "num"
-    }, fmt(ring.rencanaAktif))), React.createElement("div", {
+    }, fmt(ring.rencanaAktif))), luarItems.some(function (x) {
+      return x.tanggal >= hariIni;
+    }) && React.createElement("div", {
+      className: "flex justify-between"
+    }, React.createElement("span", {
+      style: {
+        color: COLORS.blue
+      }
+    }, "\u2014 termasuk di luar rencana (menu Pengajuan / darurat)"), React.createElement("b", {
+      className: "num",
+      style: {
+        color: COLORS.blue
+      }
+    }, fmt(luarItems.filter(function (x) {
+      return x.tanggal >= hariIni;
+    }).reduce(function (a, x) {
+      return a + x.nominal + roFee(x, pmap, ctx.bankVA);
+    }, 0)))), React.createElement("div", {
       className: "flex justify-between"
     }, React.createElement("span", {
       style: {
@@ -4301,7 +4331,7 @@ try {
         }
       }, t[1]);
     })), tampil === 'tabel' && React.createElement(RencanaMatriks, {
-      m: roMatriks(items, ctx, setelan, hariSet, hariIni),
+      m: roMatriks(hitung, ctx, setelan, hariSet, hariIni),
       bisaUbah: bisaUbah,
       ajukanTgl: ajukanTgl,
       lewat: lewat,
@@ -4344,7 +4374,7 @@ try {
         x: x
       });
     })), tampil === 'hari' && ring.hari.map(function (h) {
-      const baris = items.filter(function (x) {
+      const baris = hitung.filter(function (x) {
         return x.tanggal === h.tanggal;
       });
       const lebih = h.pakai > h.pagu,
@@ -4556,7 +4586,7 @@ try {
       lewat: lewat,
       busy: !!ajukanTgl,
       toast: toast,
-      statusBaris: stBaris[edit.id],
+      statusBaris: edit.luar ? edit.status : stBaris[edit.id],
       bisaBatal: role === 'akuntan' && ctx.periode.status === 'AKTIF',
       onBatal: batalAju,
       onPenerima: function (saved) {
@@ -4687,6 +4717,16 @@ try {
       style: {
         width: 10,
         height: 10,
+        background: '#E3ECF7',
+        display: 'inline-block',
+        borderRadius: 2
+      }
+    }), " di luar rencana (menu Pengajuan / input darurat)"), React.createElement("span", {
+      className: "inline-flex items-center gap-1 ml-2"
+    }, React.createElement("span", {
+      style: {
+        width: 10,
+        height: 10,
         background: '#F8E9E5',
         display: 'inline-block',
         borderRadius: 2
@@ -4730,7 +4770,7 @@ try {
       const sudahLewat = lewat(h.tanggal);
       const belum = kol.reduce(function (n, k) {
         return n + (row[k] ? row[k].items.filter(function (x) {
-          return !x.pengajuan_id && x.penerima_id;
+          return !x.pengajuan_id && !x.luar && x.penerima_id;
         }).length : 0);
       }, 0);
       const bg = sudahLewat ? '#EEEEEA' : lebih ? '#F8E9E5' : h.libur ? COLORS.paper : COLORS.surface;
@@ -4786,7 +4826,7 @@ try {
           },
           style: Object.assign({}, td, {
             cursor: c || bisaTambah ? 'pointer' : 'default',
-            background: c && c.aju === c.n ? '#DCEFE3' : bg,
+            background: c && c.luar === c.n ? '#E3ECF7' : c && c.aju + c.luar === c.n ? '#DCEFE3' : bg,
             color: c ? sudahLewat ? COLORS.muted : COLORS.ink : COLORS.line
           }),
           "aria-label": roLabel(k) + ' ' + h.tanggal
@@ -5001,7 +5041,19 @@ try {
     return React.createElement(Modal, {
       title: x.baru ? 'Tambah kebutuhan' : bisaUbah ? 'Ubah baris rencana' : 'Baris rencana',
       onClose: onClose
-    }, x.pengajuan_id && React.createElement("div", {
+    }, x.luar && x.status === 'TRANSAKSI' && React.createElement("div", {
+      className: "rounded-lg p-2.5 mb-3 text-xs",
+      style: {
+        background: '#E3ECF7',
+        color: COLORS.blue
+      }
+    }, "Transaksi tanpa pengajuan (input darurat / manual)", x.nomor ? ', no bukti ' + x.nomor : '', ". Ikut dihitung dalam pagu hari ini; ubah lewat menu Riwayat."), x.pengajuan_id && x.luar && React.createElement("div", {
+      className: "rounded-lg p-2.5 mb-1 text-xs",
+      style: {
+        background: '#E3ECF7',
+        color: COLORS.blue
+      }
+    }, "Diajukan di luar rencana, lewat menu Pengajuan. Ikut dihitung dalam pagu hari itu."), x.pengajuan_id && React.createElement("div", {
       className: "rounded-lg p-2.5 mb-3 text-xs",
       style: {
         background: '#E8F1EC',
