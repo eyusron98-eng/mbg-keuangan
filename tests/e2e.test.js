@@ -351,6 +351,12 @@ async function isiBahanBaku(page, uraian, volume, harga) {
     await page.waitForSelector('[aria-label="Matriks rencana operasional"]');
     assert(await page.isVisible('th:has-text("Honor relawan")') && await page.isVisible('th:has-text("Gas")') && await page.isVisible('td:has-text("Tidak muat")'), 'kolom pos / baris ringkasan matriks tidak tampil');
     if (process.env.SHOT) { await page.waitForTimeout(600); await page.screenshot({ path: process.env.SHOT + '/rencana.png', fullPage: true }); }
+    // PM per hari langsung di matriks: pagu hari itu ikut berubah
+    await page.fill('[aria-label="PM 2026-11-10"]', '');
+    await page.type('[aria-label="PM 2026-11-10"]', '800');
+    assert((await page.inputValue('[aria-label="PM 2026-11-10"]')) === '800', 'isian PM terputus saat diketik');
+    await page.waitForSelector('td:has-text("2,40 jt")');   // pagu 3.000 × 800
+    await page.fill('[aria-label="PM 2026-11-10"]', '1000');
     await page.click('[aria-label="Gas 2026-11-09"]');
     await page.waitForSelector('text=Tambah kebutuhan >> nth=1');
     assert((await page.inputValue('[aria-label="Tanggal rencana"]')) === '2026-11-09', 'sel kosong tidak membuka baris baru di tanggal itu');
