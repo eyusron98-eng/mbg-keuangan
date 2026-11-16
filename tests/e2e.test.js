@@ -552,6 +552,28 @@ async function isiBahanBaku(page, uraian, volume, harga) {
     globalThis.__ro5 = null;
   });
 
+  all &= await run('Setup: daftar relawan tetap bisa diatur kapan saja', { role: 'akuntan',
+    override: (a, m, p) => a === 'getRelawanTetap' ? { ok: true, data: { rows: globalThis.__rt || [{ nama: 'Ani', tugas: 'Masak', hari: 1, upah: 100000, metode: 'Transfer', hadir: true }], sumber: globalThis.__rt ? 'tetap' : 'dari pembayaran terakhir' } }
+      : a === 'saveRelawanTetap' ? (globalThis.__rt = p.rows, { ok: true, data: { jumlah: p.rows.length, perHari: 0 } }) : null }, async (page, srv) => {
+    await login(page, 'siti');
+    await page.waitForSelector('header');
+    await page.click('nav:visible >> text=Setup');
+    await page.waitForSelector('text=1 relawan aktif · Rp 100.000 per hari');
+    await page.waitForSelector('text=Masih dari pembayaran terakhir');
+    await page.click('button:has-text("Atur")');
+    await page.waitForSelector('text=Daftar relawan tetap (pengaturan gaji)');
+    await page.click('button:has-text("Ubah detail")');
+    await page.click('.sheet >> button:has-text("Tambah relawan") >> nth=-1');
+    await page.fill('[aria-label="Nama 2"]', 'Budi');
+    await page.fill('[aria-label="Tugas 2"]', 'Cuci');
+    await page.locator('.sheet input[inputmode=numeric][placeholder="0"]').nth(1).fill('90000');
+    await page.click('.sheet >> button:has-text("Simpan")');
+    await page.waitForSelector('text=Daftar relawan tetap disimpan');
+    assert(globalThis.__rt.length === 2 && globalThis.__rt[1].nama === 'Budi' && globalThis.__rt[1].upah === 90000, 'daftar tetap tidak tersimpan: ' + JSON.stringify(globalThis.__rt));
+    await page.waitForSelector('text=2 relawan aktif · Rp 190.000 per hari');
+    globalThis.__rt = null;
+  });
+
   all &= await run('Relawan: daftar kosong bisa diisi (tombol tidak tertutup) & tempel dari Excel', { role: 'akuntan',
     override: (a, m, p) => a === 'getRelawanBayar' ? { ok: true, data: { rows: [], sumber: 'baru', total: 6240000 } }
       : a === 'getDataLPDH' ? { ok: true, data: { dapur: { id: 'D1', nama: 'SPPG Satu', kode: 'S1' }, identitas: {}, tanggal: p.tanggal, harian: null,

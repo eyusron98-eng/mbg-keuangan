@@ -85,7 +85,7 @@ const ok = (c, m) => { console.log((c ? 'PASS ' : 'FAIL ') + m); if (!c) fails++
     ['U3', 'off', 'xxxxxxx', 'Nonaktif', 'pic', 'D001', 'TIDAK'],
   ]);
   const B = env.__book;
-  ok(call(env, 'GET', { action: 'ping' }).version === 'v6-ba-sec21', 'ping menampilkan versi baru');
+  ok(call(env, 'GET', { action: 'ping' }).version === 'v6-ba-sec22', 'ping menampilkan versi baru');
 
   // 1. login lama (teks biasa) berhasil via POST dan password otomatis di-hash
   let r = call(env, 'POST', { action: 'login', username: 'AKUN1', password: 'RahasiaKu9' });
@@ -605,6 +605,21 @@ const ok = (c, m) => { console.log((c ? 'PASS ' : 'FAIL ') + m); if (!c) fails++
   ok(r.ok, 'edit dengan nomor notanya sendiri tetap boleh: ' + (r.error || ''));
 
   ok(e8.teksSel('01-2026') === "'01-2026" && e8.teksSel('1/10') === "'1/10" && e8.teksSel('NT-001') === 'NT-001' && e8.teksSel('') === '', 'nomor bukti mirip tanggal/angka disimpan sebagai teks');
+
+  // ── Daftar relawan tetap: bisa diatur kapan saja, dipakai otomatis untuk pembayaran honor baru ──
+  {
+    let r = call(e8, 'POST', { action: 'saveRelawanTetap', token: tk8('pic'), rows: [{ nama: 'Siti', tugas: 'Juru masak', hari: 1, upah: 150000, metode: 'Transfer', hadir: true }, { nama: 'Joko', tugas: 'Distribusi', hari: 1, upah: 0 }] });
+    ok(!r.ok && /upah per hari wajib/.test(r.error), 'daftar tetap: upah 0 ditolak');
+    r = call(e8, 'POST', { action: 'saveRelawanTetap', token: tk8('yay'), rows: [{ nama: 'X', upah: 1000 }] });
+    ok(!r.ok, 'Yayasan tidak bisa mengubah daftar relawan tetap');
+    r = call(e8, 'POST', { action: 'saveRelawanTetap', token: tk8('pic'), rows: [{ nama: 'Siti', tugas: 'Juru masak', hari: 1, upah: 150000, metode: 'Transfer', hadir: true }, { nama: 'Joko', tugas: 'Distribusi', hari: 1, upah: 120000, hadir: false }] });
+    ok(r.ok && r.data.jumlah === 2 && r.data.perHari === 150000, 'daftar tetap tersimpan (honor per hari yang aktif ' + (r.data && r.data.perHari) + '): ' + (r.error || ''));
+    r = call(e8, 'GET', { action: 'getRelawanTetap', token: tk8('akn') });
+    ok(r.ok && r.data.sumber === 'tetap' && r.data.rows.length === 2 && r.data.rows[1].hadir === false, 'akuntan membaca daftar tetap yang sama');
+    B8.Transaksi.push(['TH9', 'D001', '2026-10-20', 'HN-9', 'Operasional', 'Gaji/honor relawan pekerja SPPG', 'Honor relawan 20 Okt', 'VA', 270000, 270000, 'https://x', '', 'U2', 'P1', '']);
+    r = call(e8, 'POST', { action: 'getRelawanBayar', token: tk8('pic'), transaksi_id: 'TH9' });
+    ok(r.ok && r.data.sumber === 'disalin dari daftar relawan tetap' && r.data.rows.length === 2 && r.data.rows[0].hadir === true && r.data.rows[1].hadir === false, 'pembayaran honor baru memakai daftar tetap (centang = biasanya hadir)');
+  }
 
   // ── Catatan akuntan (mis. melebihi pagu harian) ikut ke Yayasan & tidak hilang saat diputuskan ──
   {

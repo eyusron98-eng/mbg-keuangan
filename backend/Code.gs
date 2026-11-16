@@ -135,7 +135,7 @@ function handleRequest(e, method) {
     }
     let result;
     switch (action) {
-      case 'ping':              result = { ok: true, time: new Date().toISOString(), version: 'v6-ba-sec21' }; break;
+      case 'ping':              result = { ok: true, time: new Date().toISOString(), version: 'v6-ba-sec22' }; break;
       case 'login':             result = login(params); break;
       case 'getPeriodeList':    result = getPeriodeList(params); break;
       case 'getActivePeriode':  result = getActivePeriode(params); break;
@@ -195,6 +195,8 @@ function handleRequest(e, method) {
       case 'saveHarianLPDH':    result = saveHarianLPDH(params); break;
       case 'getRelawanBayar':   result = getRelawanBayar(params); break;
       case 'saveRelawanBayar':  result = saveRelawanBayar(params); break;
+      case 'getRelawanTetap':   result = getRelawanTetap(params); break;
+      case 'saveRelawanTetap':  result = saveRelawanTetap(params); break;
       case 'saveTopupLPDH':     result = saveTopupLPDH(params); break;
       case 'saveInsentifLPDH':  result = saveInsentifLPDH(params); break;
       case 'saveTtdInsentif':   result = saveTtdInsentif(params); break;
@@ -1470,6 +1472,7 @@ function createPengajuan(p) {
 
 // Catatan dari akuntan untuk Yayasan (mis. alasan melebihi pagu harian); disimpan di kolom catatan dengan awalan tetap
 const AWALAN_CATATAN_AKUNTAN = 'Catatan akuntan: ';
+function catatanAkuntanDari(c) { c = String(c || ''); const i = c.indexOf(AWALAN_CATATAN_AKUNTAN); return i < 0 ? '' : c.substring(i + AWALAN_CATATAN_AKUNTAN.length).trim(); }
 function catatanPengaju(v) { const t = String(v || '').replace(/\s+/g, ' ').trim().substring(0, 400); return t ? AWALAN_CATATAN_AKUNTAN + t : ''; }
 
 // Tandai penerima baru & rekening berubah dibanding pembayaran terakhir yang disetujui
@@ -2286,8 +2289,11 @@ function getRelawanBayar(p) {
   if (lpdhDapur(me, tx.dapur) !== tx.dapur) return { ok: false, error: 'Bukan dapur Anda' };
   const semua = bacaRelawanSemua(tx.dapur);
   if (semua[tx.id]) return { ok: true, data: { rows: semua[tx.id].rows.map(function(r) { return Object.assign({ hadir: true }, r); }), sumber: 'tersimpan', total: tx.riil } };
-  // salin dari daftar terakhir dapur ini (nama, tugas, upah, metode, hari kerja); semua dicentang hadir lagi
-  let akhir = null; Object.keys(semua).forEach(function(k) { if (!akhir || semua[k].seq > akhir.seq) akhir = semua[k]; });
+  // daftar relawan tetap (diatur di Setup) bila ada — centang mengikuti 'biasanya hadir'; selain itu salin dari daftar terakhir (semua dicentang)
+  const tetap = semua[RELAWAN_TETAP + tx.dapur];
+  if (tetap && tetap.rows.length) return { ok: true, data: { rows: tetap.rows.map(function(r) { return Object.assign({}, r, { hadir: r.hadir !== false, hari: r.hari > 0 ? r.hari : 1 }); }),
+    sumber: 'disalin dari daftar relawan tetap', total: tx.riil } };
+  let akhir = null; Object.keys(semua).forEach(function(k) { if (k.indexOf(RELAWAN_TETAP) === 0) return; if (!akhir || semua[k].seq > akhir.seq) akhir = semua[k]; });
   return { ok: true, data: { rows: akhir ? akhir.rows.map(function(r) { return Object.assign({}, r, { hadir: true, hari: r.hari > 0 ? r.hari : 1 }); }) : [],
     sumber: akhir ? 'disalin dari daftar terakhir' : 'baru', total: tx.riil } };
 }
@@ -2321,6 +2327,49 @@ function saveRelawanBayar(p) {
     if (ada) sh.getRange(ada._row, 1, 1, row.length).setValues([row]); else sh.appendRow(row);
     logActivity(me.id, 'saveRelawanBayar', tx.id + ' (' + rows.length + ' orang)');
     return { ok: true };
+  });
+}
+
+// ── Daftar relawan tetap per dapur: bisa diubah kapan saja (tidak menunggu realisasi honor) ──
+const RELAWAN_TETAP = 'DAFTAR:';
+function bacaBarisRelawan(a, wajibHadir) {
+  if (typeof a === 'string') a = bacaJson(a);
+  if (!Array.isArray(a)) return { error: 'Daftar relawan tidak valid' };
+  if (a.length > 200) return { error: 'Daftar relawan maksimal 200 orang' };
+  const rows = [];
+  for (let i = 0; i < a.length; i++) {
+    const x = a[i] || {}, r = { nama: String(x.nama || '').trim().substring(0, 80), tugas: String(x.tugas || '').trim().substring(0, 60), hari: Number(x.hari) || 1,
+      upah: Math.round(Number(x.upah) || 0), metode: x.metode === 'Tunai' ? 'Tunai' : 'Transfer', hadir: x.hadir !== false && x.hadir !== 'false' };
+    if (!r.nama) return { error: 'Baris ' + (i + 1) + ': nama wajib' };
+    if (!(r.upah > 0)) return { error: 'Baris ' + (i + 1) + ' (' + r.nama + '): upah per hari wajib > 0' };
+    rows.push(r);
+  }
+  return { rows: rows };
+}
+function getRelawanTetap(p) {
+  const me = authUser(p);
+  if (!me) return { ok: false, error: SESI_ERR };
+  const dapurId = lpdhDapur(me, p.dapur);
+  if (!dapurId) return { ok: false, error: 'Pilih dapur' };
+  const semua = bacaRelawanSemua(dapurId), tetap = semua[RELAWAN_TETAP + dapurId];
+  if (tetap) return { ok: true, data: { rows: tetap.rows, sumber: 'tetap' } };
+  let akhir = null; Object.keys(semua).forEach(function(k) { if (k.indexOf(RELAWAN_TETAP) === 0) return; if (!akhir || semua[k].seq > akhir.seq) akhir = semua[k]; });
+  return { ok: true, data: { rows: akhir ? akhir.rows.map(function(r) { return Object.assign({}, r, { hadir: true }); }) : [], sumber: akhir ? 'dari pembayaran terakhir' : 'baru' } };
+}
+function saveRelawanTetap(p) {
+  const me = authUser(p);
+  if (!me) return { ok: false, error: SESI_ERR };
+  if (!bisaIsiLPDH(me)) return { ok: false, error: 'Hanya PIC, akuntan, atau admin' };
+  const dapurId = lpdhDapur(me, p.dapur);
+  if (!dapurId) return { ok: false, error: 'Pilih dapur' };
+  const b = bacaBarisRelawan(p.rows);
+  if (b.error) return { ok: false, error: b.error };
+  return withLock(function() {
+    const sh = relawanSheet(), kunci = RELAWAN_TETAP + dapurId, ada = bacaRelawanSemua(dapurId)[kunci];
+    const row = [kunci, dapurId, JSON.stringify(b.rows), new Date(), me.id];
+    if (ada) sh.getRange(ada._row, 1, 1, row.length).setValues([row]); else sh.appendRow(row);
+    logActivity(me.id, 'saveRelawanTetap', dapurId + ' (' + b.rows.length + ' orang)');
+    return { ok: true, data: { jumlah: b.rows.length, perHari: b.rows.filter(function(r) { return r.hadir; }).reduce(function(a, r) { return a + r.upah * (r.hari || 1); }, 0) } };
   });
 }
 
@@ -2548,7 +2597,8 @@ function getDataLPDH(p) {
       rincian: it && !isFeeLink(link) && t.jenis === 'Bahan Baku' ? it.rincian : [], nota_url: it && !isFeeLink(link) ? it.nota_url : '',
       relawan: isHonorRelawan(t) && relawan[t.id] ? relawan[t.id].rows.filter(function(r) { return r.hadir !== false; }) : null,
       insentif: t.jenis === 'Fasilitas SPPG' ? (insentif[t.id] ? insentif[t.id].data : {}) : null,
-      ref: it && heads[it.pengajuan_id] ? heads[it.pengajuan_id].nomor + ' #' + it.urut : '' };
+      ref: it && heads[it.pengajuan_id] ? heads[it.pengajuan_id].nomor + ' #' + it.urut : '',
+      catatan: it && !isFeeLink(link) ? catatanAkuntanDari(it.catatan) : '' };
   }).sort(function(a, b) { return a.seq - b.seq; });
 
   const ident = readIdentitasLPDH(dapurId) || {};
