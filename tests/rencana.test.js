@@ -101,7 +101,10 @@ ok(!u5.items.some(x => x.bagian && x.nominal < 250000), 'belanja kecil tidak dip
     'admin bahan baku: hari lewat = nyata (91.000); hari ini & depan = cadangan 10 × 6.500 (bila nyata lebih kecil); libur tanpa cadangan');
   const r0 = R.roRingkas([], ctx, { indeks: 100, batas: 100 }, {}, '2026-11-16'), r1 = R.roRingkas([], c2, s2, {}, '2026-11-16');
   ok(r1.pakaiLewat === 91000 && r1.rencanaAktif === 65000 * 5 && r0.rencanaAktif === 0, 'ringkasan: admin bahan baku masuk pemakaian (lewat ' + r1.pakaiLewat + ', aktif ' + r1.rencanaAktif + ')');
-  ok(R.roMatriks([{ id: 'x', tanggal: '2026-11-17', kategori: 'Gas', nominal: 100000, penerima_id: 'GAS' }], c2, s2, {}, '2026-11-16').fee['2026-11-17'] === 6500 + 65000, 'kolom biaya transfer = admin operasional + admin bahan baku');
+  { const m = R.roMatriks([{ id: 'x', tanggal: '2026-11-17', kategori: 'Gas', nominal: 100000, penerima_id: 'GAS' }], c2, s2, {}, '2026-11-16');
+    ok(m.fee['2026-11-17'] === 6500 && m.bb['2026-11-17'] === 65000 && m.bbPerkiraan['2026-11-17'] === true && m.bb['2026-11-09'] === 91000 && !m.bbPerkiraan['2026-11-09'] && m.bbAktif === 65000 * 5,
+      'matriks: kolom transfer operasional & bahan baku terpisah; bahan baku hari depan = perkiraan, hari lewat = nyata');
+    ok(m.ring.hari.find(h => h.tanggal === '2026-11-17').pakai === 100000 + 6500 + 65000, 'hitungan pagu tetap menggabungkan keduanya (tampilan saja yang dipisah)'); }
   const g = R.roGeserLebih([{ id: 'g1', tanggal: '2026-11-17', kategori: 'Gas', nominal: 2950000, penerima_id: '' }], ctx, { indeks: 100, batas: 100, bb: 10 }, {}, '2026-11-16', []);
   ok(g.items[0].tanggal !== '2026-11-17' || g.sisaLebih > 0, 'geser otomatis memperhitungkan cadangan admin bahan baku (hari itu tinggal 2.935.000)');
   const u2 = R.roUsulkan(ctx, { indeks: 100, batas: 100, bb: 10 }, {}, 1, [], '2026-11-16'), r2 = R.roRingkas(u2.items, ctx, { indeks: 100, batas: 100, bb: 10 }, {}, '2026-11-16');
