@@ -55,6 +55,7 @@ function makeEnv(usersInit, transform) {
       computeDigest: (alg, bytes) => Array.from(crypto.createHash('sha256').update(Buffer.from(bytes.map(b => b & 255))).digest()).map(b => (b > 127 ? b - 256 : b)),
       newBlob: (s, mime, nama) => ({ getBytes: () => Array.from(Buffer.from(s, 'utf8')).map(b => (b > 127 ? b - 256 : b)),
         getAs: () => ({ _html: s, setName(n) { this._nama = n; return this; } }) }),
+      base64Decode: s => Array.from(Buffer.from(s, 'base64')), base64Encode: b => Buffer.from(b.map(x => x & 255)).toString('base64'),
       base64EncodeWebSafe: bytes => Buffer.from(bytes.map(b => b & 255)).toString('base64').replace(/\+/g, '-').replace(/\//g, '_'),
       getUuid: () => crypto.randomUUID(),
       sleep() {},
@@ -62,8 +63,14 @@ function makeEnv(usersInit, transform) {
         return f.replace('yyyy', x.getFullYear()).replace('MM', p(x.getMonth() + 1)).replace('dd', p(x.getDate())).replace('HH', p(x.getHours())).replace('mm', p(x.getMinutes())).replace('ss', p(x.getSeconds())); },
     },
     Date, JSON, Math, Number, String, parseInt, Intl, Array, Object, Error,
-    __kuitansi: [], __driveGagal: false,
+    __kuitansi: [], __driveGagal: false, __props: {}, __files: {},
+    PropertiesService: { getScriptProperties: () => ({ getProperty: k => (k in sandbox.__props ? sandbox.__props[k] : null), setProperty: (k, v) => { sandbox.__props[k] = v; },
+      deleteProperty: k => { delete sandbox.__props[k]; }, getProperties: () => Object.assign({}, sandbox.__props) }) },
     DriveApp: { Access: { ANYONE_WITH_LINK: 1 }, Permission: { VIEW: 1 },
+      createFile: blob => { const id = 'F' + (Object.keys(sandbox.__files).length + 1); sandbox.__files[id] = { trashed: false };
+        return { getId: () => id, setSharing() {}, getUrl: () => 'https://drive/' + id }; },
+      getFileById: id => ({ setTrashed: v => { if (sandbox.__files[id]) sandbox.__files[id].trashed = v; },
+        getBlob: () => ({ getContentType: () => 'image/png', getBytes: () => [1, 2, 3] }) }),
       getFolderById: () => ({ createFile: blob => { if (sandbox.__driveGagal) throw new Error('Kesalahan layanan: Drive');
         sandbox.__kuitansi.push(blob); const n = sandbox.__kuitansi.length; return { setSharing() {}, getUrl: () => 'https://drive.google.com/kuitansi/' + n, getId: () => 'K' + n }; } }) },
   };
@@ -85,7 +92,7 @@ const ok = (c, m) => { console.log((c ? 'PASS ' : 'FAIL ') + m); if (!c) fails++
     ['U3', 'off', 'xxxxxxx', 'Nonaktif', 'pic', 'D001', 'TIDAK'],
   ]);
   const B = env.__book;
-  ok(call(env, 'GET', { action: 'ping' }).version === 'v6-ba-sec22', 'ping menampilkan versi baru');
+  ok(call(env, 'GET', { action: 'ping' }).version === 'v6-ba-sec23', 'ping menampilkan versi baru');
 
   // 1. login lama (teks biasa) berhasil via POST dan password otomatis di-hash
   let r = call(env, 'POST', { action: 'login', username: 'AKUN1', password: 'RahasiaKu9' });
@@ -619,6 +626,46 @@ const ok = (c, m) => { console.log((c ? 'PASS ' : 'FAIL ') + m); if (!c) fails++
     B8.Transaksi.push(['TH9', 'D001', '2026-10-20', 'HN-9', 'Operasional', 'Gaji/honor relawan pekerja SPPG', 'Honor relawan 20 Okt', 'VA', 270000, 270000, 'https://x', '', 'U2', 'P1', '']);
     r = call(e8, 'POST', { action: 'getRelawanBayar', token: tk8('pic'), transaksi_id: 'TH9' });
     ok(r.ok && r.data.sumber === 'disalin dari daftar relawan tetap' && r.data.rows.length === 2 && r.data.rows[0].hadir === true && r.data.rows[1].hadir === false, 'pembayaran honor baru memakai daftar tetap (centang = biasanya hadir)');
+  }
+
+  // ── Data Penerima (relawan / PIC sekolah / kader) + tanda tangan tersimpan ──
+  {
+    const tP = tk8('pic'), tA = tk8('akn'), png = 'data:image/png;base64,' + Buffer.from('ttd').toString('base64');
+    let r = call(e8, 'POST', { action: 'saveDataPenerima', token: tP, jenis: 'KADER', nama: 'Bu Ani', nominal: 50000 });
+    ok(!r.ok && /posyandu wajib/.test(r.error), 'kader tanpa nama posyandu ditolak');
+    r = call(e8, 'POST', { action: 'saveDataPenerima', token: tP, jenis: 'KADER', nama: 'Bu Ani', lembaga: 'Posyandu Melati', pm: 40, nominal: 50000 });
+    ok(r.ok && r.data.id, 'kader tersimpan: ' + (r.error || ''));
+    const idK = r.data.id;
+    r = call(e8, 'POST', { action: 'saveDataPenerima', token: tA, jenis: 'KADER', nama: 'bu ani', lembaga: 'X', nominal: 1 });
+    ok(!r.ok && /sudah ada/.test(r.error), 'nama ganda dalam jenis yang sama ditolak');
+    r = call(e8, 'POST', { action: 'saveDataPenerima', token: tk8('yay'), jenis: 'RELAWAN', nama: 'Z', nominal: 1 });
+    ok(!r.ok, 'Yayasan tidak bisa menambah data penerima');
+    r = call(e8, 'POST', { action: 'saveTtd', token: tA, untuk: 'penerima', id: idK, fileData: png });
+    ok(r.ok, 'akuntan menyimpan TTD penerima: ' + (r.error || ''));
+    r = call(e8, 'POST', { action: 'getDataPenerima', token: tP });
+    const k = r.data.rows.find(x => x.id === idK);
+    ok(r.ok && k && k.ada_ttd === true && k.pm === 40 && k.lembaga === 'Posyandu Melati' && r.data.bisaUbah, 'daftar penerima menandai TTD tersimpan');
+    r = call(e8, 'POST', { action: 'saveTtd', token: tA, untuk: 'kepala', fileData: png });
+    ok(!r.ok && /PIC/.test(r.error), 'TTD Kepala SPPG hanya lewat PIC');
+    r = call(e8, 'POST', { action: 'saveTtd', token: tP, untuk: 'kepala', fileData: png });
+    ok(r.ok && e8.__props['ttd_KEPALA_D001'], 'PIC menyimpan TTD Kepala SPPG dapurnya: ' + (r.error || ''));
+    r = call(e8, 'POST', { action: 'getTtd', token: tP, untuk: 'kepala' });
+    ok(r.ok && /^data:image\/png;base64,/.test(r.data.ttd), 'TTD Kepala SPPG terbaca kembali');
+    r = call(e8, 'POST', { action: 'saveTtd', token: tP, fileData: png });
+    ok(r.ok, 'PIC kini bisa menyimpan TTD dirinya sendiri: ' + (r.error || ''));
+    const fidK = e8.__props['ttd_P_' + idK];
+    r = call(e8, 'POST', { action: 'hapusDataPenerima', token: tP, id: idK });
+    ok(r.ok && !e8.__props['ttd_P_' + idK] && e8.__files[fidK].trashed, 'hapus penerima ikut membuang TTD-nya');
+    // relawan tetap = Data Penerima jenis RELAWAN (satu sumber)
+    r = call(e8, 'POST', { action: 'getDataPenerima', token: tA });
+    const rel = r.data.rows.filter(x => x.jenis === 'RELAWAN');
+    ok(rel.length === 2 && rel.some(x => x.nama === 'Siti' && x.nominal === 150000 && x.jabatan === 'Juru masak') && rel.some(x => x.nama === 'Joko' && !x.aktif), 'daftar relawan tetap tersimpan sebagai Data Penerima RELAWAN');
+    const idSiti = rel.find(x => x.nama === 'Siti').id;
+    call(e8, 'POST', { action: 'saveTtd', token: tA, untuk: 'penerima', id: idSiti, fileData: png });
+    r = call(e8, 'POST', { action: 'saveRelawanTetap', token: tP, rows: [{ nama: 'Siti', tugas: 'Juru masak', hari: 1, upah: 160000, metode: 'Transfer', hadir: true }] });
+    r = call(e8, 'POST', { action: 'getDataPenerima', token: tA });
+    const rel2 = r.data.rows.filter(x => x.jenis === 'RELAWAN');
+    ok(rel2.length === 1 && rel2[0].id === idSiti && rel2[0].nominal === 160000 && rel2[0].ada_ttd, 'ubah daftar relawan lewat pengaturan gaji: id & TTD tetap, yang dihapus hilang');
   }
 
   // ── Catatan akuntan (mis. melebihi pagu harian) ikut ke Yayasan & tidak hilang saat diputuskan ──

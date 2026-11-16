@@ -8886,8 +8886,14 @@ try {
     }
     return React.createElement("div", {
       className: "max-w-xl"
-    }, session.user.role === 'akuntan' && React.createElement(TtdCard, {
-      toast: toast
+    }, (session.user.role === 'akuntan' || session.user.role === 'pic') && React.createElement(TtdCard, {
+      toast: toast,
+      ket: session.user.role === 'akuntan' ? 'Dipasang otomatis di Berita Acara pengajuan (termasuk buatan asisten) dan kolom "Mengetahui" kwitansi.' : 'Tanda tangan PIC Anda.'
+    }), session.user.role === 'pic' && React.createElement(TtdCard, {
+      toast: toast,
+      untuk: "kepala",
+      judul: "Tanda tangan Kepala SPPG",
+      ket: "Diunggah oleh PIC. Dipasang otomatis di kolom Kepala SPPG (Menyetujui/Menyerahkan) pada kwitansi."
     }), React.createElement(Card, {
       className: "mb-3"
     }, React.createElement(Eyebrow, null, "Akun saya"), React.createElement("div", {
@@ -12691,19 +12697,29 @@ try {
     }, "Hapus coretan")));
   }
   function TtdCard({
-    toast
+    toast,
+    untuk,
+    id,
+    dapur,
+    judul,
+    ket
   }) {
+    const sas = untuk ? {
+      untuk: untuk,
+      id: id || '',
+      dapur: dapur || ''
+    } : {};
     const [cur, setCur] = useState(undefined);
     const [mode, setMode] = useState(null);
     const [draft, setDraft] = useState(null);
     const [saving, setSaving] = useState(false);
     const [confirmDel, setConfirmDel] = useState(false);
     function load() {
-      api('getTtd').then(function (r) {
+      api('getTtd', sas).then(function (r) {
         setCur(r.ok ? r.data.ttd : null);
       });
     }
-    useEffect(load, []);
+    useEffect(load, [untuk, id, dapur]);
     async function onFile(e) {
       const f = e.target.files && e.target.files[0];
       e.target.value = '';
@@ -12716,9 +12732,9 @@ try {
     }
     async function save() {
       setSaving(true);
-      const res = await apiUpload('saveTtd', {
+      const res = await apiUpload('saveTtd', Object.assign({
         fileData: draft
-      });
+      }, sas));
       setSaving(false);
       if (res.ok) {
         toast('Tanda tangan tersimpan');
@@ -12728,7 +12744,7 @@ try {
       } else toast(res.error || 'Gagal menyimpan', 'error');
     }
     async function del() {
-      const res = await api('hapusTtd');
+      const res = await api('hapusTtd', sas);
       setConfirmDel(false);
       if (res.ok) {
         toast('Tanda tangan dihapus');
@@ -12737,12 +12753,12 @@ try {
     }
     return React.createElement(Card, {
       className: "mb-3"
-    }, React.createElement(Eyebrow, null, "Tanda tangan Berita Acara"), React.createElement("p", {
+    }, React.createElement(Eyebrow, null, judul || 'Tanda tangan saya'), React.createElement("p", {
       className: "text-xs mt-1 mb-3",
       style: {
         color: COLORS.muted
       }
-    }, "Dipasang otomatis di setiap PDF Berita Acara pengajuan dapur Anda, termasuk pengajuan yang dibuat asisten. Disimpan privat, tidak dibagikan lewat link."), cur === undefined ? React.createElement("div", {
+    }, ket || 'Dipasang otomatis di Berita Acara dan kwitansi dapur Anda.', " Disimpan privat, tidak dibagikan lewat link."), cur === undefined ? React.createElement("div", {
       className: "text-sm flex items-center gap-2",
       style: {
         color: COLORS.muted
@@ -12836,12 +12852,355 @@ try {
       title: "Hapus tanda tangan?",
       danger: true,
       confirmLabel: "Hapus",
-      message: "Berita Acara berikutnya akan dicetak tanpa tanda tangan sampai Anda mengunggah lagi.",
+      message: "Dokumen berikutnya akan dicetak tanpa tanda tangan ini sampai diunggah lagi.",
       onConfirm: del,
       onClose: function () {
         setConfirmDel(false);
       }
     }));
+  }
+  const JENIS_DP = [['RELAWAN', 'Relawan', 'Upah per hari'], ['PIC_SEKOLAH', 'PIC Sekolah', 'Insentif per hari'], ['KADER', 'Kader Posyandu', 'Insentif per hari']];
+  function DataPenerimaPage({
+    session,
+    scope,
+    toast
+  }) {
+    const role = session.user.role;
+    const dapurId = role === 'akuntan' || role === 'pic' ? session.user.dapur : scope && scope !== 'ALL' ? scope : '';
+    const [jenis, setJenis] = useState('RELAWAN');
+    const [data, setData] = useState(null);
+    const [edit, setEdit] = useState(null);
+    const [ttd, setTtd] = useState(null);
+    const [hapus, setHapus] = useState(null);
+    function load() {
+      if (!dapurId) return;
+      setData(null);
+      api('getDataPenerima', {
+        dapur: dapurId
+      }).then(function (r) {
+        if (r.ok) setData(r.data);else {
+          toast(r.error, 'error');
+          setData({
+            rows: []
+          });
+        }
+      });
+    }
+    useEffect(load, [dapurId]);
+    if (!dapurId) return React.createElement(Card, null, React.createElement("div", {
+      className: "text-sm",
+      style: {
+        color: COLORS.muted
+      }
+    }, "Pilih satu dapur di atas untuk mengelola data penerima."));
+    const j = JENIS_DP.find(function (x) {
+      return x[0] === jenis;
+    });
+    const rows = data ? data.rows.filter(function (x) {
+      return x.jenis === jenis;
+    }) : [];
+    const bisa = data && data.bisaUbah;
+    const tanpaTtd = rows.filter(function (x) {
+      return x.aktif && !x.ada_ttd;
+    }).length;
+    async function del() {
+      const r = await api('hapusDataPenerima', {
+        id: hapus.id
+      });
+      setHapus(null);
+      if (r.ok) {
+        toast('Data dihapus');
+        load();
+      } else toast(r.error, 'error');
+    }
+    return React.createElement("div", null, React.createElement("div", {
+      className: "mb-3"
+    }, React.createElement(Eyebrow, null, "Data Penerima"), React.createElement("div", {
+      className: "text-xs",
+      style: {
+        color: COLORS.muted
+      }
+    }, "Diisi sekali, dipakai berulang untuk kwitansi harian (1 orang 1 kwitansi). Tanda tangan penerima disimpan sekali dan ditempel otomatis.")), React.createElement("div", {
+      className: "grid grid-cols-3 gap-1.5 mb-3"
+    }, JENIS_DP.map(function (x) {
+      const on = x[0] === jenis,
+        n = data ? data.rows.filter(function (r) {
+          return r.jenis === x[0];
+        }).length : 0;
+      return React.createElement("button", {
+        key: x[0],
+        onClick: function () {
+          setJenis(x[0]);
+        },
+        className: "rounded-lg py-2 text-xs font-semibold",
+        style: {
+          border: '1.5px solid ' + (on ? COLORS.green : COLORS.line),
+          background: on ? COLORS.green : '#fff',
+          color: on ? '#fff' : COLORS.ink
+        }
+      }, x[1], data ? ' (' + n + ')' : '');
+    })), bisa && React.createElement("div", {
+      className: "mb-3"
+    }, React.createElement(Btn, {
+      size: "sm",
+      onClick: function () {
+        setEdit({
+          jenis: jenis,
+          nama: '',
+          jabatan: '',
+          lembaga: '',
+          pm: '',
+          nominal: '',
+          metode: 'Transfer',
+          aktif: true
+        });
+      }
+    }, I.plusSm, " Tambah ", j[1])), tanpaTtd > 0 && React.createElement("div", {
+      className: "text-xs rounded-lg p-2.5 mb-3",
+      style: {
+        background: '#FFF4E0',
+        color: COLORS.amber
+      }
+    }, tanpaTtd, " penerima aktif belum punya tanda tangan \u2014 kwitansinya akan tercetak tanpa TTD."), !data ? React.createElement("div", {
+      className: "text-sm flex items-center gap-2",
+      style: {
+        color: COLORS.muted
+      }
+    }, I.spinner, " Memuat\u2026") : !rows.length ? React.createElement(Card, null, React.createElement("div", {
+      className: "text-sm text-center",
+      style: {
+        color: COLORS.muted
+      }
+    }, "Belum ada data ", j[1], ".")) : React.createElement(Card, {
+      pad: false
+    }, rows.map(function (x, i) {
+      return React.createElement("div", {
+        key: x.id,
+        className: "flex items-center gap-3 px-4 py-3",
+        style: {
+          borderTop: i ? '1px solid ' + COLORS.line : 'none',
+          opacity: x.aktif ? 1 : 0.55
+        }
+      }, React.createElement("div", {
+        className: "flex-1 min-w-0"
+      }, React.createElement("div", {
+        className: "text-sm font-semibold truncate",
+        style: {
+          color: COLORS.ink
+        }
+      }, x.nama, !x.aktif && React.createElement("span", {
+        className: "text-[11px] font-normal",
+        style: {
+          color: COLORS.muted
+        }
+      }, " \xB7 nonaktif")), React.createElement("div", {
+        className: "text-[11px] truncate",
+        style: {
+          color: COLORS.muted
+        }
+      }, jenis === 'RELAWAN' ? x.jabatan || '—' : x.lembaga + (x.pm ? ' · ' + x.pm + ' PM' : ''), " \xB7 ", fmt(x.nominal), x.metode === 'Tunai' ? ' · tunai' : ''), React.createElement("div", {
+        className: "text-[11px]",
+        style: {
+          color: x.ada_ttd ? COLORS.green : COLORS.danger
+        }
+      }, x.ada_ttd ? '✓ TTD tersimpan' : 'Belum ada TTD')), bisa && React.createElement("div", {
+        className: "flex gap-1.5 shrink-0"
+      }, React.createElement(Btn, {
+        size: "sm",
+        kind: "ghost",
+        onClick: function () {
+          setTtd(x);
+        },
+        title: "Tanda tangan"
+      }, "TTD"), React.createElement(Btn, {
+        size: "sm",
+        kind: "ghost",
+        onClick: function () {
+          setEdit(Object.assign({}, x, {
+            pm: String(x.pm || ''),
+            nominal: String(x.nominal)
+          }));
+        },
+        title: "Ubah"
+      }, I.edit)));
+    })), edit && React.createElement(DataPenerimaForm, {
+      awal: edit,
+      dapur: dapurId,
+      toast: toast,
+      onClose: function () {
+        setEdit(null);
+      },
+      onHapus: edit.id ? function () {
+        setHapus(edit);
+        setEdit(null);
+      } : null,
+      onSaved: function (id, nama) {
+        const baru = !edit.id;
+        setEdit(null);
+        load();
+        if (baru && id) setTtd({
+          id: id,
+          nama: nama
+        });
+      }
+    }), ttd && React.createElement(Modal, {
+      title: 'Tanda tangan ' + ttd.nama,
+      onClose: function () {
+        setTtd(null);
+        load();
+      }
+    }, React.createElement(TtdCard, {
+      toast: toast,
+      untuk: "penerima",
+      id: ttd.id,
+      dapur: dapurId,
+      judul: "Tanda tangan penerima",
+      ket: "Digambar langsung di layar HP atau unggah foto tanda tangan. Ditempel otomatis di kwitansi harian orang ini."
+    })), hapus && React.createElement(ConfirmModal, {
+      title: 'Hapus ' + hapus.nama + '?',
+      danger: true,
+      confirmLabel: "Hapus",
+      onClose: function () {
+        setHapus(null);
+      },
+      onConfirm: del,
+      message: "Data dan tanda tangannya dihapus. Kwitansi yang sudah dicetak tidak berubah. Jika hanya berhenti sementara, pilih Nonaktif saja."
+    }));
+  }
+  function DataPenerimaForm({
+    awal,
+    dapur,
+    toast,
+    onClose,
+    onSaved,
+    onHapus
+  }) {
+    const [f, setF] = useState(awal);
+    const [saving, setSaving] = useState(false);
+    const rel = f.jenis === 'RELAWAN',
+      j = JENIS_DP.find(function (x) {
+        return x[0] === f.jenis;
+      });
+    function u(k, v) {
+      setF(Object.assign({}, f, {
+        [k]: v
+      }));
+    }
+    async function simpan() {
+      setSaving(true);
+      const r = await apiPost('saveDataPenerima', {
+        dapur: dapur,
+        id: f.id || '',
+        jenis: f.jenis,
+        nama: f.nama,
+        jabatan: f.jabatan,
+        lembaga: f.lembaga,
+        pm: Number(f.pm) || 0,
+        nominal: Number(f.nominal) || 0,
+        metode: f.metode,
+        aktif: !!f.aktif
+      });
+      setSaving(false);
+      if (r.ok) {
+        toast(f.id ? 'Data diperbarui' : 'Data ditambahkan — lanjut tanda tangan');
+        onSaved(r.data && r.data.id, f.nama.trim());
+      } else toast(r.error, 'error');
+    }
+    return React.createElement(Modal, {
+      title: (f.id ? 'Ubah ' : 'Tambah ') + j[1],
+      onClose: onClose
+    }, React.createElement(Field, {
+      label: "Nama lengkap"
+    }, React.createElement("input", {
+      value: f.nama,
+      onChange: function (e) {
+        u('nama', e.target.value);
+      },
+      style: inputStyle,
+      "aria-label": "Nama"
+    })), rel ? React.createElement(Field, {
+      label: "Jabatan / tugas"
+    }, React.createElement("input", {
+      value: f.jabatan,
+      onChange: function (e) {
+        u('jabatan', e.target.value);
+      },
+      style: inputStyle,
+      placeholder: "cth. Juru masak",
+      "aria-label": "Jabatan"
+    })) : React.createElement(React.Fragment, null, React.createElement(Field, {
+      label: f.jenis === 'KADER' ? 'Nama posyandu' : 'Nama sekolah'
+    }, React.createElement("input", {
+      value: f.lembaga,
+      onChange: function (e) {
+        u('lembaga', e.target.value);
+      },
+      style: inputStyle,
+      "aria-label": "Lembaga"
+    })), React.createElement(Field, {
+      label: "Jumlah penerima manfaat (PM)",
+      hint: "Bisa disesuaikan saat cetak kwitansi harian"
+    }, React.createElement("input", {
+      value: f.pm,
+      inputMode: "numeric",
+      onChange: function (e) {
+        u('pm', e.target.value.replace(/\D/g, ''));
+      },
+      style: inputStyle,
+      "aria-label": "PM"
+    }))), React.createElement(Field, {
+      label: j[2] + ' (Rp)',
+      hint: f.nominal ? fmt(Number(f.nominal)) : ''
+    }, React.createElement("input", {
+      value: f.nominal,
+      inputMode: "numeric",
+      onChange: function (e) {
+        u('nominal', e.target.value.replace(/\D/g, ''));
+      },
+      style: inputStyle,
+      "aria-label": "Nominal"
+    })), React.createElement(Field, {
+      label: "Cara bayar"
+    }, React.createElement("select", {
+      value: f.metode,
+      onChange: function (e) {
+        u('metode', e.target.value);
+      },
+      style: inputStyle,
+      "aria-label": "Metode"
+    }, React.createElement("option", null, "Transfer"), React.createElement("option", null, "Tunai"))), React.createElement("label", {
+      className: "flex items-center gap-2 mb-4 text-sm",
+      style: {
+        color: COLORS.ink
+      }
+    }, React.createElement("input", {
+      type: "checkbox",
+      checked: !!f.aktif,
+      onChange: function (e) {
+        u('aktif', e.target.checked);
+      },
+      style: {
+        width: 20,
+        height: 20
+      }
+    }), " Aktif (dibuatkan kwitansi)"), React.createElement("div", {
+      className: "flex gap-2 justify-between"
+    }, onHapus ? React.createElement(Btn, {
+      kind: "ghost",
+      onClick: onHapus
+    }, React.createElement("span", {
+      style: {
+        color: COLORS.danger
+      }
+    }, "Hapus")) : React.createElement("span", null), React.createElement("div", {
+      className: "flex gap-2"
+    }, React.createElement(Btn, {
+      kind: "ghost",
+      onClick: onClose
+    }, "Batal"), React.createElement(Btn, {
+      disabled: saving,
+      onClick: simpan
+    }, saving ? I.spinner : I.check, " Simpan"))));
   }
   function DecisionButtons({
     value,
@@ -14334,11 +14693,11 @@ try {
     }));
     const role = session.user.role;
     const navItems = {
-      akuntan: [['setup', 'Setup', I.settings], ['dash', 'Dashboard', I.dash], ['rencana', 'Rencana Ops', I.calendar], ['pengajuan', 'Pengajuan', I.file], ['realisasi', 'Realisasi', I.plus], ['beritaacara', 'Berita Acara', I.download], ['laporan', 'Laporan', I.report], ['lpdh', 'LPDH Harian', I.download], ['riwayat', 'Riwayat', I.list], ['bukubesar', 'Buku Besar', I.trend], ['profil', 'Profil', I.user]],
+      akuntan: [['setup', 'Setup', I.settings], ['dash', 'Dashboard', I.dash], ['rencana', 'Rencana Ops', I.calendar], ['pengajuan', 'Pengajuan', I.file], ['realisasi', 'Realisasi', I.plus], ['beritaacara', 'Berita Acara', I.download], ['laporan', 'Laporan', I.report], ['lpdh', 'LPDH Harian', I.download], ['riwayat', 'Riwayat', I.list], ['bukubesar', 'Buku Besar', I.trend], ['penerima', 'Data Penerima', I.users], ['profil', 'Profil', I.user]],
       asisten: [['pengajuan', 'Pengajuan', I.file], ['beritaacara', 'Berita Acara', I.download], ['profil', 'Profil', I.user]],
-      pic: [['dash', 'Dashboard', I.dash], ['pengajuan', 'Pengajuan', I.file], ['persetujuan', 'Persetujuan', I.check], ['beritaacara', 'Berita Acara', I.download], ['laporan', 'Laporan', I.report], ['lpdh', 'LPDH Harian', I.download], ['riwayat', 'Riwayat', I.list], ['bukubesar', 'Buku Besar', I.trend], ['profil', 'Profil', I.user]],
+      pic: [['dash', 'Dashboard', I.dash], ['pengajuan', 'Pengajuan', I.file], ['persetujuan', 'Persetujuan', I.check], ['beritaacara', 'Berita Acara', I.download], ['laporan', 'Laporan', I.report], ['lpdh', 'LPDH Harian', I.download], ['riwayat', 'Riwayat', I.list], ['bukubesar', 'Buku Besar', I.trend], ['penerima', 'Data Penerima', I.users], ['profil', 'Profil', I.user]],
       yayasan: [['dash', 'Dashboard', I.dash], ['persetujuan', 'Persetujuan', I.check], ['rencana', 'Rencana Ops', I.calendar], ['beritaacara', 'Berita Acara', I.download], ['laporan', 'Laporan', I.report], ['lpdh', 'LPDH Harian', I.download], ['riwayat', 'Riwayat', I.list], ['bukubesar', 'Buku Besar', I.trend], ['profil', 'Profil', I.user]],
-      admin: [['dash', 'Dashboard', I.dash], ['rencana', 'Rencana Ops', I.calendar], ['pengajuan', 'Pengajuan', I.file], ['persetujuan', 'Persetujuan', I.check], ['beritaacara', 'Berita Acara', I.download], ['laporan', 'Laporan', I.report], ['lpdh', 'LPDH Harian', I.download], ['riwayat', 'Riwayat', I.list], ['bukubesar', 'Buku Besar', I.trend], ['darurat', 'Input Darurat', I.warn], ['perubahan', 'Persetujuan Edit', I.edit], ['periode', 'Periode', I.settings], ['users', 'Pengguna', I.users], ['dapur', 'Dapur', I.building], ['profil', 'Profil', I.user]]
+      admin: [['dash', 'Dashboard', I.dash], ['rencana', 'Rencana Ops', I.calendar], ['pengajuan', 'Pengajuan', I.file], ['persetujuan', 'Persetujuan', I.check], ['beritaacara', 'Berita Acara', I.download], ['laporan', 'Laporan', I.report], ['lpdh', 'LPDH Harian', I.download], ['riwayat', 'Riwayat', I.list], ['bukubesar', 'Buku Besar', I.trend], ['penerima', 'Data Penerima', I.users], ['darurat', 'Input Darurat', I.warn], ['perubahan', 'Persetujuan Edit', I.edit], ['periode', 'Periode', I.settings], ['users', 'Pengguna', I.users], ['dapur', 'Dapur', I.building], ['profil', 'Profil', I.user]]
     }[role] || [];
     const canPickScope = role === 'yayasan' || role === 'admin';
     if (navItems.length && !navItems.some(function (n) {
@@ -14563,6 +14922,10 @@ try {
       toast: toast
     }), view === 'periode' && React.createElement(PeriodeAdmin, {
       session: session,
+      toast: toast
+    }), view === 'penerima' && React.createElement(DataPenerimaPage, {
+      session: session,
+      scope: effScope,
       toast: toast
     }), view === 'profil' && React.createElement(Profil, {
       session: session,

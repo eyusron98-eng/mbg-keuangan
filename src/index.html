@@ -3580,7 +3580,10 @@ function Profil({ session, toast, onUpdated }) {
 
   return (
     <div className="max-w-xl">
-      {session.user.role === 'akuntan' && <TtdCard toast={toast}/>}
+      {(session.user.role === 'akuntan' || session.user.role === 'pic') && <TtdCard toast={toast}
+        ket={session.user.role === 'akuntan' ? 'Dipasang otomatis di Berita Acara pengajuan (termasuk buatan asisten) dan kolom "Mengetahui" kwitansi.' : 'Tanda tangan PIC Anda.'}/>}
+      {session.user.role === 'pic' && <TtdCard toast={toast} untuk="kepala" judul="Tanda tangan Kepala SPPG"
+        ket="Diunggah oleh PIC. Dipasang otomatis di kolom Kepala SPPG (Menyetujui/Menyerahkan) pada kwitansi."/>}
       <Card className="mb-3">
         <Eyebrow>Akun saya</Eyebrow>
         <div className="grid grid-cols-2 gap-3 mt-2 mb-3">
@@ -5007,14 +5010,15 @@ function SignaturePad({ onChange }) {
       <button onClick={clear} className="text-xs font-semibold" style={{ color: COLORS.danger }}>Hapus coretan</button></div>
   </div>;
 }
-function TtdCard({ toast }) {
+function TtdCard({ toast, untuk, id, dapur, judul, ket }) {
+  const sas = untuk ? { untuk: untuk, id: id || '', dapur: dapur || '' } : {};
   const [cur, setCur] = useState(undefined);
   const [mode, setMode] = useState(null); // 'draw' | 'upload'
   const [draft, setDraft] = useState(null);
   const [saving, setSaving] = useState(false);
   const [confirmDel, setConfirmDel] = useState(false);
-  function load() { api('getTtd').then(function(r){ setCur(r.ok ? r.data.ttd : null); }); }
-  useEffect(load, []);
+  function load() { api('getTtd', sas).then(function(r){ setCur(r.ok ? r.data.ttd : null); }); }
+  useEffect(load, [untuk, id, dapur]);
   async function onFile(e) {
     const f = e.target.files && e.target.files[0]; e.target.value = '';
     if (!f) return;
@@ -5022,17 +5026,17 @@ function TtdCard({ toast }) {
   }
   async function save() {
     setSaving(true);
-    const res = await apiUpload('saveTtd', { fileData: draft });
+    const res = await apiUpload('saveTtd', Object.assign({ fileData: draft }, sas));
     setSaving(false);
     if (res.ok) { toast('Tanda tangan tersimpan'); setMode(null); setDraft(null); load(); } else toast(res.error || 'Gagal menyimpan', 'error');
   }
   async function del() {
-    const res = await api('hapusTtd'); setConfirmDel(false);
+    const res = await api('hapusTtd', sas); setConfirmDel(false);
     if (res.ok) { toast('Tanda tangan dihapus'); setCur(null); } else toast(res.error || 'Gagal', 'error');
   }
   return <Card className="mb-3">
-    <Eyebrow>Tanda tangan Berita Acara</Eyebrow>
-    <p className="text-xs mt-1 mb-3" style={{ color: COLORS.muted }}>Dipasang otomatis di setiap PDF Berita Acara pengajuan dapur Anda, termasuk pengajuan yang dibuat asisten. Disimpan privat, tidak dibagikan lewat link.</p>
+    <Eyebrow>{judul || 'Tanda tangan saya'}</Eyebrow>
+    <p className="text-xs mt-1 mb-3" style={{ color: COLORS.muted }}>{ket || 'Dipasang otomatis di Berita Acara dan kwitansi dapur Anda.'} Disimpan privat, tidak dibagikan lewat link.</p>
     {cur === undefined ? <div className="text-sm flex items-center gap-2" style={{ color: COLORS.muted }}>{I.spinner} Memuat…</div>
       : !mode && <div className="flex flex-col sm:flex-row sm:items-center gap-3">
         <div className="rounded-lg flex items-center justify-center" style={{ width: 220, height: 90, background: '#fff', border: '1px solid ' + COLORS.line }}>
@@ -5055,8 +5059,87 @@ function TtdCard({ toast }) {
       <Btn size="sm" kind="ghost" onClick={function(){ setMode(null); setDraft(null); }}>Batal</Btn>
     </div>}
     {confirmDel && <ConfirmModal title="Hapus tanda tangan?" danger confirmLabel="Hapus"
-      message="Berita Acara berikutnya akan dicetak tanpa tanda tangan sampai Anda mengunggah lagi." onConfirm={del} onClose={function(){ setConfirmDel(false); }}/>}
+ message="Dokumen berikutnya akan dicetak tanpa tanda tangan ini sampai diunggah lagi." onConfirm={del} onClose={function(){ setConfirmDel(false); }}/>}
   </Card>;
+}
+
+// ---------- Data Penerima (relawan, PIC sekolah, kader posyandu) — dasar kwitansi harian ----------
+const JENIS_DP = [['RELAWAN','Relawan','Upah per hari'],['PIC_SEKOLAH','PIC Sekolah','Insentif per hari'],['KADER','Kader Posyandu','Insentif per hari']];
+function DataPenerimaPage({ session, scope, toast }) {
+  const role = session.user.role;
+  const dapurId = (role === 'akuntan' || role === 'pic') ? session.user.dapur : (scope && scope !== 'ALL' ? scope : '');
+  const [jenis, setJenis] = useState('RELAWAN');
+  const [data, setData] = useState(null);
+  const [edit, setEdit] = useState(null);
+  const [ttd, setTtd] = useState(null);
+  const [hapus, setHapus] = useState(null);
+  function load() { if (!dapurId) return; setData(null); api('getDataPenerima', { dapur: dapurId }).then(function(r) { if (r.ok) setData(r.data); else { toast(r.error, 'error'); setData({ rows: [] }); } }); }
+  useEffect(load, [dapurId]);
+  if (!dapurId) return <Card><div className="text-sm" style={{ color: COLORS.muted }}>Pilih satu dapur di atas untuk mengelola data penerima.</div></Card>;
+  const j = JENIS_DP.find(function(x) { return x[0] === jenis; });
+  const rows = data ? data.rows.filter(function(x) { return x.jenis === jenis; }) : [];
+  const bisa = data && data.bisaUbah;
+  const tanpaTtd = rows.filter(function(x) { return x.aktif && !x.ada_ttd; }).length;
+  async function del() {
+    const r = await api('hapusDataPenerima', { id: hapus.id }); setHapus(null);
+    if (r.ok) { toast('Data dihapus'); load(); } else toast(r.error, 'error');
+  }
+  return <div>
+    <div className="mb-3"><Eyebrow>Data Penerima</Eyebrow>
+      <div className="text-xs" style={{ color: COLORS.muted }}>Diisi sekali, dipakai berulang untuk kwitansi harian (1 orang 1 kwitansi). Tanda tangan penerima disimpan sekali dan ditempel otomatis.</div></div>
+    <div className="grid grid-cols-3 gap-1.5 mb-3">
+      {JENIS_DP.map(function(x) { const on = x[0] === jenis, n = data ? data.rows.filter(function(r) { return r.jenis === x[0]; }).length : 0;
+        return <button key={x[0]} onClick={function() { setJenis(x[0]); }} className="rounded-lg py-2 text-xs font-semibold"
+          style={{ border: '1.5px solid ' + (on ? COLORS.green : COLORS.line), background: on ? COLORS.green : '#fff', color: on ? '#fff' : COLORS.ink }}>{x[1]}{data ? ' (' + n + ')' : ''}</button>; })}
+    </div>
+    {bisa && <div className="mb-3"><Btn size="sm" onClick={function() { setEdit({ jenis: jenis, nama: '', jabatan: '', lembaga: '', pm: '', nominal: '', metode: 'Transfer', aktif: true }); }}>{I.plusSm} Tambah {j[1]}</Btn></div>}
+    {tanpaTtd > 0 && <div className="text-xs rounded-lg p-2.5 mb-3" style={{ background: '#FFF4E0', color: COLORS.amber }}>{tanpaTtd} penerima aktif belum punya tanda tangan — kwitansinya akan tercetak tanpa TTD.</div>}
+    {!data ? <div className="text-sm flex items-center gap-2" style={{ color: COLORS.muted }}>{I.spinner} Memuat…</div>
+      : !rows.length ? <Card><div className="text-sm text-center" style={{ color: COLORS.muted }}>Belum ada data {j[1]}.</div></Card>
+      : <Card pad={false}>{rows.map(function(x, i) { return <div key={x.id} className="flex items-center gap-3 px-4 py-3" style={{ borderTop: i ? '1px solid ' + COLORS.line : 'none', opacity: x.aktif ? 1 : 0.55 }}>
+        <div className="flex-1 min-w-0">
+          <div className="text-sm font-semibold truncate" style={{ color: COLORS.ink }}>{x.nama}{!x.aktif && <span className="text-[11px] font-normal" style={{ color: COLORS.muted }}> · nonaktif</span>}</div>
+          <div className="text-[11px] truncate" style={{ color: COLORS.muted }}>{jenis === 'RELAWAN' ? (x.jabatan || '—') : x.lembaga + (x.pm ? ' · ' + x.pm + ' PM' : '')} · {fmt(x.nominal)}{x.metode === 'Tunai' ? ' · tunai' : ''}</div>
+          <div className="text-[11px]" style={{ color: x.ada_ttd ? COLORS.green : COLORS.danger }}>{x.ada_ttd ? '✓ TTD tersimpan' : 'Belum ada TTD'}</div>
+        </div>
+        {bisa && <div className="flex gap-1.5 shrink-0">
+          <Btn size="sm" kind="ghost" onClick={function() { setTtd(x); }} title="Tanda tangan">TTD</Btn>
+          <Btn size="sm" kind="ghost" onClick={function() { setEdit(Object.assign({}, x, { pm: String(x.pm || ''), nominal: String(x.nominal) })); }} title="Ubah">{I.edit}</Btn>
+        </div>}
+      </div>; })}</Card>}
+    {edit && <DataPenerimaForm awal={edit} dapur={dapurId} toast={toast} onClose={function() { setEdit(null); }} onHapus={edit.id ? function() { setHapus(edit); setEdit(null); } : null}
+      onSaved={function(id, nama) { const baru = !edit.id; setEdit(null); load(); if (baru && id) setTtd({ id: id, nama: nama }); }}/>}
+    {ttd && <Modal title={'Tanda tangan ' + ttd.nama} onClose={function() { setTtd(null); load(); }}>
+      <TtdCard toast={toast} untuk="penerima" id={ttd.id} dapur={dapurId} judul="Tanda tangan penerima" ket="Digambar langsung di layar HP atau unggah foto tanda tangan. Ditempel otomatis di kwitansi harian orang ini."/>
+    </Modal>}
+    {hapus && <ConfirmModal title={'Hapus ' + hapus.nama + '?'} danger confirmLabel="Hapus" onClose={function() { setHapus(null); }} onConfirm={del}
+      message="Data dan tanda tangannya dihapus. Kwitansi yang sudah dicetak tidak berubah. Jika hanya berhenti sementara, pilih Nonaktif saja."/>}
+  </div>;
+}
+function DataPenerimaForm({ awal, dapur, toast, onClose, onSaved, onHapus }) {
+  const [f, setF] = useState(awal);
+  const [saving, setSaving] = useState(false);
+  const rel = f.jenis === 'RELAWAN', j = JENIS_DP.find(function(x) { return x[0] === f.jenis; });
+  function u(k, v) { setF(Object.assign({}, f, { [k]: v })); }
+  async function simpan() {
+    setSaving(true);
+    const r = await apiPost('saveDataPenerima', { dapur: dapur, id: f.id || '', jenis: f.jenis, nama: f.nama, jabatan: f.jabatan, lembaga: f.lembaga, pm: Number(f.pm) || 0, nominal: Number(f.nominal) || 0, metode: f.metode, aktif: !!f.aktif });
+    setSaving(false);
+    if (r.ok) { toast(f.id ? 'Data diperbarui' : 'Data ditambahkan — lanjut tanda tangan'); onSaved(r.data && r.data.id, f.nama.trim()); } else toast(r.error, 'error');
+  }
+  return <Modal title={(f.id ? 'Ubah ' : 'Tambah ') + j[1]} onClose={onClose}>
+    <Field label="Nama lengkap"><input value={f.nama} onChange={function(e) { u('nama', e.target.value); }} style={inputStyle} aria-label="Nama"/></Field>
+    {rel ? <Field label="Jabatan / tugas"><input value={f.jabatan} onChange={function(e) { u('jabatan', e.target.value); }} style={inputStyle} placeholder="cth. Juru masak" aria-label="Jabatan"/></Field>
+    : <><Field label={f.jenis === 'KADER' ? 'Nama posyandu' : 'Nama sekolah'}><input value={f.lembaga} onChange={function(e) { u('lembaga', e.target.value); }} style={inputStyle} aria-label="Lembaga"/></Field>
+      <Field label="Jumlah penerima manfaat (PM)" hint="Bisa disesuaikan saat cetak kwitansi harian"><input value={f.pm} inputMode="numeric" onChange={function(e) { u('pm', e.target.value.replace(/\D/g, '')); }} style={inputStyle} aria-label="PM"/></Field></>}
+    <Field label={j[2] + ' (Rp)'} hint={f.nominal ? fmt(Number(f.nominal)) : ''}><input value={f.nominal} inputMode="numeric" onChange={function(e) { u('nominal', e.target.value.replace(/\D/g, '')); }} style={inputStyle} aria-label="Nominal"/></Field>
+    <Field label="Cara bayar"><select value={f.metode} onChange={function(e) { u('metode', e.target.value); }} style={inputStyle} aria-label="Metode"><option>Transfer</option><option>Tunai</option></select></Field>
+    <label className="flex items-center gap-2 mb-4 text-sm" style={{ color: COLORS.ink }}><input type="checkbox" checked={!!f.aktif} onChange={function(e) { u('aktif', e.target.checked); }} style={{ width: 20, height: 20 }}/> Aktif (dibuatkan kwitansi)</label>
+    <div className="flex gap-2 justify-between">
+      {onHapus ? <Btn kind="ghost" onClick={onHapus}><span style={{ color: COLORS.danger }}>Hapus</span></Btn> : <span/>}
+      <div className="flex gap-2"><Btn kind="ghost" onClick={onClose}>Batal</Btn><Btn disabled={saving} onClick={simpan}>{saving ? I.spinner : I.check} Simpan</Btn></div>
+    </div>
+  </Modal>;
 }
 
 // ---------- Persetujuan (Yayasan, PIC Dapur untuk dapurnya, Admin) ----------
@@ -5620,6 +5703,7 @@ function App() {
       ['lpdh','LPDH Harian',I.download],
       ['riwayat','Riwayat',I.list],
       ['bukubesar','Buku Besar',I.trend],
+      ['penerima','Data Penerima',I.users],
       ['profil','Profil',I.user],
     ],
     asisten: [
@@ -5636,6 +5720,7 @@ function App() {
       ['lpdh','LPDH Harian',I.download],
       ['riwayat','Riwayat',I.list],
       ['bukubesar','Buku Besar',I.trend],
+      ['penerima','Data Penerima',I.users],
       ['profil','Profil',I.user],
     ],
     yayasan: [
@@ -5659,6 +5744,7 @@ function App() {
       ['lpdh','LPDH Harian',I.download],
       ['riwayat','Riwayat',I.list],
       ['bukubesar','Buku Besar',I.trend],
+      ['penerima','Data Penerima',I.users],
       ['darurat','Input Darurat',I.warn],
       ['perubahan','Persetujuan Edit',I.edit],
       ['periode','Periode',I.settings],
@@ -5741,6 +5827,7 @@ function App() {
           {view === 'riwayat' && <Riwayat session={session} scope={effScope} toast={toast} refreshKey={refreshKey}/>}
           {view === 'bukubesar' && <BukuBesar session={session} scope={effScope} toast={toast}/>}
           {view === 'periode' && <PeriodeAdmin session={session} toast={toast}/>}
+          {view === 'penerima' && <DataPenerimaPage session={session} scope={effScope} toast={toast}/>}
           {view === 'profil'  && <Profil session={session} toast={toast} onUpdated={onProfileUpdated}/>}
           {view === 'users'   && <Pengguna session={session} toast={toast}/>}
           {view === 'dapur'   && <DapurPage session={session} toast={toast}/>}

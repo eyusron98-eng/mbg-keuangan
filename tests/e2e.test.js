@@ -591,6 +591,42 @@ async function isiBahanBaku(page, uraian, volume, harga) {
     globalThis.__rt = null;
   });
 
+  all &= await run('Data Penerima: PIC tambah kader + TTD digambar; Profil PIC ada TTD Kepala SPPG', { role: 'pic',
+    override: (a, m, p) => a === 'getDataPenerima' ? { ok: true, data: { bisaUbah: true, rows: globalThis.__dp || [{ id: 'DP1', jenis: 'RELAWAN', nama: 'Siti', jabatan: 'Juru masak', lembaga: '', pm: 0, nominal: 150000, metode: 'Transfer', aktif: true, ada_ttd: true }] } }
+      : a === 'saveDataPenerima' ? (globalThis.__dpSave = p, globalThis.__dp = [{ id: 'DP1', jenis: 'RELAWAN', nama: 'Siti', jabatan: 'Juru masak', lembaga: '', pm: 0, nominal: 150000, metode: 'Transfer', aktif: true, ada_ttd: true },
+        { id: 'DP2', jenis: p.jenis, nama: p.nama, jabatan: '', lembaga: p.lembaga, pm: p.pm, nominal: p.nominal, metode: p.metode, aktif: true, ada_ttd: false }], { ok: true, data: { id: 'DP2' } })
+      : a === 'getTtd' ? { ok: true, data: { ttd: null } }
+      : a === 'saveTtd' ? ((globalThis.__ttdSave = globalThis.__ttdSave || []).push(p), { ok: true }) : null }, async (page, srv) => {
+    await login(page, 'siti');
+    await page.waitForSelector('header');
+    await page.click('nav:visible >> text=Data Penerima');
+    await page.waitForSelector('text=✓ TTD tersimpan');
+    await page.click('button:has-text("Kader Posyandu")');
+    await page.waitForSelector('text=Belum ada data Kader Posyandu');
+    await page.click('button:has-text("Tambah Kader Posyandu")');
+    await page.fill('[aria-label="Nama"]', 'Bu Ani');
+    await page.fill('[aria-label="Lembaga"]', 'Posyandu Melati');
+    await page.fill('[aria-label="PM"]', '40');
+    await page.fill('[aria-label="Nominal"]', '50000');
+    await page.click('.sheet >> button:has-text("Simpan")');
+    await page.waitForSelector('text=Tanda tangan Bu Ani');
+    const d = globalThis.__dpSave;
+    assert(d.jenis === 'KADER' && d.nama === 'Bu Ani' && d.lembaga === 'Posyandu Melati' && d.pm === 40 && d.nominal === 50000, 'data kader salah: ' + JSON.stringify(d));
+    await page.click('.sheet >> button:has-text("Gambar tanda tangan")');
+    const c = await page.locator('.sheet canvas').boundingBox();
+    await page.mouse.move(c.x + 30, c.y + 40); await page.mouse.down(); await page.mouse.move(c.x + 150, c.y + 100, { steps: 8 }); await page.mouse.up();
+    await page.click('.sheet >> button:has-text("Simpan tanda tangan")');
+    await page.waitForSelector('text=Tanda tangan tersimpan');
+    const t = globalThis.__ttdSave.pop();
+    assert(t.untuk === 'penerima' && t.id === 'DP2' && /^data:image\/png/.test(t.fileData), 'TTD penerima salah sasaran: ' + JSON.stringify(Object.assign({}, t, { fileData: String(t.fileData).slice(0, 30) })));
+    await page.click('.sheet button[aria-label="Tutup"]');
+    await page.waitForSelector('text=1 penerima aktif belum punya tanda tangan');
+    await page.click('nav:visible >> text=Profil');
+    await page.waitForSelector('text=Tanda tangan Kepala SPPG');
+    await page.waitForSelector('text=Tanda tangan saya');
+    globalThis.__dp = null;
+  });
+
   all &= await run('Relawan: daftar kosong bisa diisi (tombol tidak tertutup) & tempel dari Excel', { role: 'akuntan',
     override: (a, m, p) => a === 'getRelawanBayar' ? { ok: true, data: { rows: [], sumber: 'baru', total: 6240000 } }
       : a === 'getDataLPDH' ? { ok: true, data: { dapur: { id: 'D1', nama: 'SPPG Satu', kode: 'S1' }, identitas: {}, tanggal: p.tanggal, harian: null,
