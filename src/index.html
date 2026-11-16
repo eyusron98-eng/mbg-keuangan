@@ -1478,7 +1478,7 @@ function isiLPDH(wb, data, opsi) {
 
   const D = S('D_Insentif');
   // Operasional: digabung per kategori ke 15 baris tetap (label kolom D milik template tidak diubah)
-  const C = S('C_Operasional'), perBaris = {};
+  const C = S('C_Operasional'), perBaris = {}, kwH = data.kwitansi || {};
   grup.op.forEach(function(t) { const b = lpdhBarisOps(t.kategori, t.uraian); (perBaris[b[0]] = perBaris[b[0]] || []).push(t); });
   const opsRingkas = [];
   LPDH_OPS_BARIS.forEach(function(b) {
@@ -1486,11 +1486,16 @@ function isiLPDH(wb, data, opsi) {
     const r = b[0], n = a.length;
     set(C, 'C' + r, tgl); set(C, 'E' + r, 1); set(C, 'F' + r, n === 1 ? 'transaksi' : n + ' transaksi'); set(C, 'G' + r, jml(a));
     set(C, 'I' + r, lpdhGabung(a.map(function(t) { return t.no_bukti; }), '; '));
-    set(C, 'J' + r, a.map(function(t) { return t.bukti_url; }).filter(Boolean).join(' | '));
+    // insentif PIC sekolah / kader: tautan kwitansi (BASTI) otomatis dari Data Penerima; selain itu bukti transaksi
+    const kw = (r === 7 ? kwH.PIC_SEKOLAH : r === 8 ? kwH.KADER : '') || '';
+    set(C, 'J' + r, (kw ? [kw] : a.map(function(t) { return t.bukti_url; })).filter(Boolean).join(' | '));
     // penjelasan melebihi pagu (catatan akuntan di pengajuan) ditaruh paling depan agar tidak terpotong
     const jelas = a.filter(function(t) { return t.catatan; }).map(function(t) { return 'Penjelasan: ' + t.catatan; });
-    set(C, 'M' + r, lpdhGabung(jelas.concat(a.map(function(t) { return t.kategori === b[1] || b[2].indexOf(t.kategori) >= 0 ? t.uraian : t.kategori + ': ' + t.uraian; })), '; '));
-    opsRingkas.push({ baris: b[1], jumlah: n, total: jml(a) });
+    // biaya admin transfer dirangkum satu kalimat (jumlah transaksi & totalnya) agar terpisah jelas dari pos lain di baris yang sama
+    const adm = a.filter(function(t) { return t.kategori === 'Biaya Admin Bank'; }), lainnya = a.filter(function(t) { return t.kategori !== 'Biaya Admin Bank'; });
+    const ringkasAdm = adm.length ? ['Biaya admin transfer bank: ' + adm.length + ' transaksi = ' + lpdhRp(jml(adm))] : [];
+    set(C, 'M' + r, lpdhGabung(jelas.concat(ringkasAdm, lainnya.map(function(t) { return t.kategori === b[1] || b[2].indexOf(t.kategori) >= 0 ? t.uraian : t.kategori + ': ' + t.uraian; })), '; '));
+    opsRingkas.push({ baris: b[1], jumlah: n, total: jml(a), admin: adm.length, adminTotal: jml(adm) });
   });
 
   { const jl = grup.rl.filter(function(t) { return t.catatan; }).map(function(t) { return 'Penjelasan: ' + t.catatan; });
@@ -1498,8 +1503,8 @@ function isiLPDH(wb, data, opsi) {
   // Honor relawan: satu baris per relawan dari daftar penerima (nomor bukti transaksi + /1, /2, …); tanpa daftar → satu baris per transaksi
   const R = S('C1_Relawan'), barisRL = [];
   grup.rl.forEach(function(t) {
-    if (t.relawan && t.relawan.length) t.relawan.forEach(function(x, i) { barisRL.push({ nama: x.nama, tugas: x.tugas, hari: x.hari, upah: x.upah, metode: x.metode, nb: t.no_bukti + '/' + (i + 1), link: t.bukti_url }); });
-    else barisRL.push({ nama: t.uraian, tugas: t.kategori, hari: 1, upah: t.riil, metode: t.sumber === 'Petty Cash' ? 'Tunai' : 'Transfer', nb: t.no_bukti, link: t.bukti_url });
+    if (t.relawan && t.relawan.length) t.relawan.forEach(function(x, i) { barisRL.push({ nama: x.nama, tugas: x.tugas, hari: x.hari, upah: x.upah, metode: x.metode, nb: t.no_bukti + '/' + (i + 1), link: kwH.RELAWAN || t.bukti_url }); });
+    else barisRL.push({ nama: t.uraian, tugas: t.kategori, hari: 1, upah: t.riil, metode: t.sumber === 'Petty Cash' ? 'Tunai' : 'Transfer', nb: t.no_bukti, link: kwH.RELAWAN || t.bukti_url });
   });
   barisRL.slice(0, LPDH_KAP.rl).forEach(function(x, i) { const r = 6 + i;
     set(R, 'C' + r, x.nama); set(R, 'D' + r, x.tugas); set(R, 'E' + r, tgl); set(R, 'F' + r, x.hari); set(R, 'G' + r, x.upah);
@@ -1538,8 +1543,9 @@ function isiLPDH(wb, data, opsi) {
     // nomor kuitansi = nomor kuitansi otomatis (nomor bukti realisasi)
     set(D, 'C24', lpdhGabung(ins.map(function(t, i) { return ki[i].no_kuitansi || t.no_bukti; }), '; '));
     // ditandatangani Mitra = kuitansi bertanda tangan sudah diunggah PIC
-    set(D, 'C25', ki.every(function(x) { return x.ttd_url || x.kuitansi_ttd === 'Ya'; }) ? 'Ya' : 'Tidak');
-    set(D, 'C26', ins.map(function(t, i) { return ki[i].ttd_url || t.bukti_url; }).filter(Boolean).join(' | '));
+    set(D, 'C25', ki.every(function(x) { return x.ttd_otomatis || x.ttd_url || x.kuitansi_ttd === 'Ya'; }) ? 'Ya' : 'Tidak');
+    // tautan bukti bayar = kuitansi otomatis (tanda tangan dari gambar tersimpan); berkas unggahan manual hanya cadangan bila kuitansi otomatis tidak ada
+    set(D, 'C26', ins.map(function(t, i) { return t.bukti_url || ki[i].ttd_url; }).filter(Boolean).join(' | '));
     // referensi = referensi yang tertulis di kuitansi (nomor Berita Acara pengajuan #baris)
     set(D, 'C27', lpdhGabung(ins.map(function(t, i) { return ki[i].ref_va || t.ref || ''; }), '; '));
   }
@@ -1663,6 +1669,13 @@ function roBersih(u) {
 }
 function roMedian(a) { const s = a.slice().sort(function(x, y) { return x - y; }); return s.length ? s[Math.floor((s.length - 1) / 2)] : 0; }
 function roTerbanyak(a) { const c = {}; let best = '', n = 0; a.forEach(function(x) { c[x] = (c[x] || 0) + 1; if (c[x] > n) { n = c[x]; best = x; } }); return best; }
+// Biaya admin transfer bahan baku (transaksi 'Biaya Admin Bank' milik pembelian bahan baku) ikut menghabiskan pagu operasional LPDH.
+// Hari yang sudah lewat: sebesar yang nyata tercatat. Hari ini & ke depan: yang terbesar antara nyata dan cadangan (setelan.bb transfer × biaya transfer).
+function roAdminBB(h, setelan, ctx, dariTgl) {
+  const nyata = ((ctx && ctx.adminBB) || {})[h.tanggal] || 0;
+  if (h.libur || (dariTgl && h.tanggal < dariTgl)) return nyata;
+  return Math.max(nyata, Math.max(0, Number(setelan && setelan.bb) || 0) * RO_FEE);
+}
 // pemakaian per tanggal (nominal + biaya transfer)
 function roPakai(items, ctx) {
   const map = {}, pm = {}; (ctx.penerima || []).forEach(function(p) { pm[p.id] = p; });
@@ -1710,7 +1723,7 @@ function roUsulkan(ctx, setelan, hariSet, seed, tetap, dariTgl) {
   });
   lain.sort(function(a, b) { return b.nominal - a.nominal || (rng() - 0.5); });
   // 3) tempatkan: hari dengan kategori sama paling sedikit, lalu urutan acak (seed); pecah bila terlalu besar
-  const sisa = {}; hari.forEach(function(h) { sisa[h.tanggal] = roBatas(h, setelan); });
+  const sisa = {}; hari.forEach(function(h) { sisa[h.tanggal] = roBatas(h, setelan) - roAdminBB(h, setelan, ctx, dariTgl); });
   const kat = {};
   items.concat(tetap).forEach(function(x) { if (sisa[x.tanggal] !== undefined) sisa[x.tanggal] -= x.nominal + roFee(x, pmap, ctx.bankVA); });
   const acak = hari.map(function(h) { return { t: h.tanggal, r: rng() }; });
@@ -1744,13 +1757,13 @@ function roRingkas(items, ctx, setelan, hariSet, dariTgl) {
   let paguTot = 0, rencanaTot = 0, lebih = 0, nLebih = 0, paguAktif = 0, rencanaAktif = 0, nAktif = 0, nLewat = 0, sisaHari = 0,
     paguLewat = 0, pakaiLewat = 0, lebihLewat = 0, nLebihLewat = 0, nHpe = 0;
   const per = hari.map(function(h) {
-    const pagu = roPagu(h, setelan), batas = roBatas(h, setelan), p = pakai[h.tanggal] || 0;
+    const pagu = roPagu(h, setelan), batas = roBatas(h, setelan), adm = roAdminBB(h, setelan, ctx, dariTgl), p = (pakai[h.tanggal] || 0) + adm;
     const aktif = !dariTgl || h.tanggal >= dariTgl;
     paguTot += pagu; rencanaTot += p;
     if (!h.libur) nHpe++;
     if (aktif) { paguAktif += pagu; rencanaAktif += p; if (!h.libur) nAktif++; if (p > pagu) { lebih += p - pagu; nLebih++; } else sisaHari += pagu - p; }
     else { if (!h.libur) nLewat++; paguLewat += pagu; pakaiLewat += p; if (p > pagu) { lebihLewat += p - pagu; nLebihLewat++; } }
-    return Object.assign({}, h, { pagu: pagu, batas: batas, pakai: p, lewat: !aktif, aktual: (ctx.aktual || {})[h.tanggal] || 0 });
+    return Object.assign({}, h, { pagu: pagu, batas: batas, pakai: p, adminBB: adm, lewat: !aktif, aktual: (ctx.aktual || {})[h.tanggal] || 0 });
   });
   const pmap = {}; (ctx.penerima || []).forEach(function(p) { pmap[p.id] = p; });
   const tak = items.filter(function(x) { return !x.tanggal; });
@@ -1784,6 +1797,7 @@ function roMatriks(items, ctx, setelan, hariSet, dariTgl) {
   // baris ringkasan hanya menghitung hari ini s.d. akhir periode (hari yang lewat tidak dihitung)
   const aktif = function(t) { return !dariTgl || t >= dariTgl; };
   const terjadwal = {}; kolom.forEach(function(k) { terjadwal[k] = 0; Object.keys(sel).forEach(function(t) { if (sel[t][k] && aktif(t)) terjadwal[k] += sel[t][k].nominal; }); });
+  roHari(ctx.periode, hariSet).forEach(function(h) { const a = roAdminBB(h, setelan, ctx, dariTgl); if (a) fee[h.tanggal] = (fee[h.tanggal] || 0) + a; });   // + biaya admin bahan baku
   const feeAktif = Object.keys(fee).reduce(function(a, t) { return a + (aktif(t) ? fee[t] : 0); }, 0);
   return { feeAktif: feeAktif, batas: (setelan && setelan.batas) || 95, kolom: kolom, sel: sel, fee: fee, tak: tak, takItems: takItems, terjadwal: terjadwal, ring: roRingkas(items, ctx, setelan, hariSet, dariTgl) };
 }
@@ -1820,7 +1834,7 @@ function roGeserLebih(items, ctx, setelan, hariSet, dariTgl, luar) {
   const fee = function(x) { return roFee(x, pmap, ctx.bankVA); };
   const hari = roHari(ctx.periode, hariSet).filter(function(h) { return !h.libur && (!dariTgl || h.tanggal >= dariTgl); });
   const pagu = {}, pakai = {};
-  hari.forEach(function(h) { pagu[h.tanggal] = roPagu(h, setelan); pakai[h.tanggal] = 0; });
+  hari.forEach(function(h) { pagu[h.tanggal] = roPagu(h, setelan); pakai[h.tanggal] = roAdminBB(h, setelan, ctx, dariTgl); });
   items.concat(luar).forEach(function(x) { if (pakai[x.tanggal] !== undefined) pakai[x.tanggal] += x.nominal + fee(x); });
   let hasil = items.slice(), pindah = 0;
   hari.forEach(function(h) {
@@ -1866,7 +1880,7 @@ function RencanaOpsPage({ session, scope, toast }) {
   const [loading, setLoading] = useState(false);
   const [items, setItems] = useState([]);
   const [hariSet, setHariSet] = useState({});
-  const [setelan, setSetelan] = useState({ indeks: 100, batas: 95 });
+  const [setelan, setSetelan] = useState({ indeks: 100, batas: 95, bb: 0 });
   const [versi, setVersi] = useState(0);
   const [dirty, setDirty] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -1895,7 +1909,7 @@ function RencanaOpsPage({ session, scope, toast }) {
     const lepas = roLepasBatal(semua, d.status);   // pengajuan ditolak/dibatalkan → baris bisa diedit lagi
     const dipakai = lepas.items.filter(function(x) { return x.pengajuan_id || RO_TANPA.indexOf(x.kategori) < 0; });
     if (lepas.lepas) toast(lepas.lepas + ' baris dari pengajuan ' + lepas.nomor.join(', ') + ' ditolak/dibatalkan — bisa diubah & diajukan lagi. Tekan Simpan.');
-    setCtx(d); setItems(dipakai); setHariSet(rc.hari || {}); setSetelan(rc.setelan || { indeks: 100, batas: 95 }); setVersi(rc.versi || 0); versiRef.current = rc.versi || 0; setDirty(dipakai.length !== semua.length || lepas.lepas > 0);
+    setCtx(d); setItems(dipakai); setHariSet(rc.hari || {}); setSetelan(Object.assign({ indeks: 100, batas: 95, bb: Number(d.bbDefault) || 0 }, rc.setelan || {})); setVersi(rc.versi || 0); versiRef.current = rc.versi || 0; setDirty(dipakai.length !== semua.length || lepas.lepas > 0);
     seedRef.current = (rc.versi || 0) * 7;
   }
   useEffect(function() { load(); }, [dapurId]);
@@ -2014,6 +2028,8 @@ function RencanaOpsPage({ session, scope, toast }) {
       <div className="grid grid-cols-2 gap-x-3">
         <Field label="Indeks kemahalan (%)" hint="Sesuai lembar Ref PPK; 100 bila belum ada"><input value={setelan.indeks} inputMode="numeric" disabled={!bisaUbah} aria-label="Indeks kemahalan"
           onChange={function(e) { setSetelan(Object.assign({}, setelan, { indeks: Number(e.target.value.replace(/\D/g, '')) || 0 })); setDirty(true); }} style={inputStyle}/></Field>
+        <Field label="Transfer bahan baku / hari" hint={'Cadangan biaya admin ' + fmt((Number(setelan.bb) || 0) * RO_FEE) + ' per hari (' + RO_FEE.toLocaleString('id-ID') + ' per transfer) ikut menghabiskan pagu LPDH'}><input value={setelan.bb} inputMode="numeric" disabled={!bisaUbah} aria-label="Transfer bahan baku per hari"
+          onChange={function(e) { setSetelan(Object.assign({}, setelan, { bb: Math.min(60, Number(e.target.value.replace(/\D/g, '')) || 0) })); setDirty(true); }} style={inputStyle}/></Field>
         <Field label="Batas rencana (% pagu)" hint="Cadangan bila PM hari itu turun"><input value={setelan.batas} inputMode="numeric" disabled={!bisaUbah} aria-label="Batas rencana"
           onChange={function(e) { setSetelan(Object.assign({}, setelan, { batas: Math.min(100, Number(e.target.value.replace(/\D/g, '')) || 0) })); setDirty(true); }} style={inputStyle}/></Field>
       </div>
@@ -2168,7 +2184,7 @@ function RencanaMatriks({ m, bisaUbah, ajukanTgl, onSel, onAjukan, terkunci, lew
         <thead><tr>
           <th style={Object.assign({}, th, kiri, { background: COLORS.paper, zIndex: 2 })}>Hari</th>
           {kol.map(function(k) { return <th key={k} style={th} title={k}>{roLabel(k)}</th>; })}
-          <th style={th}>Biaya transfer</th><th style={th}>Total</th><th style={th}>Pagu</th><th style={th}>Sisa pagu</th>{bisaUbah && <th style={th}></th>}
+          <th style={th} title="Biaya admin transfer: operasional + bahan baku">Biaya transfer</th><th style={th}>Total</th><th style={th}>Pagu</th><th style={th}>Sisa pagu</th>{bisaUbah && <th style={th}></th>}
         </tr></thead>
         <tbody>
           {r.hari.map(function(h) {
@@ -4113,7 +4129,7 @@ function PengajuanForm({ kategoriMap, penerima, upsertPenerima, toast, onCreated
   }, [tanggal, dapur, adaOps, !!tglErr]);
   const pnMap = {}; (penerima || []).forEach(function(x) { pnMap[x.id] = x; });
   const opsIni = rows.filter(function(r) { return r.jenis === 'Operasional'; }).reduce(function(a, r) { return a + (Number(r.nominal) || 0) + (r.penerima_id ? roFee({ penerima_id: r.penerima_id }, pnMap, pagu ? pagu.bankVA : '') : 0); }, 0);
-  const opsTot = pagu ? pagu.terpakai + pagu.diajukan + opsIni : 0;
+  const opsTot = pagu ? pagu.terpakai + pagu.diajukan + (pagu.cadanganBB || 0) + opsIni : 0;
   const lebihPagu = pagu && opsIni > 0 && opsTot > pagu.pagu ? opsTot - pagu.pagu : 0;
   const [catatanPagu, setCatatanPagu] = useState('');
   const catatanKirim = lebihPagu ? 'Melebihi pagu harian ' + fmt(lebihPagu) + ' (pagu ' + fmt(pagu.pagu) + ', PM ' + fmtNoRp(pagu.pm) + '). Alasan: ' + catatanPagu.trim() : '';
@@ -4187,6 +4203,7 @@ function PengajuanForm({ kategoriMap, penerima, upsertPenerima, toast, onCreated
       <div className="flex justify-between"><span>Pagu {pagu.libur ? '(bukan HPE)' : '(PM ' + fmtNoRp(pagu.pm) + ')'}</span><b className="num">{fmt(pagu.pagu)}</b></div>
       {pagu.terpakai > 0 && <div className="flex justify-between"><span>Sudah direalisasi</span><span className="num">{fmt(pagu.terpakai)}</span></div>}
       {pagu.diajukan > 0 && <div className="flex justify-between"><span>Sudah diajukan, belum direalisasi ({pagu.nDiajukan} baris)</span><span className="num">{fmt(pagu.diajukan)}</span></div>}
+      {pagu.cadanganBB > 0 && <div className="flex justify-between"><span>Cadangan biaya admin transfer bahan baku</span><span className="num">{fmt(pagu.cadanganBB)}</span></div>}
       <div className="flex justify-between"><span>Pengajuan ini (termasuk biaya transfer)</span><span className="num">{fmt(opsIni)}</span></div>
       <div className="flex justify-between font-bold pt-1" style={{ borderTop: '1px solid rgba(0,0,0,0.1)' }}><span>Jumlah</span><span className="num">{fmt(opsTot)}</span></div>
       {pagu.rencanaBelum > 0 && <div className="mt-1" style={{ color: '#9A6A0B' }}>Rencana Ops hari itu masih punya {fmt(pagu.rencanaBelum)} yang belum diajukan — pastikan tidak dobel.</div>}
@@ -5004,11 +5021,23 @@ function KwitansiPage({ session, scope, toast }) {
       if (!r.ok) { toast(r.error, 'error'); return; }
       const doc = await buildKwitansiPdf(r.data);
       doc.save('Kwitansi_' + String(r.data.dapur.kode || r.data.dapur.nama).replace(/[^A-Za-z0-9]+/g, '_') + '_' + tanggal + '.pdf');
+      // satu PDF per jenis disimpan di Drive; tautannya otomatis masuk ke LPDH hari itu (C1_Relawan / C_Operasional)
+      let gagalSimpan = 0;
+      for (const jn of JENIS_DP) {
+        const bag = r.data.rows.filter(function(x) { return x.jenis === jn[0]; });
+        if (!bag.length) continue;
+        try {
+          const d2 = await buildKwitansiPdf(Object.assign({}, r.data, { rows: bag }));
+          const up = await apiUpload('simpanKwitansiFile', { dapur: dapurId, tanggal: tanggal, jenis: jn[0], fileData: d2.output('datauristring').split(',')[1] });
+          if (!up.ok) gagalSimpan++;
+        } catch (e) { gagalSimpan++; }
+      }
+      if (gagalSimpan) toast('PDF terunduh, tetapi ' + gagalSimpan + ' berkas gagal disimpan ke Drive — tautan LPDH belum terbarui. Coba terbitkan lagi.', 'error');
       const kurang = [];
       if (!r.data.akuntan.ttd) kurang.push('akuntan');
       if (!r.data.kepala.ttd) kurang.push('Kepala SPPG');
       if (!r.data.kepala.nama) kurang.push('nama Kepala SPPG (Identitas LPDH)');
-      toast(r.data.rows.length + ' kwitansi diunduh' + (kurang.length ? ' — belum ada: ' + kurang.join(', ') : ''), kurang.length ? 'error' : undefined);
+      if (!gagalSimpan) toast(r.data.rows.length + ' kwitansi diunduh & tertaut ke LPDH' + (kurang.length ? ' — belum ada: ' + kurang.join(', ') : ''), kurang.length ? 'error' : undefined);
       load();
     } catch (e) { toast('Gagal membuat PDF: ' + e.message, 'error'); }
     finally { setBusy(false); }
@@ -5027,7 +5056,9 @@ function KwitansiPage({ session, scope, toast }) {
         const g = rows.filter(function(x) { return x.jenis === j[0]; });
         if (!g.length) return null;
         return <Card key={j[0]} pad={false} className="mb-3">
-          <div className="px-4 pt-3 pb-1 flex justify-between items-center"><Eyebrow>{j[1]}</Eyebrow>
+          {(function() { const tot = g.filter(function(x) { return x.pilih; }).reduce(function(a, x) { return a + (Number(x.nominal) || 0); }, 0), cat = (data.tercatat || {})[j[0]] || 0, beda = (cat > 0 || tot > 0) && cat !== tot;
+            return <div className="px-4 pt-3 text-[11px]" style={{ color: beda ? COLORS.amber : COLORS.muted }}>Kwitansi {fmt(tot)} · tercatat di transaksi hari ini {fmt(cat)}{beda ? ' — selisih ' + fmt(tot - cat) + '. Samakan agar LPDH & kwitansi sinkron.' : ' ✓ sinkron'}{data.file && data.file[j[0]] ? <> · <a href={data.file[j[0]]} target="_blank" rel="noopener" className="underline">PDF tertaut di LPDH</a></> : ''}</div>; })()}
+          <div className="px-4 pt-1 pb-1 flex justify-between items-center"><Eyebrow>{j[1]}</Eyebrow>
             <span className="text-xs flex gap-3"><button onClick={function() { setRows(rows.map(function(x) { return x.jenis === j[0] ? Object.assign({}, x, { pilih: true }) : x; })); }} style={{ color: COLORS.blue }}>Semua</button>
               <button onClick={function() { setRows(rows.map(function(x) { return x.jenis === j[0] ? Object.assign({}, x, { pilih: false }) : x; })); }} style={{ color: COLORS.blue }}>Kosongkan</button></span></div>
           {g.map(function(x) { return <div key={x.penerima_id} className="px-4 py-2.5 flex items-center gap-2" style={{ borderTop: '1px solid ' + COLORS.line, opacity: x.pilih ? 1 : 0.5 }}>

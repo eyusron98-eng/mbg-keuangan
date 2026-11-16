@@ -95,7 +95,7 @@ function dataUji(nOp) {
   ok(v('B_BahanBaku', 'I6') === '=' && v('B_BahanBaku', 'B6') === '=', 'rumus template tetap ada');
   ok(v('C_Operasional', 'D14') === 'Sewa kendaraan' && v('C_Operasional', 'D21') === 'Lain-lain' && v('C_Operasional', 'D7') === 'Insentif penanggung jawab satuan pendidikan', 'label kategori template (kolom D) tidak ditimpa');
   ok(v('C_Operasional', 'G13') === 50000 && v('C_Operasional', 'F13') === '5 transaksi' && v('C_Operasional', 'E13') === 1, '35 transaksi operasional digabung per kategori: Gas 5 transaksi = Rp 50.000');
-  ok(v('C_Operasional', 'G21') === 100000 && String(v('C_Operasional', 'M21')).includes('Biaya Admin Bank: '), 'biaya admin & sampah masuk Lain-lain, kategorinya disebut di keterangan');
+  ok(v('C_Operasional', 'G21') === 100000 && /Biaya admin transfer bank: 5 transaksi = Rp 50\.000/.test(String(v('C_Operasional', 'M21'))) && String(v('C_Operasional', 'M21')).includes('Sampah: '), 'Lain-lain: biaya admin dirangkum (jumlah transaksi & total) terpisah dari pos lain');
   ok(v('C_Operasional', 'G16') === 100000, 'pulsa + internet digabung di baris Pulsa dan internet');
   ok(v('C_Operasional', 'G7') === null && v('C_Operasional', 'C7') === null, 'kategori tanpa transaksi dibiarkan kosong (contoh dibersihkan)');
   ok(String(v('C_Operasional', 'I13')).split('; ').length === 5 && String(v('C_Operasional', 'J13')).startsWith('https://'), 'nomor bukti & link transaksi yang digabung tercantum');
@@ -114,6 +114,23 @@ function dataUji(nOp) {
   ok(v('E_Saldo', 'D19') === 'SP2D-9' && v('E_Saldo', 'I19') === 'KW-TU-9' && v('E_Saldo', 'J19') === 'https://cloud/tu9', 'top up: SP2D, kuitansi, link bukti terima');
   ok(v('D_Insentif', 'C19') === 'PPK/1; PPK/2' && v('D_Insentif', 'C20') === 500000 && v('D_Insentif', 'C24') === 'KW-1; KW-2' && v('D_Insentif', 'C25') === 'Ya' && v('D_Insentif', 'C27') === 'TRX-1; TRX-2', 'insentif: pernyataan PPK, kuitansi, ttd, referensi VA');
   {
+    const wb3 = new ExcelJS.Workbook(); await wb3.xlsx.readFile(TPL);
+    const d3 = dataUji(0);
+    d3.kwitansi = { RELAWAN: 'https://drive.google.com/kw-relawan', PIC_SEKOLAH: 'https://drive.google.com/kw-pic', KADER: 'https://drive.google.com/kw-kader' };
+    d3.transaksi = [tx(3, 'Operasional', 'Gaji/honor relawan pekerja SPPG', 90000, { relawan: [{ nama: 'Ani', tugas: 'Masak', hari: 1, upah: 50000, metode: 'Tunai' }, { nama: 'Budi', tugas: 'Supir', hari: 1, upah: 40000, metode: 'Transfer' }] }),
+      tx(6, 'Operasional', 'Insentif Guru/PIC Sekolah', 100000), tx(7, 'Operasional', 'Insentif Kader Posyandu', 50000),
+      tx(8, 'Fasilitas SPPG', 'Sewa Gedung', 300000, { insentif: { ttd_otomatis: true } })];
+    L.isiLPDH(wb3, d3, { waktu: new Date(2026, 9, 29, 5, 30) });
+    const w3 = (sh, a) => { const x = wb3.getWorksheet(sh).getCell(a).value; return x && x.formula ? '=' : x; };
+    ok(w3('C1_Relawan', 'K6') === 'https://drive.google.com/kw-relawan' && w3('C1_Relawan', 'K7') === 'https://drive.google.com/kw-relawan', 'link tiap relawan di C1 = kwitansi relawan otomatis');
+    ok(w3('C_Operasional', 'J7') === 'https://drive.google.com/kw-pic' && w3('C_Operasional', 'J8') === 'https://drive.google.com/kw-kader', 'link insentif PIC sekolah & kader = kwitansi (BASTI) otomatis');
+    ok(w3('D_Insentif', 'C25') === 'Ya' && w3('D_Insentif', 'C26') === 'https://drive.google.com/file/d/8', 'insentif Mitra: ditandatangani Ya (TTD gambar otomatis), tautan = kuitansi otomatis');
+    d3.kwitansi = {};
+    const wb4 = new ExcelJS.Workbook(); await wb4.xlsx.readFile(TPL);
+    L.isiLPDH(wb4, d3, { waktu: new Date(2026, 9, 29, 5, 30) });
+    ok(wb4.getWorksheet('C_Operasional').getCell('J7').value === 'https://drive.google.com/file/d/6' && wb4.getWorksheet('C1_Relawan').getCell('K6').value === 'https://drive.google.com/file/d/3', 'tanpa kwitansi harian: tetap memakai bukti transaksi');
+  }
+  {
     const wb2 = new ExcelJS.Workbook(); await wb2.xlsx.readFile(TPL);
     const d2 = dataUji(0);
     d2.identitas.bast_folder = 'https://drive.google.com/drive/folders/BAST';
@@ -124,8 +141,8 @@ function dataUji(nOp) {
     const w = (s, a) => { const x = wb2.getWorksheet(s).getCell(a).value; return x && x.formula ? '=' : x; };
     ok(w('A_PM', 'L7') === 'BAST/CPK02/20261028/KS-02' && w('A_PM', 'M7') === 'https://drive.google.com/drive/folders/BAST' && w('A_PM', 'K7') === 'Ya', 'A_PM: nomor BAST otomatis bertanggal + link folder BAST bersama (' + w('A_PM', 'L7') + ')');
     ok(w('D_Insentif', 'C19') === 'PPK/07/2026' && w('D_Insentif', 'C20') === 300000 && w('D_Insentif', 'C24') === 'NB-4' && w('D_Insentif', 'C25') === 'Ya'
-      && w('D_Insentif', 'C26') === 'https://drive.google.com/ttd4' && w('D_Insentif', 'C27') === 'PGJ-9 #2',
-      'D_Insentif otomatis: PPK terakhir, nilai = insentif, no kuitansi = no bukti, ttd dari unggahan PIC, referensi transaksi (' + ['C19','C20','C24','C25','C26','C27'].map(a => a + '=' + w('D_Insentif', a)).join(' ') + ')');
+      && w('D_Insentif', 'C26') === 'https://drive.google.com/file/d/4' && w('D_Insentif', 'C27') === 'PGJ-9 #2',
+      'D_Insentif otomatis: PPK terakhir, nilai = insentif, no kuitansi = no bukti, tautan = kuitansi otomatis (bukan berkas unggahan), referensi transaksi (' + ['C19','C20','C24','C25','C26','C27'].map(a => a + '=' + w('D_Insentif', a)).join(' ') + ')');
   }
   let sisa = 0;
   wb.eachSheet(ws => ws.eachRow(row => row.eachCell(c => { const x = c.value; if (x && typeof x === 'object' && (x.formula || x.sharedFormula) && 'result' in x) sisa++; })));

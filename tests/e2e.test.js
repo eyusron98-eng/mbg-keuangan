@@ -654,7 +654,9 @@ async function isiBahanBaku(page, uraian, volume, harga) {
     const f = (process.env.SHOT || require('os').tmpdir()) + '/kwitansi.pdf'; await dl.saveAs(f);
     const isi = fs.readFileSync(f, 'latin1');
     assert((isi.match(/\/Type \/Page\b/g) || []).length === 2, 'harus 2 halaman');
-    await page.waitForSelector('text=2 kwitansi diunduh — belum ada: akuntan, Kepala SPPG');
+    await page.waitForSelector('text=2 kwitansi diunduh & tertaut ke LPDH — belum ada: akuntan, Kepala SPPG');
+    const up = srv.log.posts.filter(x => x.action === 'simpanKwitansiFile');
+    assert(up.length === 2 && up.map(x => x.params.jenis).sort().join() === 'KADER,RELAWAN' && up.every(x => (x.params.fileData || '').startsWith('JVBER')), 'PDF per jenis harus disimpan ke Drive: ' + up.map(x => x.params.jenis));
     globalThis.__kw = null;
   });
 

@@ -92,7 +92,7 @@ const ok = (c, m) => { console.log((c ? 'PASS ' : 'FAIL ') + m); if (!c) fails++
     ['U3', 'off', 'xxxxxxx', 'Nonaktif', 'pic', 'D001', 'TIDAK'],
   ]);
   const B = env.__book;
-  ok(call(env, 'GET', { action: 'ping' }).version === 'v6-ba-sec25', 'ping menampilkan versi baru');
+  ok(call(env, 'GET', { action: 'ping' }).version === 'v6-ba-sec26', 'ping menampilkan versi baru');
 
   // 1. login lama (teks biasa) berhasil via POST dan password otomatis di-hash
   let r = call(env, 'POST', { action: 'login', username: 'AKUN1', password: 'RahasiaKu9' });
@@ -757,6 +757,37 @@ const ok = (c, m) => { console.log((c ? 'PASS ' : 'FAIL ') + m); if (!c) fails++
     ok(r.data.pagu === 300000 && r.data.libur === false, 'tanpa penyesuaian: PM = penerima di setup periode (100)');
     r = call(e8, 'GET', { action: 'getPaguOps', token: tAkn, tanggal: '2026-10-12' });
     ok(r.data.libur === true && r.data.pagu === 0, 'hari yang ditandai libur di rencana → pagu 0');
+  }
+
+  // ── Sinkron: biaya admin bahan baku di pagu, kwitansi harian tertaut ke LPDH ──
+  {
+    const tA = tk8('akn'), tP = tk8('pic'), png = 'data:image/png;base64,' + Buffer.from('ttd').toString('base64');
+    let r = call(e8, 'GET', { action: 'getRencanaOps', token: tA });
+    ok(r.ok && r.data.adminBB['2026-10-10'] === 6500 && !r.data.adminBB['2026-10-11'] && r.data.bbDefault === 0, 'rencana ops: biaya admin milik bahan baku dihitung per tanggal (' + JSON.stringify(r.data && r.data.adminBB) + ')');
+    r = call(e8, 'POST', { action: 'saveRencanaOps', token: tA, data: { versi: r.data.rencana ? r.data.rencana.versi : 0, setelan: { indeks: 100, batas: 95, bb: 12 }, hari: {}, items: [] } });
+    ok(r.ok, 'setelan transfer bahan baku per hari tersimpan: ' + (r.error || ''));
+    r = call(e8, 'GET', { action: 'getRencanaOps', token: tA });
+    ok(r.data.rencana.setelan.bb === 12, 'setelan bb terbaca kembali');
+    r = call(e8, 'GET', { action: 'getPaguOps', token: tA, tanggal: '2026-10-13' });
+    ok(r.ok && r.data.cadanganBB === 12 * 6500, 'form Pengajuan: cadangan admin bahan baku ikut dihitung (' + (r.data && r.data.cadanganBB) + ')');
+    B8.Transaksi.push(['TFEE', 'D001', '2026-10-13', 'NB-ADM2', 'Operasional', 'Biaya Admin Bank', 'Admin', 'VA', 6500, 6500, 'https://x', '', 'U2', 'P1', 'ADMIN:IT1']);
+    r = call(e8, 'GET', { action: 'getPaguOps', token: tA, tanggal: '2026-10-13' });
+    ok(r.data.cadanganBB === 12 * 6500 - 6500, 'cadangan dikurangi admin bahan baku yang sudah nyata (' + (r.data && r.data.cadanganBB) + ')');
+
+    // kwitansi harian → PDF tersimpan & tertaut ke data LPDH
+    r = call(e8, 'POST', { action: 'simpanKwitansiFile', token: tk8('yay'), tanggal: '2026-10-10', jenis: 'KADER', fileData: 'JVBERg==' });
+    ok(!r.ok, 'Yayasan tidak bisa menyimpan file kwitansi');
+    r = call(e8, 'POST', { action: 'simpanKwitansiFile', token: tP, tanggal: '2026-10-10', jenis: 'KADER', fileData: 'data:application/pdf;base64,JVBERg==' });
+    ok(r.ok && /^https:/.test(r.data.url), 'file kwitansi kader tersimpan: ' + (r.error || ''));
+    const url1 = r.data.url;
+    r = call(e8, 'POST', { action: 'simpanKwitansiFile', token: tP, tanggal: '2026-10-10', jenis: 'KADER', fileData: 'JVBERg==' });
+    r = call(e8, 'POST', { action: 'getDataLPDH', token: tA, dapur: 'D001', tanggal: '2026-10-10' });
+    ok(r.ok && r.data.kwitansi.KADER && /^https:/.test(r.data.kwitansi.KADER) && Object.keys(r.data.kwitansi).length === 1, 'LPDH menerima tautan kwitansi harian (satu per jenis, ditimpa saat terbit ulang)');
+    ok(r.data.transaksi.every(x => x.insentif === null || typeof x.insentif.ttd_otomatis === 'boolean'), 'insentif Mitra membawa penanda TTD otomatis');
+    // sinkron nilai kwitansi vs transaksi tercatat
+    B8.Transaksi.push(['TK1', 'D001', '2026-10-10', 'KD-1', 'Operasional', 'Insentif Kader Posyandu', 'Insentif kader', 'VA', 150000, 150000, 'https://x', '', 'U2', 'P1', '']);
+    r = call(e8, 'POST', { action: 'getKwitansiHarian', token: tA, tanggal: '2026-10-10' });
+    ok(r.ok && r.data.tercatat.KADER === 150000 && r.data.tercatat.RELAWAN === 0 && r.data.file.KADER, 'kwitansi harian menampilkan nilai tercatat per jenis & tautan PDF');
   }
 
   console.log(fails ? '\n' + fails + ' GAGAL' : '\nSEMUA LULUS');
