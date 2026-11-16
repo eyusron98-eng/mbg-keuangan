@@ -135,7 +135,7 @@ function handleRequest(e, method) {
     }
     let result;
     switch (action) {
-      case 'ping':              result = { ok: true, time: new Date().toISOString(), version: 'v6-ba-sec24' }; break;
+      case 'ping':              result = { ok: true, time: new Date().toISOString(), version: 'v6-ba-sec25' }; break;
       case 'login':             result = login(params); break;
       case 'getPeriodeList':    result = getPeriodeList(params); break;
       case 'getActivePeriode':  result = getActivePeriode(params); break;
@@ -1769,6 +1769,12 @@ function terbilang(n) {
   return (h.charAt(0).toUpperCase() + h.slice(1) + ' rupiah').replace(/\s+/g, ' ');
 }
 function escHtml(v) { return String(v == null ? '' : v).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); }
+function imgTtd(u) { return /^data:image\/(png|jpeg);base64,[A-Za-z0-9+\/=]+$/.test(String(u || '')) ? '<img src="' + u + '" style="max-height:64px;max-width:200px"/>' : ''; }
+// Pengawas Keuangan = akuntan aktif dapur (TTD dari Profil akuntan); pemilik gedung (insentif Fasilitas SPPG) = PIC dapur (TTD dari Profil PIC)
+function userAktifDapur(dapurId, role) {
+  const u = getSheet(SHEETS.USERS).getDataRange().getValues().slice(1).find(function(x) { return String(x[4]).toLowerCase() === role && x[5] === dapurId && String(x[6]).toUpperCase() === 'YA'; });
+  return u ? { id: u[0], nama: String(u[3] || '') } : null;
+}
 function htmlKuitansi(d) {
   const baris = function(k, v) { return '<tr><td style="width:34%;padding:4px 0;vertical-align:top">' + k + '</td><td style="padding:4px 0">: ' + v + '</td></tr>'; };
   return '<html><head><meta charset="utf-8"></head><body style="font-family:Arial,sans-serif;font-size:12px;color:#111;margin:28px">' +
@@ -1780,16 +1786,18 @@ function htmlKuitansi(d) {
     baris('Untuk pembayaran', escHtml(d.untuk)) + baris('Dibayarkan kepada', escHtml(d.penerima)) + baris('Rekening tujuan', escHtml(d.rekening)) +
     baris('Tanggal pembayaran', escHtml(d.tanggal)) + baris('Referensi', escHtml(d.ref)) + '</table>' +
     '<table style="width:100%;margin-top:36px;text-align:center"><tr><td style="width:50%">Yang menyerahkan,<br/>Pengawas Keuangan</td><td>Yang menerima,</td></tr>' +
-    '<tr><td style="height:70px"></td><td></td></tr><tr><td>( ' + escHtml(d.penyerah || '................................') + ' )</td><td>( ' + escHtml(d.penerima) + ' )</td></tr></table>' +
+    '<tr><td style="height:70px">' + imgTtd(d.ttdPenyerah) + '</td><td>' + imgTtd(d.ttdPenerima) + '</td></tr><tr><td>( ' + escHtml(d.penyerah || '................................') + ' )</td><td>( ' + escHtml(d.penerima) + ' )</td></tr></table>' +
     '<div style="margin-top:24px;font-size:10px;color:#555">Dibuat otomatis oleh aplikasi Keuangan MBG saat realisasi. Sah sebagai bukti autentik setelah ditandatangani kedua pihak.</div></body></html>';
 }
 function buatKuitansi(it, tanggal, noBukti, nominal, me) {
   const dapur = getDapur().data.find(function(x) { return x.id === it.dapur; }) || {};
   const ident = readIdentitasLPDH(it.dapur) || {};
   const head = readAllPengajuan().find(function(h) { return h.id === it.pengajuan_id; }) || {};
+  const akn = userAktifDapur(it.dapur, 'akuntan'), pic = it.jenis === 'Fasilitas SPPG' ? userAktifDapur(it.dapur, 'pic') : null;
   const html = htmlKuitansi({ dapur: dapur.nama || it.dapur, alamat: dapur.alamat || '', nomor: noBukti, rupiah: rupiah(nominal), terbilang: terbilang(nominal),
     untuk: it.kategori + ' — ' + it.uraian, penerima: it.penerima_nama, rekening: it.bank + ' ' + it.no_rek, tanggal: tanggal,
-    ref: (head.nomor || '') + ' #' + it.urut, penyerah: ident.pengawas_nama || me.nama || '' });
+    ref: (head.nomor || '') + ' #' + it.urut, penyerah: ident.pengawas_nama || (akn && akn.nama) || me.nama || '',
+    ttdPenyerah: akn ? readTtdDataUrl(akn.id) : null, ttdPenerima: pic ? readTtdDataUrl(pic.id) : null });
   const nama = 'KUITANSI_' + tanggal + '_' + String(noBukti).replace(/[^a-zA-Z0-9_-]+/g, '-');
   const pdf = Utilities.newBlob(html, 'text/html', nama + '.html').getAs('application/pdf').setName(nama + '.pdf');
   const file = DriveApp.getFolderById(DRIVE_FOLDER_ID).createFile(pdf);
@@ -2391,6 +2399,7 @@ function saveRelawanTetap(p) {
       const props = PropertiesService.getScriptProperties(), fid = props.getProperty(ttdKey('P_' + x.id));
       if (fid) { try { DriveApp.getFileById(fid).setTrashed(true); } catch (e) {} props.deleteProperty(ttdKey('P_' + x.id)); }
     });
+    PropertiesService.getScriptProperties().setProperty('dp_impor_' + dapurId, 'setup');
     logActivity(me.id, 'saveRelawanTetap', dapurId + ' (' + b.rows.length + ' orang)');
     return { ok: true, data: { jumlah: b.rows.length, perHari: b.rows.filter(function(r) { return r.hadir; }).reduce(function(a, r) { return a + r.upah * (r.hari || 1); }, 0) } };
   });
@@ -2833,6 +2842,33 @@ function bacaDataPenerima(dapurId) {
   }
   return out;
 }
+// Impor sekali per dapur: relawan yang sudah tercatat sebelum ada Data Penerima (daftar tetap lama, atau semua pembayaran honor).
+// Aktif = ada di daftar tetap (dicentang) / hadir di pembayaran honor terakhir. Upah = data terbaru orang itu.
+function imporRelawanLama(dapurId, oleh) {
+  const props = PropertiesService.getScriptProperties(), kunci = 'dp_impor_' + dapurId;
+  if (props.getProperty(kunci)) return 0;
+  if (bacaDataPenerima(dapurId).some(function(x) { return x.jenis === 'RELAWAN'; })) { props.setProperty(kunci, 'ada'); return 0; }
+  const semua = bacaRelawanSemua(dapurId), orang = {}, urut = [];
+  const tetap = semua[RELAWAN_TETAP + dapurId];
+  if (tetap && tetap.rows.length) tetap.rows.forEach(function(r) { const k = String(r.nama || '').trim().toLowerCase(); if (!k || orang[k]) return; urut.push(k); orang[k] = { r: r, aktif: r.hadir !== false }; });
+  else {
+    const bayar = Object.keys(semua).filter(function(k) { return k.indexOf(RELAWAN_TETAP) !== 0; }).map(function(k) { return semua[k]; }).sort(function(a, b) { return a.seq - b.seq; });
+    const akhir = bayar[bayar.length - 1];
+    bayar.forEach(function(b) { b.rows.forEach(function(r) {
+      const k = String(r.nama || '').trim().toLowerCase(); if (!k) return;
+      if (!orang[k]) urut.push(k);
+      const lama = orang[k];
+      orang[k] = { r: Object.assign({}, r, { nama: lama ? lama.r.nama : r.nama, tugas: r.tugas || (lama && lama.r.tugas) || '', upah: Number(r.upah) > 0 ? r.upah : (lama && lama.r.upah) || 0 }),
+        aktif: b === akhir && r.hadir !== false };
+    }); });
+  }
+  const baris = urut.map(function(k) { return orang[k]; }).filter(function(o) { return Number(o.r.upah) > 0; }).map(function(o) {
+    return [idUnik('DP'), dapurId, 'RELAWAN', String(o.r.nama).trim().substring(0, 80), String(o.r.tugas || '').trim().substring(0, 60), '', 0, Math.round(Number(o.r.upah)),
+      o.r.metode === 'Tunai' ? 'Tunai' : 'Transfer', o.aktif ? 'YA' : 'TIDAK', new Date(), oleh]; });
+  if (baris.length) { const sh = dataPenerimaSheet(); sh.getRange(sh.getLastRow() + 1, 1, baris.length, baris[0].length).setValues(baris); logActivity(oleh, 'imporRelawanLama', dapurId + ' (' + baris.length + ' orang)'); }
+  props.setProperty(kunci, String(baris.length));
+  return baris.length;
+}
 function cariDataPenerima(id) { return bacaDataPenerima('').find(function(x) { return x.id === id; }) || null; }
 function adaTtd(kunci) { return !!PropertiesService.getScriptProperties().getProperty(ttdKey(kunci)); }
 function getDataPenerima(p) {
@@ -2840,8 +2876,9 @@ function getDataPenerima(p) {
   if (!me) return { ok: false, error: SESI_ERR };
   const dapurId = lpdhDapur(me, p.dapur);
   if (!dapurId) return { ok: false, error: 'Pilih dapur' };
+  const diimpor = withLock(function() { return imporRelawanLama(dapurId, me.id); });
   const props = PropertiesService.getScriptProperties().getProperties();
-  return { ok: true, data: { rows: bacaDataPenerima(dapurId).map(function(x) { const o = Object.assign({}, x); delete o._row; o.ada_ttd = !!props[ttdKey('P_' + x.id)]; return o; }),
+  return { ok: true, data: { diimpor: diimpor, rows: bacaDataPenerima(dapurId).map(function(x) { const o = Object.assign({}, x); delete o._row; o.ada_ttd = !!props[ttdKey('P_' + x.id)]; return o; }),
     bisaUbah: bisaIsiLPDH(me) } };
 }
 function bersihkanPenerima(x) {
@@ -2939,6 +2976,7 @@ function getKwitansiHarian(p) {
   if (!me) return { ok: false, error: SESI_ERR };
   const dapurId = lpdhDapur(me, p.dapur), tanggal = String(p.tanggal || '').substring(0, 10);
   if (!dapurId || !/^\d{4}-\d{2}-\d{2}$/.test(tanggal)) return { ok: false, error: 'Pilih dapur & tanggal' };
+  withLock(function() { return imporRelawanLama(dapurId, me.id); });
   const terbit = bacaKwitansi(dapurId).filter(function(k) { return k.tanggal === tanggal; }), byP = {};
   terbit.forEach(function(k) { byP[k.penerima_id] = k; });
   const hadir = relawanHadirTanggal(dapurId, tanggal);

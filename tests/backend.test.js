@@ -92,7 +92,7 @@ const ok = (c, m) => { console.log((c ? 'PASS ' : 'FAIL ') + m); if (!c) fails++
     ['U3', 'off', 'xxxxxxx', 'Nonaktif', 'pic', 'D001', 'TIDAK'],
   ]);
   const B = env.__book;
-  ok(call(env, 'GET', { action: 'ping' }).version === 'v6-ba-sec24', 'ping menampilkan versi baru');
+  ok(call(env, 'GET', { action: 'ping' }).version === 'v6-ba-sec25', 'ping menampilkan versi baru');
 
   // 1. login lama (teks biasa) berhasil via POST dan password otomatis di-hash
   let r = call(env, 'POST', { action: 'login', username: 'AKUN1', password: 'RahasiaKu9' });
@@ -666,6 +666,26 @@ const ok = (c, m) => { console.log((c ? 'PASS ' : 'FAIL ') + m); if (!c) fails++
     r = call(e8, 'POST', { action: 'getDataPenerima', token: tA });
     const rel2 = r.data.rows.filter(x => x.jenis === 'RELAWAN');
     ok(rel2.length === 1 && rel2[0].id === idSiti && rel2[0].nominal === 160000 && rel2[0].ada_ttd, 'ubah daftar relawan lewat pengaturan gaji: id & TTD tetap, yang dihapus hilang');
+  }
+
+  // ── Relawan yang sudah tercatat sebelum ada Data Penerima ikut masuk (impor sekali per dapur) ──
+  {
+    const tAd = tk8('adm');
+    B8.RelawanBayar = B8.RelawanBayar || [['transaksi_id', 'dapur_id', 'data_json', 'updated_at', 'updated_by']];
+    B8.RelawanBayar.push(['TX-A', 'D002', JSON.stringify([{ nama: 'Ani', tugas: 'Masak', hari: 1, upah: 100000, hadir: true }, { nama: 'Budi', tugas: 'Cuci', hari: 1, upah: 90000, hadir: true }]), '', 'U2']);
+    B8.RelawanBayar.push(['TX-B', 'D002', JSON.stringify([{ nama: 'ani ', tugas: '', hari: 1, upah: 110000, hadir: true }, { nama: 'Budi', tugas: 'Cuci', hari: 1, upah: 90000, hadir: false }, { nama: 'Cici', tugas: 'Antar', hari: 1, upah: 80000, hadir: true, metode: 'Tunai' }]), '', 'U2']);
+    let r = call(e8, 'POST', { action: 'getDataPenerima', token: tAd, dapur: 'D002' });
+    const rel = r.data.rows.filter(x => x.jenis === 'RELAWAN');
+    const by = Object.fromEntries(rel.map(x => [x.nama.trim(), x]));
+    ok(r.ok && r.data.diimpor === 3 && rel.length === 3, 'relawan dari pembayaran honor lama diimpor (' + (r.data && r.data.diimpor) + ')');
+    ok(by.Ani && by.Ani.nominal === 110000 && by.Ani.jabatan === 'Masak' && by.Ani.aktif && !by.Budi.aktif && by.Cici.aktif && by.Cici.metode === 'Tunai', 'upah terbaru dipakai, tugas lama dipertahankan; tidak hadir di pembayaran terakhir = nonaktif');
+    r = call(e8, 'POST', { action: 'getDataPenerima', token: tAd, dapur: 'D002' });
+    ok(r.data.diimpor === 0 && r.data.rows.filter(x => x.jenis === 'RELAWAN').length === 3, 'impor hanya sekali (tidak dobel)');
+    r = call(e8, 'POST', { action: 'hapusDataPenerima', token: tAd, id: by.Cici.id });
+    r = call(e8, 'POST', { action: 'getDataPenerima', token: tAd, dapur: 'D002' });
+    ok(r.data.rows.filter(x => x.jenis === 'RELAWAN').length === 2, 'yang sengaja dihapus tidak muncul lagi');
+    ok(e8.htmlKuitansi({ ttdPenyerah: 'data:image/png;base64,QUJD', ttdPenerima: 'javascript:x' }).indexOf('<img src="data:image/png;base64,QUJD"') > 0
+      && e8.htmlKuitansi({ ttdPenerima: '" onerror="x' }).indexOf('onerror') < 0, 'kuitansi menempel TTD gambar (hanya data:image yang sah)');
   }
 
   // ── Kwitansi harian: 1 orang 1 kwitansi, BASTI bernomor urut per bulan, nomor tetap saat cetak ulang ──
