@@ -92,7 +92,7 @@ const ok = (c, m) => { console.log((c ? 'PASS ' : 'FAIL ') + m); if (!c) fails++
     ['U3', 'off', 'xxxxxxx', 'Nonaktif', 'pic', 'D001', 'TIDAK'],
   ]);
   const B = env.__book;
-  ok(call(env, 'GET', { action: 'ping' }).version === 'v6-ba-sec26', 'ping menampilkan versi baru');
+  ok(call(env, 'GET', { action: 'ping' }).version === 'v6-ba-sec27', 'ping menampilkan versi baru');
 
   // 1. login lama (teks biasa) berhasil via POST dan password otomatis di-hash
   let r = call(env, 'POST', { action: 'login', username: 'AKUN1', password: 'RahasiaKu9' });
@@ -788,6 +788,55 @@ const ok = (c, m) => { console.log((c ? 'PASS ' : 'FAIL ') + m); if (!c) fails++
     B8.Transaksi.push(['TK1', 'D001', '2026-10-10', 'KD-1', 'Operasional', 'Insentif Kader Posyandu', 'Insentif kader', 'VA', 150000, 150000, 'https://x', '', 'U2', 'P1', '']);
     r = call(e8, 'POST', { action: 'getKwitansiHarian', token: tA, tanggal: '2026-10-10' });
     ok(r.ok && r.data.tercatat.KADER === 150000 && r.data.tercatat.RELAWAN === 0 && r.data.file.KADER, 'kwitansi harian menampilkan nilai tercatat per jenis & tautan PDF');
+  }
+
+
+  // ── LPDH selalu menaut kwitansi bertanda tangan: yang belum ada / usang dibuat ulang ──
+  {
+    const tA = tk8('akn'), tP = tk8('pic'), png = 'data:image/png;base64,' + Buffer.from('ttd2').toString('base64');
+    let r = call(e8, 'POST', { action: 'getDataLPDH', token: tA, dapur: 'D001', tanggal: '2026-10-21' });
+    ok(r.ok && JSON.stringify(r.data.kwitansiPerlu) === '["KADER"]', 'kwitansi terbit tanpa PDF → LPDH meminta dibuat (' + JSON.stringify(r.data && r.data.kwitansiPerlu) + ')');
+    r = call(e8, 'POST', { action: 'getKwitansiCetak', token: tA, tanggal: '2026-10-21' });
+    ok(r.ok && r.data.rows.length === 1 && r.data.rows[0].nomor === '02/BASTI/SPPG-S1/X/2026' && r.data.rows[0].nominal === 55000 && r.data.kepala && r.data.akuntan && r.data.pic,
+      'bahan cetak ulang memakai kwitansi yang sudah terbit (nomor & nominal tetap)');
+    const idKd = r.data.rows[0].penerima_id;
+    call(e8, 'POST', { action: 'simpanKwitansiFile', token: tP, tanggal: '2026-10-21', jenis: 'KADER', fileData: 'JVBERg==' });
+    r = call(e8, 'POST', { action: 'getDataLPDH', token: tA, dapur: 'D001', tanggal: '2026-10-21' });
+    ok(r.data.kwitansiPerlu.length === 0 && /^https:/.test(r.data.kwitansi.KADER), 'setelah PDF tersimpan: tidak perlu dibuat lagi, link masuk LPDH');
+    ok(JSON.stringify(r.data.kwitansiNomor) === JSON.stringify({ PIC_SEKOLAH: [], KADER: ['02/BASTI/SPPG-S1/X/2026'] }), 'LPDH membawa nomor BASTI kwitansi hari itu (' + JSON.stringify(r.data.kwitansiNomor) + ')');
+    call(e8, 'POST', { action: 'saveTtd', token: tA, untuk: 'penerima', id: idKd, fileData: png });
+    r = call(e8, 'POST', { action: 'getDataLPDH', token: tA, dapur: 'D001', tanggal: '2026-10-21' });
+    ok(JSON.stringify(r.data.kwitansiPerlu) === '["KADER"]', 'tanda tangan penerima berubah → PDF lama dianggap usang & dibuat ulang');
+    r = call(e8, 'POST', { action: 'getDataLPDH', token: tk8('yay'), dapur: 'D001', tanggal: '2026-10-21' });
+    ok(r.ok && r.data.kwitansiPerlu.length === 0, 'Yayasan (hanya baca) tidak diminta membuat kwitansi');
+    r = call(e8, 'POST', { action: 'getDataLPDH', token: tA, dapur: 'D001', tanggal: '2026-10-17' });
+    ok(r.data.kwitansiPerlu.indexOf('INSENTIF') >= 0, 'insentif Mitra/Yayasan hari itu → kuitansi bertanda tangan diminta dibuat');
+    r = call(e8, 'POST', { action: 'getKwitansiCetak', token: tA, tanggal: '2026-10-17' });
+    ok(r.data.insentif.length === 1 && r.data.insentif[0].nominal === 5000000 && r.data.insentif[0].no_bukti === 'INS-1' && 'ttd' in r.data.pengawas, 'bahan kuitansi insentif: nominal, nomor bukti, penandatangan');
+    r = call(e8, 'POST', { action: 'simpanKwitansiFile', token: tP, tanggal: '2026-10-17', jenis: 'INSENTIF', fileData: 'JVBERg==' });
+    ok(r.ok, 'PDF kuitansi insentif tersimpan: ' + (r.error || ''));
+    r = call(e8, 'POST', { action: 'getDataLPDH', token: tA, dapur: 'D001', tanggal: '2026-10-17' });
+    ok(r.data.kwitansiPerlu.indexOf('INSENTIF') < 0 && /^https:/.test(r.data.kwitansi.INSENTIF), 'link kuitansi insentif bertanda tangan masuk LPDH');
+  }
+
+
+  // ── Porsi PM per sekolah & Tugas Harian PIC ──
+  {
+    const tP = tk8('pic');
+    const pm = [{ kode: 'KS-02', target: 228, distribusi: 228, diterima: 225, tidak: 3, alasan: 'PM tidak hadir' }];
+    let r = call(e8, 'POST', { action: 'saveHarianLPDH', token: tP, tanggal: '2026-10-23', data: { sekolah: [{ nama: 'SDN CAGAK', jenjang: '', besar: 235, kecil: 228 }], pm: pm } });
+    ok(!r.ok && /jenjang/.test(r.error), 'sekolah tanpa jenjang ditolak');
+    r = call(e8, 'POST', { action: 'saveHarianLPDH', token: tP, tanggal: '2026-10-23', data: { sekolah: [{ nama: 'SDN CAGAK', jenjang: 'SD', besar: 235, kecil: 228 }], pm: pm, produksi: { total: 473, organoleptik: 10 },
+      syarat: { kontaminasi: 'Tidak', fatal: 'Tidak', suspend: 'Tidak', verifikasi: 'Ya', sipgn: 'Ya' } } });
+    ok(r.ok, 'porsi per sekolah tersimpan: ' + (r.error || ''));
+    r = call(e8, 'POST', { action: 'getHarianLPDH', token: tP, tanggal: '2026-10-26' });
+    ok(r.data.data.sekolah.length === 1 && r.data.data.sekolah[0].jenjang === 'SD' && /disalin/.test(r.data.sumber), 'daftar sekolah disalin ke hari berikutnya');
+    r = call(e8, 'POST', { action: 'getTugasHarian', token: tP, tanggal: '2026-10-23' });
+    ok(r.ok && r.data.porsi.ada && r.data.porsi.sekolah === 1 && r.data.porsi.total === 228 && r.data.porsi.syarat === true && r.data.bisaSetuju === true,
+      'tugas harian: porsi PM per sekolah & syarat insentif terbaca (' + JSON.stringify(r.data && r.data.porsi) + ')');
+    ok(typeof r.data.persetujuan.baris === 'number' && r.data.penerima.aktif.RELAWAN >= 1 && 'kepala' in r.data.ttd && Array.isArray(r.data.lpdh.kwitansiPerlu), 'tugas harian: persetujuan, penerima aktif, TTD, LPDH');
+    r = call(e8, 'POST', { action: 'getTugasHarian', token: tk8('akn'), tanggal: '2026-10-24' });
+    ok(r.ok && r.data.porsi.ada === false && r.data.bisaSetuju === false, 'hari tanpa isian: porsi belum diisi; akuntan tidak menyetujui');
   }
 
   console.log(fails ? '\n' + fails + ' GAGAL' : '\nSEMUA LULUS');

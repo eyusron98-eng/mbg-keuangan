@@ -32,7 +32,7 @@ fs.unlinkSync(cssFile);
 // 2. JSX → JavaScript biasa (hanya preset react; sintaks modern lainnya dibiarkan)
 const m = src.match(/<script type="text\/babel"[^>]*>([\s\S]*?)<\/script>/);
 if (!m) throw new Error('Build gagal: <script type="text/babel"> tidak ditemukan');
-const js = Babel.transform(m[1], { presets: ['react'], sourceType: 'script', comments: false }).code;
+const js = Babel.transform(m[1], { presets: ['react'], sourceType: 'script', comments: false, compact: false }).code;
 if (/<\/script/i.test(js)) throw new Error('Build gagal: hasil JavaScript memuat "</script"');
 
 // 3. Rakit index.html

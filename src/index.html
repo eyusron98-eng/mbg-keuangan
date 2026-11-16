@@ -1420,6 +1420,78 @@ function lpdhGabung(arr, sep) {
   }
   return out;
 }
+// Nomor BASTI dipadatkan agar muat satu sel: 01–03, 05/BASTI/SPPG-CPJ02/XI/2026 (akhiran yang sama ditulis sekali)
+function lpdhNomorBasti(list) {
+  const grup = {}, urut = [];
+  (list || []).forEach(function(n) {
+    const m = String(n).match(/^(\d+)(\/.+)$/);
+    const k = m ? m[2] : String(n);
+    if (!grup[k]) { grup[k] = []; urut.push(k); }
+    if (m) grup[k].push(m[1]); else grup[k].push(null);
+  });
+  return urut.map(function(k) {
+    const a = grup[k].filter(function(x) { return x !== null; });
+    if (!a.length) return k;
+    const angka = a.map(Number).filter(function(x, i, arr) { return arr.indexOf(x) === i; }).sort(function(x, y) { return x - y; });
+    const lebar = Math.max.apply(null, a.map(function(x) { return x.length; }));
+    const pad = function(x) { return String(x).padStart(lebar, '0'); };
+    const bagian = []; let i = 0;
+    while (i < angka.length) { let j = i; while (j + 1 < angka.length && angka[j + 1] === angka[j] + 1) j++;
+      bagian.push(j > i ? pad(angka[i]) + '–' + pad(angka[j]) : pad(angka[i])); i = j + 1; }
+    return bagian.join(', ') + k;
+  }).join('; ');
+}
+// Porsi PM per sekolah/penerima (format POP: nama, porsi besar, porsi kecil) → kelompok sasaran LPDH (A_PM).
+// Kategori porsi mengikuti template PPK: KS-01/02/09 kecil; KS-03..08 & PTK besar.
+const PM_JENJANG = [
+  ['B3_HAMIL', 'B3/Posyandu (besar = ibu hamil)', 'KS-07', 'KS-09', /\bb3\b|posyandu|bumil|3b\b/i],
+  ['B3_MENYUSUI', 'B3/Posyandu (besar = ibu menyusui)', 'KS-08', 'KS-09', null],
+  ['PAUD', 'PAUD/TK/KB/RA (besar = guru/PTK)', 'PTK', 'KS-01', /\b(pos\s*paud|paud|tk|kb|ra|tpa|tka)\b/i],
+  ['SD', 'SD/MI (kecil = kls 1–3, besar = kls 4–6)', 'KS-03', 'KS-02', /\b(sd|sdn|sdit|sds|mi|min|mis)\b/i],
+  ['SMP', 'SMP/MTs', 'KS-04', 'KS-04', /\b(smp|smpn|smpit|mts|mtsn|mtss)\b/i],
+  ['SMA', 'SMA/MA/SMK/SLB', 'KS-05', 'KS-05', /\b(sma|sman|smk|smkn|ma|man|slb)\b/i],
+  ['SANTRI', 'Pesantren/Santri', 'KS-06', 'KS-06', /pesantren|ponpes|pondok|santri/i],
+  ['PTK', 'Guru/tenaga kependidikan', 'PTK', 'PTK', /\b(guru|ptk|tendik)\b/i],
+];
+function pmJenjang(kode) { return PM_JENJANG.find(function(j) { return j[0] === kode; }) || null; }
+function pmTebakJenjang(nama) { const j = PM_JENJANG.find(function(x) { return x[4] && x[4].test(String(nama || '')); }); return j ? j[0] : ''; }
+// total porsi per kelompok dari daftar sekolah: { 'KS-02': 310, ... }
+function pmDariSekolah(sekolah) {
+  const out = {};
+  (sekolah || []).forEach(function(s2) {
+    const j = pmJenjang(s2.jenjang); if (!j) return;
+    const b = Number(s2.besar) || 0, k = Number(s2.kecil) || 0;
+    if (b) out[j[2]] = (out[j[2]] || 0) + b;
+    if (k) out[j[3]] = (out[j[3]] || 0) + k;
+  });
+  return out;
+}
+// Tempel tabel POP (Nama | Porsi besar | Porsi kecil; Tab, ; atau |). Baris "Uji organoleptik" → produksi organoleptik.
+function bacaTempelSekolah(teks) {
+  const sekolah = []; let organoleptik = null;
+  String(teks || '').split(/\r?\n/).forEach(function(l) {
+    l = l.trim(); if (!l) return;
+    const k = (l.indexOf('\t') >= 0 ? l.split('\t') : l.split(/[;|]/)).map(function(x) { return x.trim(); });
+    const nama = k[0] || '', angka = function(v) { const n = String(v || '').replace(/[^0-9]/g, ''); return n === '' ? 0 : Number(n); };
+    if (!nama || /^nama\b/i.test(nama) || (k.length < 2)) return;
+    if (/organoleptik/i.test(nama)) { organoleptik = (organoleptik || 0) + angka(k[1]) + angka(k[2]); return; }
+    sekolah.push({ nama: nama.substring(0, 80), jenjang: pmTebakJenjang(nama), besar: angka(k[1]), kecil: angka(k[2]) });
+  });
+  return { sekolah: sekolah, organoleptik: organoleptik };
+}
+// Isian harian lengkap dari daftar sekolah: kelompok (target = didistribusikan, diterima = didistribusikan − tidak diterima) & total produksi
+function pmTerapkan(d) {
+  const per = pmDariSekolah(d.sekolah);
+  const pakai = (d.sekolah || []).length > 0;
+  const pm = (d.pm || []).map(function(x) {
+    if (!pakai) return x;
+    const n = per[x.kode] || 0, tidak = Math.min(n, Number(x.tidak) || 0);
+    return Object.assign({}, x, { target: n, distribusi: n, diterima: n - tidak, tidak: tidak });
+  });
+  const pr = d.produksi || {}, dist = pm.reduce(function(a, x) { return a + (Number(x.distribusi) || 0); }, 0);
+  const total = dist + (Number(pr.organoleptik) || 0) + (Number(pr.sampel) || 0) + (Number(pr.tidak_terdistribusi) || 0) + (Number(pr.buffer) || 0);
+  return Object.assign({}, d, { pm: pm, produksi: Object.assign({}, pr, { total: pakai ? total : pr.total }) });
+}
 function lpdhWarna(cell) { const f = cell.fill; return f && f.fgColor && f.fgColor.argb ? String(f.fgColor.argb).slice(-6).toUpperCase() : ''; }
 function lpdhRp(n) { return 'Rp ' + new Intl.NumberFormat('id-ID').format(Math.round(n || 0)); }
 
@@ -1486,7 +1558,9 @@ function isiLPDH(wb, data, opsi) {
     const a = perBaris[b[0]]; if (!a) return;
     const r = b[0], n = a.length;
     set(C, 'C' + r, tgl); set(C, 'E' + r, 1); set(C, 'F' + r, n === 1 ? 'transaksi' : n + ' transaksi'); set(C, 'G' + r, jml(a));
-    set(C, 'I' + r, lpdhGabung(a.map(function(t) { return t.no_bukti; }), '; '));
+    // PIC sekolah / kader: nomor bukti = nomor BASTI di kwitansi yang dibuat aplikasi; selain itu nomor bukti transaksi
+    const nomorKw = r === 7 ? (data.kwitansiNomor || {}).PIC_SEKOLAH : r === 8 ? (data.kwitansiNomor || {}).KADER : null;
+    set(C, 'I' + r, nomorKw && nomorKw.length ? lpdhNomorBasti(nomorKw) : lpdhGabung(a.map(function(t) { return t.no_bukti; }), '; '));
     // insentif PIC sekolah / kader: tautan kwitansi (BASTI) otomatis dari Data Penerima; selain itu bukti transaksi
     const kw = (r === 7 ? kwH.PIC_SEKOLAH : r === 8 ? kwH.KADER : '') || '';
     set(C, 'J' + r, (kw ? [kw] : a.map(function(t) { return t.bukti_url; })).filter(Boolean).join(' | '));
@@ -1548,9 +1622,9 @@ function isiLPDH(wb, data, opsi) {
     // nomor kuitansi = nomor kuitansi otomatis (nomor bukti realisasi)
     set(D, 'C24', lpdhGabung(ins.map(function(t, i) { return ki[i].no_kuitansi || t.no_bukti; }), '; '));
     // ditandatangani Mitra = kuitansi bertanda tangan sudah diunggah PIC
-    set(D, 'C25', ki.every(function(x) { return x.ttd_otomatis || x.ttd_url || x.kuitansi_ttd === 'Ya'; }) ? 'Ya' : 'Tidak');
-    // tautan bukti bayar = kuitansi otomatis (tanda tangan dari gambar tersimpan); berkas unggahan manual hanya cadangan bila kuitansi otomatis tidak ada
-    set(D, 'C26', ins.map(function(t, i) { return t.bukti_url || ki[i].ttd_url; }).filter(Boolean).join(' | '));
+    set(D, 'C25', kwH.INSENTIF || ki.every(function(x) { return x.ttd_otomatis || x.ttd_url || x.kuitansi_ttd === 'Ya'; }) ? 'Ya' : 'Tidak');
+    // tautan bukti bayar = kuitansi bertanda tangan (dibuat aplikasi dari TTD tersimpan); bila belum ada: kuitansi realisasi, lalu unggahan manual
+    set(D, 'C26', kwH.INSENTIF || ins.map(function(t, i) { return t.bukti_url || ki[i].ttd_url; }).filter(Boolean).join(' | '));
     // referensi = referensi yang tertulis di kuitansi (nomor Berita Acara pengajuan #baris)
     set(D, 'C27', lpdhGabung(ins.map(function(t, i) { return ki[i].ref_va || t.ref || ''; }), '; '));
   }
@@ -2383,12 +2457,21 @@ function LpdhPage({ session, scope, toast }) {
   async function unduh() {
     setBusy(true);
     try {
+      // link bukti relawan, PIC sekolah, kader & insentif Mitra harus ke kwitansi bertanda tangan: yang belum ada / usang dibuat dulu
+      let isi = data;
+      if (bisaIsi && (data.kwitansiPerlu || []).length) {
+        toast('Menyiapkan kwitansi bertanda tangan (' + data.kwitansiPerlu.length + ' berkas)…');
+        const gagal = await siapkanKwitansiLpdh(dapurId, tanggal, data.kwitansiPerlu);
+        const baru = await api('getDataLPDH', { dapur: dapurId, tanggal: tanggal });
+        if (baru.ok) { isi = baru.data; setData(baru.data); }
+        if (gagal) toast(gagal + ' kwitansi gagal disiapkan — link bukti memakai bukti transaksi. Coba unduh lagi.', 'error');
+      }
       if (!window.ExcelJS) await loadScriptOnce(EXCELJS_URL);
       const res = await fetch(LPDH_TEMPLATE_URL);
       if (!res.ok) throw new Error('template LPDH tidak ditemukan');
       const wb = new window.ExcelJS.Workbook();
       await wb.xlsx.load(await res.arrayBuffer());
-      const r = isiLPDH(wb, data, Object.assign({}, opsi, { waktu: new Date() }));
+      const r = isiLPDH(wb, isi, Object.assign({}, opsi, { waktu: new Date() }));
       const blob = new Blob([await wb.xlsx.writeBuffer()], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
       const a = document.createElement('a');
       a.href = URL.createObjectURL(blob); a.download = r.namaFile;
@@ -2475,12 +2558,14 @@ function LpdhPage({ session, scope, toast }) {
               <div className="text-xs" style={{ color: lengkap ? COLORS.green : '#9A6A0B' }}>{lengkap ? 'SP2D ' + t.no_sp2d + ' · kuitansi ' + t.no_kuitansi : 'SP2D / kuitansi / link bukti terima belum lengkap'}</div></div>
             {bisaLengkapi && <Btn size="sm" kind={lengkap ? 'ghost' : 'solid'} onClick={function() { setEditTopup(t); }}>{lengkap ? 'Ubah' : 'Lengkapi'}</Btn>}
           </div>; })}
-          {grup.ins.map(function(t) { const k = t.insentif || {}; const ppk = k.no_ppk || data.ppkTerakhir; const ttd = !!(k.ttd_url || k.kuitansi_ttd === 'Ya');
+          {grup.ins.map(function(t) { const k = t.insentif || {}; const ppk = k.no_ppk || data.ppkTerakhir; const kwIns = (data.kwitansi || {}).INSENTIF, ttd = !!(kwIns || k.ttd_otomatis || k.ttd_url || k.kuitansi_ttd === 'Ya');
             return <div key={t.id} className="py-1.5 text-sm" style={{ borderTop: '1px solid ' + COLORS.line }}>
             <div className="flex items-center justify-between gap-2">
               <div className="min-w-0"><div className="truncate" style={{ color: COLORS.ink }}>Insentif {fmt(t.riil)}{t.no_bukti ? ' · kuitansi ' + t.no_bukti : ''}</div>
                 <div className="text-xs" style={{ color: ppk ? COLORS.green : '#9A6A0B' }}>{ppk ? 'Pernyataan PPK ' + ppk + (k.no_ppk ? '' : ' (nomor terakhir)') : 'Nomor pernyataan PPK belum pernah diketik'}</div>
-                <div className="text-xs" style={{ color: ttd ? COLORS.green : '#9A6A0B' }}>{ttd ? <>Kuitansi bertanda tangan Mitra ✓ {k.ttd_url && <a href={k.ttd_url} target="_blank" rel="noopener" className="underline">lihat</a>}</> : 'Kuitansi bertanda tangan belum diunggah'}</div></div>
+                <div className="text-xs" style={{ color: ttd ? COLORS.green : '#9A6A0B' }}>{kwIns ? <>Kuitansi bertanda tangan ✓ (otomatis, tertaut di LPDH) <a href={kwIns} target="_blank" rel="noopener" className="underline">lihat</a></>
+                  : k.ttd_otomatis ? 'Kuitansi bertanda tangan dibuat otomatis saat LPDH diunduh'
+                  : ttd ? <>Kuitansi bertanda tangan Mitra ✓ {k.ttd_url && <a href={k.ttd_url} target="_blank" rel="noopener" className="underline">lihat</a>}</> : 'TTD akuntan / PIC belum diunggah di Profil — kuitansi belum bisa ditandatangani otomatis'}</div></div>
               <div className="flex flex-col gap-1 shrink-0">
                 {bisaIsi && <label className="inline-flex items-center justify-center gap-1 rounded-lg px-3 py-2 text-xs font-semibold cursor-pointer" style={{ background: ttd ? 'transparent' : COLORS.green, color: ttd ? COLORS.green : '#fff', border: '1px solid ' + (ttd ? COLORS.line : COLORS.green), minHeight: 36 }}>
                   {unggahTtd === t.id ? I.spinner : I.camera} {ttd ? 'Ganti ttd' : 'Unggah ttd'}
@@ -2545,49 +2630,104 @@ function LpdhHarianForm({ dapurId, tanggal, toast, onClose, onSaved }) {
   const [d, setD] = useState(null);
   const [sumber, setSumber] = useState('');
   const [saving, setSaving] = useState(false);
+  const [tempel, setTempel] = useState(null);   // null = tertutup; string = isi kotak tempel tabel POP
   useEffect(function() {
     api('getHarianLPDH', { dapur: dapurId, tanggal: tanggal }).then(function(r) {
       if (!r.ok) { toast(r.error, 'error'); onClose(); return; }
       const x = r.data.data || {};
       const pm = {}; (x.pm || []).forEach(function(p) { pm[p.kode] = p; });
-      setD({ pm: LPDH_KELOMPOK.map(function(k) { return Object.assign({ kode: k[0], target: '', distribusi: '', diterima: '', tidak: '', alasan: '', bnba: '', bast: '', link: '' }, pm[k[0]] || {}); }),
+      setD({ sekolah: (x.sekolah || []).map(function(s2) { return { nama: s2.nama, jenjang: s2.jenjang, besar: String(s2.besar || ''), kecil: String(s2.kecil || '') }; }),
+        pm: LPDH_KELOMPOK.map(function(k) { return Object.assign({ kode: k[0], target: '', distribusi: '', diterima: '', tidak: '', alasan: '', bnba: '', bast: '', link: '' }, pm[k[0]] || {}); }),
         produksi: Object.assign({ total: '', organoleptik: '', sampel: '', tidak_terdistribusi: '', buffer: '' }, x.produksi || {}),
         syarat: Object.assign({}, LPDH_SYARAT.reduce(function(o, s2) { o[s2[0]] = s2[2]; return o; }, {}), x.syarat || {}) });
       setSumber(r.data.sumber);
     });
   }, []);
-  if (!d) return <Modal title="Porsi POP/Fleet" onClose={onClose}>{I.spinner}</Modal>;
+  if (!d) return <Modal title="Porsi PM (POP)" onClose={onClose}>{I.spinner}</Modal>;
+  const modeSekolah = d.sekolah.length > 0;
+  const h = pmTerapkan(d);   // kelompok & total produksi dihitung dari daftar sekolah
   function ubahPm(i, k, v) { setD(Object.assign({}, d, { pm: d.pm.map(function(x, j) { return j === i ? Object.assign({}, x, { [k]: v }) : x; }) })); }
-  const tidakSeimbang = d.pm.filter(function(x) { return (Number(x.distribusi) || 0) !== (Number(x.diterima) || 0) + (Number(x.tidak) || 0); }).map(function(x) { return x.kode; });
-  const tanpaAlasan = d.pm.filter(function(x) { return Number(x.tidak) > 0 && !x.alasan; }).map(function(x) { return x.kode; });
-  async function simpan() {
-    setSaving(true);
-    const r = await apiPost('saveHarianLPDH', { dapur: dapurId, tanggal: tanggal, data: d });
-    setSaving(false);
-    if (r.ok) { toast('Data harian disimpan'); onSaved(); onClose(); } else toast(r.error, 'error');
+  function ubahSk(i, k, v) { setD(Object.assign({}, d, { sekolah: d.sekolah.map(function(x, j) { return j === i ? Object.assign({}, x, { [k]: v }) : x; }) })); }
+  function setProd(k, v) { const o = {}; o[k] = v; setD(Object.assign({}, d, { produksi: Object.assign({}, d.produksi, o) })); }
+  const hasilTempel = tempel !== null ? bacaTempelSekolah(tempel) : null;
+  function pakaiTempel() {
+    const lama = {}; d.sekolah.forEach(function(x) { lama[x.nama.toLowerCase()] = x.jenjang; });
+    const baru = hasilTempel.sekolah.map(function(x) { return { nama: x.nama, jenjang: lama[x.nama.toLowerCase()] || x.jenjang, besar: String(x.besar), kecil: String(x.kecil) }; });
+    setD(Object.assign({}, d, { sekolah: baru, produksi: hasilTempel.organoleptik !== null ? Object.assign({}, d.produksi, { organoleptik: String(hasilTempel.organoleptik) }) : d.produksi }));
+    setTempel(null);
   }
-  return <Modal title={'Porsi POP/Fleet · ' + fmtDDMMYYYY(tanggal)} size="lg" onClose={onClose}>
-    {sumber.indexOf('disalin') === 0 && <div className="text-sm rounded-lg p-2.5 mb-3" style={{ background: '#EAF0F8', color: COLORS.blue }}>Angka {sumber}. Periksa & sesuaikan; nomor & link BAST harus diisi baru setiap hari.</div>}
+  const tanpaJenjang = d.sekolah.filter(function(x) { return !x.jenjang; });
+  const totB = d.sekolah.reduce(function(a, x) { return a + (Number(x.besar) || 0); }, 0), totK = d.sekolah.reduce(function(a, x) { return a + (Number(x.kecil) || 0); }, 0);
+  const tidakSeimbang = h.pm.filter(function(x) { return (Number(x.distribusi) || 0) !== (Number(x.diterima) || 0) + (Number(x.tidak) || 0); }).map(function(x) { return x.kode; });
+  const tanpaAlasan = h.pm.filter(function(x) { return Number(x.tidak) > 0 && !x.alasan; }).map(function(x) { return x.kode; });
+  async function simpan() {
+    if (tanpaJenjang.length) { toast('Pilih jenjang untuk: ' + tanpaJenjang.map(function(x) { return x.nama || '(tanpa nama)'; }).join(', '), 'error'); return; }
+    setSaving(true);
+    const r = await apiPost('saveHarianLPDH', { dapur: dapurId, tanggal: tanggal, data: h });
+    setSaving(false);
+    if (r.ok) { toast('Porsi PM disimpan'); onSaved && onSaved(); onClose(); } else toast(r.error, 'error');
+  }
+  const kecilIn = Object.assign({}, inputStyle, { minHeight: 38, padding: '6px 8px', textAlign: 'right' });
+  return <Modal title={'Porsi PM (POP) · ' + fmtDDMMYYYY(tanggal)} size="lg" onClose={onClose}>
+    {sumber.indexOf('disalin') === 0 && <div className="text-sm rounded-lg p-2.5 mb-3" style={{ background: '#EAF0F8', color: COLORS.blue }}>Daftar & angka {sumber}. Sesuaikan porsi hari ini; nomor & link BAST diisi baru setiap hari.</div>}
+    <div className="text-xs font-semibold uppercase mb-1" style={{ color: COLORS.muted }}>Porsi per sekolah / penerima (POP)</div>
+    <div className="text-xs mb-2" style={{ color: COLORS.muted }}>Isi seperti tabel POP: nama, porsi besar, porsi kecil. Aplikasi mengubahnya ke kelompok sasaran LPDH (SD kecil = kls 1–3, besar = kls 4–6; PAUD/TK besar = guru; B3 kecil = balita).</div>
+    <div className="flex gap-2 flex-wrap mb-2">
+      <Btn size="sm" onClick={function() { setD(Object.assign({}, d, { sekolah: d.sekolah.concat([{ nama: '', jenjang: '', besar: '', kecil: '' }]) })); }}>{I.plusSm} Tambah sekolah</Btn>
+      <Btn size="sm" kind="ghost" onClick={function() { setTempel(tempel === null ? '' : null); }}>{I.file} Tempel tabel POP</Btn>
+    </div>
+    {tempel !== null && <div className="rounded-lg p-2.5 mb-3" style={{ border: '1px solid ' + COLORS.line, background: COLORS.paper }}>
+      <div className="text-xs mb-1.5" style={{ color: COLORS.muted }}>Salin tabel dari Excel/WhatsApp (kolom: Nama sekolah · Porsi besar · Porsi kecil). Baris "Uji Organoleptik" otomatis masuk produksi. Daftar lama diganti.</div>
+      <textarea value={tempel} onChange={function(e) { setTempel(e.target.value); }} rows={5} style={Object.assign({}, inputStyle, { minHeight: 110, fontFamily: 'inherit' })} aria-label="Tempel tabel POP" placeholder={'SDN CAGAK; 235; 228\nTK IT AISYAH; 9; 37\nUji Organoleptik; 5; 5'}/>
+      <div className="flex items-center justify-between gap-2 mt-2">
+        <span className="text-xs" style={{ color: COLORS.ink }}>{hasilTempel.sekolah.length} sekolah terbaca{hasilTempel.organoleptik !== null ? ' · organoleptik ' + hasilTempel.organoleptik : ''}</span>
+        <Btn size="sm" onClick={pakaiTempel} disabled={!hasilTempel.sekolah.length}>{I.check} Masukkan</Btn>
+      </div>
+    </div>}
+    {modeSekolah && <div className="flex gap-1.5 px-2 text-[11px] font-semibold" style={{ color: COLORS.muted }}><span className="flex-1">Nama sekolah / penerima</span><span style={{ width: 64, textAlign: 'right' }}>Besar</span><span style={{ width: 64, textAlign: 'right' }}>Kecil</span><span style={{ width: 26 }}/></div>}
+    {d.sekolah.map(function(x, i) { return <div key={i} className="rounded-lg p-2 mb-1.5" style={{ border: '1px solid ' + (x.jenjang ? COLORS.line : COLORS.danger) }}>
+      <div className="flex gap-1.5 items-center">
+        <input value={x.nama} onChange={function(e) { const v = e.target.value; setD(Object.assign({}, d, { sekolah: d.sekolah.map(function(y, j) { return j === i ? Object.assign({}, y, { nama: v, jenjang: y.jenjang || pmTebakJenjang(v) }) : y; }) })); }}
+          style={Object.assign({}, inputStyle, { minHeight: 38, padding: '6px 8px', flex: 1, minWidth: 0 })} placeholder="Nama sekolah / B3 RW…" aria-label={'Nama sekolah ' + (i + 1)}/>
+        <input value={x.besar} inputMode="numeric" onChange={function(e) { ubahSk(i, 'besar', e.target.value.replace(/\D/g, '')); }} style={Object.assign({}, kecilIn, { width: 64 })} placeholder="Besar" aria-label={'Besar ' + (i + 1)}/>
+        <input value={x.kecil} inputMode="numeric" onChange={function(e) { ubahSk(i, 'kecil', e.target.value.replace(/\D/g, '')); }} style={Object.assign({}, kecilIn, { width: 64 })} placeholder="Kecil" aria-label={'Kecil ' + (i + 1)}/>
+        <button type="button" onClick={function() { setD(Object.assign({}, d, { sekolah: d.sekolah.filter(function(y, j) { return j !== i; }) })); }} className="p-1" style={{ color: COLORS.danger }} aria-label={'Hapus sekolah ' + (i + 1)}>{I.x}</button>
+      </div>
+      <select value={x.jenjang} onChange={function(e) { ubahSk(i, 'jenjang', e.target.value); }} style={Object.assign({}, inputStyle, { minHeight: 34, padding: '4px 8px', fontSize: 12, marginTop: 6, color: x.jenjang ? COLORS.ink : COLORS.danger })} aria-label={'Jenjang ' + (i + 1)}>
+        <option value="">Pilih jenjang/kelompok…</option>{PM_JENJANG.map(function(j) { return <option key={j[0]} value={j[0]}>{j[1]}</option>; })}</select>
+    </div>; })}
+    {modeSekolah && <div className="flex justify-between text-xs mb-3 px-1" style={{ color: COLORS.ink }}><span>{d.sekolah.length} sekolah/penerima</span><b>Besar {fmtNoRp(totB)} · Kecil {fmtNoRp(totK)} · Jumlah {fmtNoRp(totB + totK)}</b></div>}
+    {!modeSekolah && <div className="text-xs rounded-lg p-2.5 mb-3" style={{ border: '1.5px dashed ' + COLORS.line, color: COLORS.muted }}>Belum ada daftar sekolah. Tempel tabel POP atau tambah sekolah — atau isi langsung per kelompok di bawah.</div>}
+
     <div className="text-xs font-semibold uppercase mb-2" style={{ color: COLORS.muted }}>Produksi (Aplikasi POP)</div>
     <div className="grid grid-cols-2 sm:grid-cols-3 gap-x-2">
-      {[['total', 'Total diproduksi'], ['organoleptik', 'Uji organoleptik'], ['sampel', 'Sampel makanan'], ['tidak_terdistribusi', 'Tidak terdistribusi'], ['buffer', 'Buffer']].map(function(f) {
-        return <Field key={f[0]} label={f[1]}><LpdhIsian label={f[1]} v={d.produksi[f[0]]} on={function(v) { const o = {}; o[f[0]] = v; setD(Object.assign({}, d, { produksi: Object.assign({}, d.produksi, o) })); }}/></Field>; })}
+      {modeSekolah ? <Field label="Total diproduksi (otomatis)"><div className="num font-bold" style={Object.assign({}, inputStyle, { background: COLORS.paper })} aria-label="Total diproduksi">{fmtNoRp(h.produksi.total)}</div></Field>
+        : <Field label="Total diproduksi"><LpdhIsian label="Total diproduksi" v={d.produksi.total} on={function(v) { setProd('total', v); }}/></Field>}
+      {[['organoleptik', 'Uji organoleptik'], ['sampel', 'Sampel makanan'], ['tidak_terdistribusi', 'Tidak terdistribusi'], ['buffer', 'Buffer']].map(function(f) {
+        return <Field key={f[0]} label={f[1]}><LpdhIsian label={f[1]} v={d.produksi[f[0]]} on={function(v) { setProd(f[0], v); }}/></Field>; })}
     </div>
-    <div className="text-xs font-semibold uppercase mb-2 mt-1" style={{ color: COLORS.muted }}>Per kelompok sasaran (POP & Fleet)</div>
-    {d.pm.map(function(x, i) { return <div key={x.kode} className="rounded-lg p-2.5 mb-2" style={{ border: '1px solid ' + COLORS.line }}>
-      <div className="text-sm font-semibold mb-1.5" style={{ color: COLORS.ink }}>{x.kode} · {LPDH_KELOMPOK[i][1]}</div>
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mb-2">
+
+    <div className="text-xs font-semibold uppercase mb-2 mt-1" style={{ color: COLORS.muted }}>{modeSekolah ? 'Kelompok sasaran LPDH (otomatis dari daftar sekolah)' : 'Per kelompok sasaran (POP & Fleet)'}</div>
+    {d.pm.map(function(x, i) { const hx = h.pm[i];
+      if (modeSekolah && !(Number(hx.distribusi) > 0) && !x.bast && !x.link) return null;
+      return <div key={x.kode} className="rounded-lg p-2.5 mb-2" style={{ border: '1px solid ' + COLORS.line }}>
+      <div className="flex justify-between items-baseline gap-2 mb-1.5"><div className="text-sm font-semibold" style={{ color: COLORS.ink }}>{x.kode} · {LPDH_KELOMPOK[i][1]}</div>
+        {modeSekolah && <div className="text-sm num font-bold" style={{ color: COLORS.ink }} aria-label={x.kode + ' didistribusikan'}>{fmtNoRp(hx.distribusi)}</div>}</div>
+      {modeSekolah ? <div className="grid grid-cols-2 gap-2 mb-2">
+          <div><div className="text-[11px]" style={{ color: COLORS.muted }}>Tidak diterima (Fleet)</div><LpdhIsian label={x.kode + ' tidak'} v={x.tidak} on={function(v) { ubahPm(i, 'tidak', v); }}/></div>
+          <div><div className="text-[11px]" style={{ color: COLORS.muted }}>Diterima</div><div className="num" style={Object.assign({}, inputStyle, { background: COLORS.paper })}>{fmtNoRp(hx.diterima)}</div></div></div>
+        : <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mb-2">
         <div><div className="text-[11px]" style={{ color: COLORS.muted }}>Target (SPS)</div><LpdhIsian label={x.kode + ' target'} v={x.target} on={function(v) { ubahPm(i, 'target', v); }}/></div>
         <div><div className="text-[11px]" style={{ color: COLORS.muted }}>Didistribusikan</div><LpdhIsian label={x.kode + ' distribusi'} v={x.distribusi} on={function(v) { ubahPm(i, 'distribusi', v); }}/></div>
         <div><div className="text-[11px]" style={{ color: COLORS.muted }}>Diterima (Fleet)</div><LpdhIsian label={x.kode + ' diterima'} v={x.diterima} on={function(v) { ubahPm(i, 'diterima', v); }}/></div>
         <div><div className="text-[11px]" style={{ color: COLORS.muted }}>Tidak diterima</div><LpdhIsian label={x.kode + ' tidak'} v={x.tidak} on={function(v) { ubahPm(i, 'tidak', v); }}/></div>
-      </div>
+      </div>}
       {Number(x.tidak) > 0 && <select value={x.alasan} onChange={function(e) { ubahPm(i, 'alasan', e.target.value); }} style={Object.assign({}, inputStyle, { marginBottom: 8 })} aria-label={x.kode + ' alasan'}>
         <option value="">Alasan tidak diterima…</option>{LPDH_ALASAN.map(function(a) { return <option key={a} value={a}>{a}</option>; })}</select>}
-      {(Number(x.diterima) > 0 || x.bast || x.link) && <div className="grid sm:grid-cols-3 gap-2">
+      {(Number(hx.diterima) > 0 || x.bast || x.link) && <div className="grid sm:grid-cols-3 gap-2">
         <select value={x.bnba} onChange={function(e) { ubahPm(i, 'bnba', e.target.value); }} style={inputStyle} aria-label={x.kode + ' BNBA'}><option value="">Data BNBA?</option><option>Ya</option><option>Tidak</option></select>
-        <LpdhIsian mode="text" ph="No. BAST" label={x.kode + ' BAST'} v={x.bast} on={function(v) { ubahPm(i, 'bast', v); }}/>
-        <LpdhIsian mode="url" ph="Link BAST (https://…)" label={x.kode + ' link'} v={x.link} on={function(v) { ubahPm(i, 'link', v.trim()); }}/>
+        <LpdhIsian mode="text" ph="No. BAST (kosong = otomatis)" label={x.kode + ' BAST'} v={x.bast} on={function(v) { ubahPm(i, 'bast', v); }}/>
+        <LpdhIsian mode="url" ph="Link BAST (kosong = folder BAST)" label={x.kode + ' link'} v={x.link} on={function(v) { ubahPm(i, 'link', v.trim()); }}/>
       </div>}
     </div>; })}
     <div className="text-xs font-semibold uppercase mb-2 mt-3" style={{ color: COLORS.muted }}>Syarat insentif</div>
@@ -2596,7 +2736,8 @@ function LpdhHarianForm({ dapurId, tanggal, toast, onClose, onSaved }) {
       <select value={d.syarat[x[0]] || ''} onChange={function(e) { const o = {}; o[x[0]] = e.target.value; setD(Object.assign({}, d, { syarat: Object.assign({}, d.syarat, o) })); }} style={Object.assign({}, inputStyle, { width: 100 })} aria-label={x[1]}>
         <option value="">—</option><option>Ya</option><option>Tidak</option></select>
     </div>; })}
-    {(tidakSeimbang.length > 0 || tanpaAlasan.length > 0) && <div className="text-xs rounded-lg p-2.5 mb-3" style={{ background: '#FBF3E2', color: '#7A5408' }}>
+    {(tidakSeimbang.length > 0 || tanpaAlasan.length > 0 || tanpaJenjang.length > 0) && <div className="text-xs rounded-lg p-2.5 mb-3" style={{ background: '#FBF3E2', color: '#7A5408' }}>
+      {tanpaJenjang.length > 0 && <div>Jenjang belum dipilih: {tanpaJenjang.map(function(x) { return x.nama || '(tanpa nama)'; }).join(', ')}.</div>}
       {tidakSeimbang.length > 0 && <div>Didistribusikan ≠ diterima + tidak diterima: {tidakSeimbang.join(', ')} (cek PPK akan PERIKSA).</div>}
       {tanpaAlasan.length > 0 && <div>Porsi tidak diterima tanpa alasan: {tanpaAlasan.join(', ')}.</div>}</div>}
     <div className="flex gap-2"><Btn kind="ghost" onClick={onClose}>Batal</Btn><Btn onClick={simpan} disabled={saving}>{saving ? I.spinner : I.check} Simpan</Btn></div>
@@ -5008,6 +5149,52 @@ async function buildKwitansiPdf(k) {
   doc.setProperties({ title: 'Kwitansi ' + sppg + ' ' + k.tanggal, creator: 'Keuangan MBG' });
   return doc;
 }
+// Kuitansi insentif Mitra/Yayasan (Fasilitas SPPG) bertanda tangan: Pengawas Keuangan (menyerahkan) & PIC/pemilik gedung (menerima)
+async function buildKuitansiInsentifPdf(k) {
+  const JsPDF = await ensureJsPDF();
+  const doc = new JsPDF({ unit: 'mm', format: 'a4', orientation: 'portrait' });
+  const W = 210, M = 15, ink = [33, 37, 41];
+  const sppg = /^SPPG\b/i.test(k.dapur.nama) ? k.dapur.nama : 'SPPG ' + k.dapur.nama;
+  for (let i = 0; i < k.insentif.length; i++) {
+    const t = k.insentif[i]; if (i) doc.addPage();
+    let y = await kopSppg(doc, k.dapur, k.logo);
+    doc.setTextColor.apply(doc, ink);
+    doc.setFont('helvetica', 'bold'); doc.setFontSize(13); doc.text('KUITANSI / BUKTI PEMBAYARAN', W / 2, y, { align: 'center' }); y += 5.5;
+    doc.setFont('helvetica', 'normal'); doc.setFontSize(10); doc.text('Nomor: ' + t.no_bukti, W / 2, y, { align: 'center' }); y += 11;
+    const tg = tglPanjang(t.tanggal);
+    [['Telah terima dari', sppg], ['Uang sejumlah', fmt(t.nominal), 'b'], ['Terbilang', terbilang(t.nominal), 'i'], ['Untuk pembayaran', t.kategori + ' — ' + t.uraian],
+      ['Dibayarkan kepada', t.penerima || '-'], ['Rekening tujuan', ((t.bank || '') + ' ' + (t.no_rek || '')).trim() || '-'], ['Tanggal pembayaran', tg.hari + ', ' + tg.tgl], ['Referensi', t.ref || '-']].forEach(function(b) {
+      doc.setFont('helvetica', 'normal'); doc.text(b[0], M + 4, y); doc.text(':', M + 52, y);
+      doc.setFont('helvetica', b[2] === 'b' ? 'bold' : b[2] === 'i' ? 'italic' : 'normal');
+      const v = doc.splitTextToSize(String(b[1] || ''), W - M - (M + 56)); doc.text(v, M + 56, y, { lineHeightFactor: 1.35 }); y += Math.max(1, v.length) * 4.8 + 2.4;
+    });
+    doc.setFont('helvetica', 'normal'); y += 8;
+    doc.text(tg.tgl, W - M - 40, y, { align: 'center' }); y += 7;
+    await ttdKolom(doc, M + 40, y, ['Yang menyerahkan,', 'Pengawas Keuangan'], k.pengawas.ttd, k.pengawas.nama);
+    await ttdKolom(doc, W - M - 40, y, ['Yang menerima,', ''], k.pic.ttd, t.penerima || k.pic.nama);
+    doc.setFontSize(7.5); doc.setTextColor(110); doc.setDrawColor(200); doc.setLineWidth(0.2); doc.line(M, 297 - 13, W - M, 297 - 13);
+    doc.text(t.no_bukti + '  ·  ' + t.tanggal + '  ·  Dibuat dari aplikasi Keuangan MBG', M, 297 - 9);
+  }
+  doc.setProperties({ title: 'Kuitansi insentif ' + sppg + ' ' + k.tanggal, creator: 'Keuangan MBG' });
+  return doc;
+}
+// Buat (ulang) PDF kwitansi bertanda tangan yang diminta LPDH, simpan ke Drive → tautannya dipakai LPDH. Mengembalikan jumlah yang gagal.
+async function siapkanKwitansiLpdh(dapurId, tanggal, perlu) {
+  const r = await api('getKwitansiCetak', { dapur: dapurId, tanggal: tanggal });
+  if (!r.ok) return perlu.length;
+  let gagal = 0;
+  for (const jn of perlu) {
+    try {
+      let doc = null;
+      if (jn === 'INSENTIF') { if (r.data.insentif.length) doc = await buildKuitansiInsentifPdf(r.data); }
+      else { const bag = r.data.rows.filter(function(x) { return x.jenis === jn; }); if (bag.length) doc = await buildKwitansiPdf(Object.assign({}, r.data, { rows: bag })); }
+      if (!doc) continue;
+      const up = await apiUpload('simpanKwitansiFile', { dapur: dapurId, tanggal: tanggal, jenis: jn, fileData: doc.output('datauristring').split(',')[1] });
+      if (!up.ok) gagal++;
+    } catch (e) { gagal++; }
+  }
+  return gagal;
+}
 function KwitansiPage({ session, scope, toast }) {
   const role = session.user.role;
   const dapurId = (role === 'akuntan' || role === 'pic') ? session.user.dapur : (scope && scope !== 'ALL' ? scope : '');
@@ -5243,6 +5430,66 @@ function TtdCard({ toast, untuk, id, dapur, judul, ket }) {
     {confirmDel && <ConfirmModal title="Hapus tanda tangan?" danger confirmLabel="Hapus"
  message="Dokumen berikutnya akan dicetak tanpa tanda tangan ini sampai diunggah lagi." onConfirm={del} onClose={function(){ setConfirmDel(false); }}/>}
   </Card>;
+}
+
+// ---------- Tugas Harian PIC: daftar pekerjaan hari itu & statusnya ----------
+function TugasHarianPage({ session, scope, toast, onBuka }) {
+  const role = session.user.role;
+  const dapurId = (role === 'akuntan' || role === 'pic') ? session.user.dapur : (scope && scope !== 'ALL' ? scope : '');
+  const [tanggal, setTanggal] = useState(todayISO());
+  const [d, setD] = useState(null);
+  const [porsi, setPorsi] = useState(false);
+  function load() { if (!dapurId) return; setD(null); api('getTugasHarian', { dapur: dapurId, tanggal: tanggal }).then(function(r) { if (r.ok && r.data && r.data.persetujuan) setD(r.data); else { if (!r.ok) toast(r.error, 'error'); setD(false); } }); }
+  useEffect(load, [dapurId, tanggal]);
+  if (!dapurId) return <Card><div className="text-sm" style={{ color: COLORS.muted }}>Pilih satu dapur di atas untuk melihat tugas harian.</div></Card>;
+  const tugas = [];
+  if (d) {
+    const ps = d.persetujuan, pr = d.porsi, a = d.penerima.aktif, tt = d.penerima.tanpaTtd, kt = d.kwitansi.terbit, kn = d.kwitansi.nilai;
+    if (d.bisaSetuju) tugas.push({ id: 'setuju', judul: 'Setujui pengajuan', selesai: ps.baris === 0,
+      ket: ps.baris ? ps.baris + ' baris menunggu persetujuan (' + fmt(ps.nominal) + ')' + (ps.tanggal.length ? ' · Hari H ' + ps.tanggal.map(fmtDDMMYYYY).join(', ') : '') : 'Tidak ada pengajuan yang menunggu',
+      aksi: 'Buka Persetujuan', klik: function() { onBuka('persetujuan'); } });
+    tugas.push({ id: 'porsi', judul: 'Pastikan porsi PM di POP (per sekolah)', selesai: pr.ada && pr.sekolah > 0 && pr.syarat,
+      ket: pr.ada ? (pr.sekolah ? pr.sekolah + ' sekolah/penerima · ' + fmtNoRp(pr.total) + ' porsi' : 'Diisi per kelompok (belum per sekolah) · ' + fmtNoRp(pr.total) + ' porsi') + (pr.syarat ? '' : ' · syarat insentif belum lengkap') : 'Belum diisi untuk tanggal ini',
+      aksi: pr.ada ? 'Periksa porsi' : 'Isi porsi', klik: function() { setPorsi(true); } });
+    const honor = d.kwitansi.honor;
+    tugas.push({ id: 'relawan', judul: 'Pastikan relawan yang hadir', selesai: kt.RELAWAN > 0 && (!honor || honor === kn.RELAWAN),
+      ket: (kt.RELAWAN ? kt.RELAWAN + ' dari ' + a.RELAWAN + ' relawan aktif hadir & dibuatkan kwitansi (' + fmt(kn.RELAWAN) + ')' : 'Belum ada kwitansi relawan (' + a.RELAWAN + ' relawan aktif)')
+        + (honor ? ' · honor tercatat ' + fmt(honor) + (honor !== kn.RELAWAN ? ' — belum sama' : ' ✓') : ''),
+      aksi: 'Pilih yang hadir', klik: function() { onBuka('kwitansi'); } });
+    if (a.PIC_SEKOLAH || a.KADER) tugas.push({ id: 'kwitansi', judul: 'Kwitansi PIC sekolah & Posyandu', selesai: (!a.PIC_SEKOLAH || kt.PIC_SEKOLAH > 0) && (!a.KADER || kt.KADER > 0),
+      ket: 'PIC sekolah ' + kt.PIC_SEKOLAH + '/' + a.PIC_SEKOLAH + ' · Posyandu ' + kt.KADER + '/' + a.KADER + ' kwitansi (BASTI) terbit',
+      aksi: 'Buka Kwitansi', klik: function() { onBuka('kwitansi'); } });
+    const kurangTtd = [];
+    if (!d.ttd.kepala) kurangTtd.push('Kepala SPPG'); if (!d.ttd.pic) kurangTtd.push('PIC'); if (!d.ttd.akuntan) kurangTtd.push('akuntan');
+    const nTanpa = tt.RELAWAN + tt.PIC_SEKOLAH + tt.KADER;
+    if (nTanpa) kurangTtd.push(nTanpa + ' penerima aktif');
+    tugas.push({ id: 'ttd', judul: 'Tanda tangan tersimpan', selesai: !kurangTtd.length, ket: kurangTtd.length ? 'Belum ada: ' + kurangTtd.join(', ') : 'Semua tanda tangan lengkap',
+      aksi: !d.ttd.kepala || !d.ttd.pic ? 'Buka Profil' : 'Data Penerima', klik: function() { onBuka(!d.ttd.kepala || !d.ttd.pic ? 'profil' : 'penerima'); } });
+    tugas.push({ id: 'lpdh', judul: 'LPDH hari ini', selesai: null,
+      ket: d.lpdh.transaksi + ' transaksi' + (d.lpdh.kwitansiPerlu.length ? ' · ' + d.lpdh.kwitansiPerlu.length + ' kwitansi bertanda tangan dibuat otomatis saat unduh' : ''),
+      aksi: 'Buka LPDH', klik: function() { onBuka('lpdh'); } });
+  }
+  const wajib = tugas.filter(function(t) { return t.selesai !== null; }), beres = wajib.filter(function(t) { return t.selesai; }).length;
+  return <div>
+    <div className="mb-3"><Eyebrow>Tugas Harian</Eyebrow>
+      <div className="text-xs" style={{ color: COLORS.muted }}>Pekerjaan PIC hari ini. Ketuk tombol untuk langsung mengerjakan.</div></div>
+    <Card className="mb-3">
+      <Field label="Tanggal"><input type="date" value={tanggal} onChange={function(e) { if (e.target.value) setTanggal(e.target.value); }} style={inputStyle} aria-label="Tanggal tugas"/></Field>
+      {d && <div className="text-sm font-semibold" style={{ color: beres === wajib.length ? COLORS.green : COLORS.ink }}>{beres} dari {wajib.length} tugas selesai{beres === wajib.length ? ' ✓' : ''}</div>}
+    </Card>
+    {d === null ? <div className="text-sm flex items-center gap-2" style={{ color: COLORS.muted }}>{I.spinner} Memuat…</div>
+      : d === false ? null
+      : <Card pad={false}>{tugas.map(function(t, i) { return <div key={t.id} className="flex items-start gap-3 px-4 py-3" style={{ borderTop: i ? '1px solid ' + COLORS.line : 'none' }}>
+        <div className="shrink-0 rounded-full flex items-center justify-center text-xs font-bold" style={{ width: 24, height: 24, marginTop: 2,
+          background: t.selesai === null ? COLORS.paper : t.selesai ? '#DCEFE3' : '#FBF3E3', color: t.selesai === null ? COLORS.muted : t.selesai ? COLORS.green : '#9A6A0B' }}>{t.selesai === null ? 'i' : t.selesai ? '✓' : '!'}</div>
+        <div className="flex-1 min-w-0">
+          <div className="text-sm font-semibold" style={{ color: COLORS.ink }}>{t.judul}</div>
+          <div className="text-xs mt-0.5" style={{ color: t.selesai === false ? '#9A6A0B' : COLORS.muted }} aria-label={'Status ' + t.id}>{t.ket}</div>
+        </div>
+        <Btn size="sm" kind={t.selesai === false ? 'solid' : 'ghost'} onClick={t.klik}>{t.aksi}</Btn>
+      </div>; })}</Card>}
+    {porsi && <LpdhHarianForm dapurId={dapurId} tanggal={tanggal} toast={toast} onClose={function() { setPorsi(false); }} onSaved={load}/>}
+  </div>;
 }
 
 // ---------- Data Penerima (relawan, PIC sekolah, kader posyandu) — dasar kwitansi harian ----------
@@ -5848,7 +6095,7 @@ function App() {
   const aktifSebagai = isAdminAsli && actAs ? actAs : null;
   ACT_AS = aktifSebagai;
   const session = aktifSebagai ? Object.assign({}, authSession, { user: Object.assign({}, authSession.user, { role: aktifSebagai.role, dapur: aktifSebagai.dapur || '' }) }) : authSession;
-  const [view, setView] = useState('dash');
+  const [view, setView] = useState(function() { const s0 = loadSession(); return s0 && s0.user && s0.user.role === 'pic' ? 'tugas' : 'dash'; });   // PIC langsung ke Tugas Harian
   const [scope, setScope] = useState('ALL');
   const [dapurList, setDapurList] = useState([]);
   const [toastData, setToastData] = useState(null);
@@ -5867,7 +6114,7 @@ function App() {
   }, [authSession, actAs]);
 
   if (!session) return (<>
-    <Login onLogin={function(s){ saveSession(s); setSession(s); setView('dash'); }} toast={toast} />
+    <Login onLogin={function(s){ saveSession(s); setSession(s); setView(s.user && s.user.role === 'pic' ? 'tugas' : 'dash'); }} toast={toast} />
     {toastData && <Toast msg={toastData.msg} type={toastData.type} onClose={function(){setToastData(null);}}/>}
   </>);
 
@@ -5895,6 +6142,7 @@ function App() {
       ['profil','Profil',I.user],
     ],
     pic: [
+      ['tugas','Tugas Harian',I.check],
       ['dash','Dashboard',I.dash],
       ['pengajuan','Pengajuan',I.file],
       ['persetujuan','Persetujuan',I.check],
@@ -5920,6 +6168,7 @@ function App() {
     ],
     admin: [
       ['dash','Dashboard',I.dash],
+      ['tugas','Tugas Harian',I.check],
       ['rencana','Rencana Ops',I.calendar],
       ['pengajuan','Pengajuan',I.file],
       ['persetujuan','Persetujuan',I.check],
@@ -6012,6 +6261,7 @@ function App() {
           {view === 'riwayat' && <Riwayat session={session} scope={effScope} toast={toast} refreshKey={refreshKey}/>}
           {view === 'bukubesar' && <BukuBesar session={session} scope={effScope} toast={toast}/>}
           {view === 'periode' && <PeriodeAdmin session={session} toast={toast}/>}
+          {view === 'tugas' && <TugasHarianPage session={session} scope={effScope} toast={toast} onBuka={setView}/>}
           {view === 'kwitansi' && <KwitansiPage session={session} scope={effScope} toast={toast}/>}
           {view === 'penerima' && <DataPenerimaPage session={session} scope={effScope} toast={toast}/>}
           {view === 'profil'  && <Profil session={session} toast={toast} onUpdated={onProfileUpdated}/>}
