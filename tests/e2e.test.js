@@ -666,7 +666,8 @@ async function isiBahanBaku(page, uraian, volume, harga) {
         transaksi: [{ id: 'T6', tanggal: p.tanggal, no_bukti: 'K-6', jenis: 'Operasional', kategori: 'Insentif Kader Posyandu', uraian: 'Insentif kader', sumber: 'VA', riil: 50000, bukti_url: 'https://drive.google.com/bukti-transfer' },
           { id: 'T8', tanggal: p.tanggal, no_bukti: 'INS-8', jenis: 'Fasilitas SPPG', kategori: 'Sewa Gedung', uraian: 'Sewa gedung', sumber: 'VA', riil: 300000, bukti_url: 'https://drive.google.com/kuitansi-lama', insentif: { ttd_otomatis: true } }],
         topups: [], komponen: { awal: [5000000, 1500000, 500000], topups: [], geser: [], nama: ['Bahan Baku', 'Operasional', 'Insentif'] },
-        kwitansi: globalThis.__kwf || {}, kwitansiPerlu: globalThis.__kwf ? [] : ['KADER', 'INSENTIF'], kwitansiNomor: { PIC_SEKOLAH: [], KADER: ['01/BASTI/SPPG-S1/X/2026'] } } }
+        kwitansi: globalThis.__kwf || {}, kwitansiNomor: { PIC_SEKOLAH: [], KADER: ['01/BASTI/SPPG-S1/X/2026'] } } }
+      : a === 'getKwitansiPerlu' ? { ok: true, data: { perlu: globalThis.__kwf ? [] : ['KADER', 'INSENTIF'] } }
       : a === 'getKwitansiCetak' ? { ok: true, data: { tanggal: p.tanggal, dapur: { id: 'D1', nama: 'SPPG Satu', kode: 'S1' }, logo: null,
         akuntan: { nama: 'Wanda', ttd: null }, kepala: { nama: 'Debbi', nip: '', ttd: null }, pengawas: { nama: 'Wanda', ttd: null }, pic: { nama: 'Pemilik', ttd: null },
         rows: [{ penerima_id: 'K1', jenis: 'KADER', nomor: '01/BASTI/SPPG-S1/X/2026', nama: 'Bu Rina', jabatan: '', lembaga: 'Posyandu Mawar', pm: 35, nominal: 50000, keterangan: '', ttd: null }],
@@ -678,6 +679,8 @@ async function isiBahanBaku(page, uraian, volume, harga) {
     await page.waitForSelector('text=Kuitansi bertanda tangan dibuat otomatis saat LPDH diunduh');
     const [dl] = await Promise.all([page.waitForEvent('download'), page.click('text=Unduh LPDH')]);
     const up = srv.log.posts.filter(x => x.action === 'simpanKwitansiFile').map(x => x.params.jenis).sort().join();
+    const cetak = srv.log.urls.concat(srv.log.posts.map(x => JSON.stringify(x.params))).find(u => /getKwitansiCetak/.test(u)) || '';
+    assert(/KADER(%2C|,)INSENTIF/.test(cetak), 'cetak ulang harus meminta jenis yang perlu saja: ' + cetak.slice(0, 200));
     assert(up === 'INSENTIF,KADER', 'kwitansi yang diminta LPDH harus dibuat & disimpan dulu: ' + up);
     const ExcelJS = require('exceljs');
     const wb = new ExcelJS.Workbook(); await wb.xlsx.readFile(await dl.path());

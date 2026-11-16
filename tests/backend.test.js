@@ -20,6 +20,7 @@ function makeEnv(usersInit, transform) {
   };
   const sheet = name => ({
     getDataRange: () => ({ getValues: () => {
+      sandbox.__baca[name] = (sandbox.__baca[name] || 0) + 1;
       const rows = book[name].map(r => r.slice());
       // tiru Google yang belum "melihat" baris terbaru Sesi (baca basi)
       if (name === 'Sesi' && sandbox.__sesiBasi > 0) { sandbox.__sesiBasi--; rows.pop(); }
@@ -63,13 +64,13 @@ function makeEnv(usersInit, transform) {
         return f.replace('yyyy', x.getFullYear()).replace('MM', p(x.getMonth() + 1)).replace('dd', p(x.getDate())).replace('HH', p(x.getHours())).replace('mm', p(x.getMinutes())).replace('ss', p(x.getSeconds())); },
     },
     Date, JSON, Math, Number, String, parseInt, Intl, Array, Object, Error,
-    __kuitansi: [], __driveGagal: false, __props: {}, __files: {},
-    PropertiesService: { getScriptProperties: () => ({ getProperty: k => (k in sandbox.__props ? sandbox.__props[k] : null), setProperty: (k, v) => { sandbox.__props[k] = v; },
-      deleteProperty: k => { delete sandbox.__props[k]; }, getProperties: () => Object.assign({}, sandbox.__props) }) },
+    __kuitansi: [], __driveGagal: false, __props: {}, __files: {}, __baca: {}, __nProps: 0, __nDrive: 0,
+    PropertiesService: { getScriptProperties: () => ({ getProperty: k => (sandbox.__nProps++, k in sandbox.__props ? sandbox.__props[k] : null), setProperty: (k, v) => { sandbox.__props[k] = v; },
+      deleteProperty: k => { delete sandbox.__props[k]; }, getProperties: () => (sandbox.__nProps++, Object.assign({}, sandbox.__props)) }) },
     DriveApp: { Access: { ANYONE_WITH_LINK: 1 }, Permission: { VIEW: 1 },
       createFile: blob => { const id = 'F' + (Object.keys(sandbox.__files).length + 1); sandbox.__files[id] = { trashed: false };
         return { getId: () => id, setSharing() {}, getUrl: () => 'https://drive/' + id }; },
-      getFileById: id => ({ setTrashed: v => { if (sandbox.__files[id]) sandbox.__files[id].trashed = v; },
+      getFileById: id => (sandbox.__nDrive++, { setTrashed: v => { if (sandbox.__files[id]) sandbox.__files[id].trashed = v; },
         getBlob: () => ({ getContentType: () => 'image/png', getBytes: () => [1, 2, 3] }) }),
       getFolderById: () => ({ createFile: blob => { if (sandbox.__driveGagal) throw new Error('Kesalahan layanan: Drive');
         sandbox.__kuitansi.push(blob); const n = sandbox.__kuitansi.length; return { setSharing() {}, getUrl: () => 'https://drive.google.com/kuitansi/' + n, getId: () => 'K' + n }; } }) },
@@ -92,7 +93,7 @@ const ok = (c, m) => { console.log((c ? 'PASS ' : 'FAIL ') + m); if (!c) fails++
     ['U3', 'off', 'xxxxxxx', 'Nonaktif', 'pic', 'D001', 'TIDAK'],
   ]);
   const B = env.__book;
-  ok(call(env, 'GET', { action: 'ping' }).version === 'v6-ba-sec27', 'ping menampilkan versi baru');
+  ok(call(env, 'GET', { action: 'ping' }).version === 'v6-ba-sec28', 'ping menampilkan versi baru');
 
   // 1. login lama (teks biasa) berhasil via POST dan password otomatis di-hash
   let r = call(env, 'POST', { action: 'login', username: 'AKUN1', password: 'RahasiaKu9' });
@@ -795,28 +796,28 @@ const ok = (c, m) => { console.log((c ? 'PASS ' : 'FAIL ') + m); if (!c) fails++
   {
     const tA = tk8('akn'), tP = tk8('pic'), png = 'data:image/png;base64,' + Buffer.from('ttd2').toString('base64');
     let r = call(e8, 'POST', { action: 'getDataLPDH', token: tA, dapur: 'D001', tanggal: '2026-10-21' });
-    ok(r.ok && JSON.stringify(r.data.kwitansiPerlu) === '["KADER"]', 'kwitansi terbit tanpa PDF → LPDH meminta dibuat (' + JSON.stringify(r.data && r.data.kwitansiPerlu) + ')');
+    ok(r.ok && !('kwitansiPerlu' in r.data) && JSON.stringify(call(e8, 'POST', { action: 'getKwitansiPerlu', token: tA, tanggal: '2026-10-21' }).data.perlu) === '["KADER"]', 'kwitansi terbit tanpa PDF → diminta dibuat saat unduh (dicek terpisah, tidak memberatkan pemuatan LPDH)');
     r = call(e8, 'POST', { action: 'getKwitansiCetak', token: tA, tanggal: '2026-10-21' });
     ok(r.ok && r.data.rows.length === 1 && r.data.rows[0].nomor === '02/BASTI/SPPG-S1/X/2026' && r.data.rows[0].nominal === 55000 && r.data.kepala && r.data.akuntan && r.data.pic,
       'bahan cetak ulang memakai kwitansi yang sudah terbit (nomor & nominal tetap)');
     const idKd = r.data.rows[0].penerima_id;
     call(e8, 'POST', { action: 'simpanKwitansiFile', token: tP, tanggal: '2026-10-21', jenis: 'KADER', fileData: 'JVBERg==' });
     r = call(e8, 'POST', { action: 'getDataLPDH', token: tA, dapur: 'D001', tanggal: '2026-10-21' });
-    ok(r.data.kwitansiPerlu.length === 0 && /^https:/.test(r.data.kwitansi.KADER), 'setelah PDF tersimpan: tidak perlu dibuat lagi, link masuk LPDH');
+    ok(call(e8, 'POST', { action: 'getKwitansiPerlu', token: tA, tanggal: '2026-10-21' }).data.perlu.length === 0 && /^https:/.test(r.data.kwitansi.KADER), 'setelah PDF tersimpan: tidak perlu dibuat lagi, link masuk LPDH');
     ok(JSON.stringify(r.data.kwitansiNomor) === JSON.stringify({ PIC_SEKOLAH: [], KADER: ['02/BASTI/SPPG-S1/X/2026'] }), 'LPDH membawa nomor BASTI kwitansi hari itu (' + JSON.stringify(r.data.kwitansiNomor) + ')');
     call(e8, 'POST', { action: 'saveTtd', token: tA, untuk: 'penerima', id: idKd, fileData: png });
     r = call(e8, 'POST', { action: 'getDataLPDH', token: tA, dapur: 'D001', tanggal: '2026-10-21' });
-    ok(JSON.stringify(r.data.kwitansiPerlu) === '["KADER"]', 'tanda tangan penerima berubah → PDF lama dianggap usang & dibuat ulang');
+    ok(JSON.stringify(call(e8, 'POST', { action: 'getKwitansiPerlu', token: tA, tanggal: '2026-10-21' }).data.perlu) === '["KADER"]', 'tanda tangan penerima berubah → PDF lama dianggap usang & dibuat ulang');
     r = call(e8, 'POST', { action: 'getDataLPDH', token: tk8('yay'), dapur: 'D001', tanggal: '2026-10-21' });
-    ok(r.ok && r.data.kwitansiPerlu.length === 0, 'Yayasan (hanya baca) tidak diminta membuat kwitansi');
+    ok(r.ok && call(e8, 'POST', { action: 'getKwitansiPerlu', token: tk8('yay'), dapur: 'D001', tanggal: '2026-10-21' }).data.perlu.length === 0, 'Yayasan (hanya baca) tidak diminta membuat kwitansi');
     r = call(e8, 'POST', { action: 'getDataLPDH', token: tA, dapur: 'D001', tanggal: '2026-10-17' });
-    ok(r.data.kwitansiPerlu.indexOf('INSENTIF') >= 0, 'insentif Mitra/Yayasan hari itu → kuitansi bertanda tangan diminta dibuat');
+    ok(call(e8, 'POST', { action: 'getKwitansiPerlu', token: tA, tanggal: '2026-10-17' }).data.perlu.indexOf('INSENTIF') >= 0, 'insentif Mitra/Yayasan hari itu → kuitansi bertanda tangan diminta dibuat');
     r = call(e8, 'POST', { action: 'getKwitansiCetak', token: tA, tanggal: '2026-10-17' });
     ok(r.data.insentif.length === 1 && r.data.insentif[0].nominal === 5000000 && r.data.insentif[0].no_bukti === 'INS-1' && 'ttd' in r.data.pengawas, 'bahan kuitansi insentif: nominal, nomor bukti, penandatangan');
     r = call(e8, 'POST', { action: 'simpanKwitansiFile', token: tP, tanggal: '2026-10-17', jenis: 'INSENTIF', fileData: 'JVBERg==' });
     ok(r.ok, 'PDF kuitansi insentif tersimpan: ' + (r.error || ''));
     r = call(e8, 'POST', { action: 'getDataLPDH', token: tA, dapur: 'D001', tanggal: '2026-10-17' });
-    ok(r.data.kwitansiPerlu.indexOf('INSENTIF') < 0 && /^https:/.test(r.data.kwitansi.INSENTIF), 'link kuitansi insentif bertanda tangan masuk LPDH');
+    ok(call(e8, 'POST', { action: 'getKwitansiPerlu', token: tA, tanggal: '2026-10-17' }).data.perlu.indexOf('INSENTIF') < 0 && /^https:/.test(r.data.kwitansi.INSENTIF), 'link kuitansi insentif bertanda tangan masuk LPDH');
   }
 
 
@@ -837,6 +838,26 @@ const ok = (c, m) => { console.log((c ? 'PASS ' : 'FAIL ') + m); if (!c) fails++
     ok(typeof r.data.persetujuan.baris === 'number' && r.data.penerima.aktif.RELAWAN >= 1 && 'kepala' in r.data.ttd && Array.isArray(r.data.lpdh.kwitansiPerlu), 'tugas harian: persetujuan, penerima aktif, TTD, LPDH');
     r = call(e8, 'POST', { action: 'getTugasHarian', token: tk8('akn'), tanggal: '2026-10-24' });
     ok(r.ok && r.data.porsi.ada === false && r.data.bisaSetuju === false, 'hari tanpa isian: porsi belum diisi; akuntan tidak menyetujui');
+  }
+
+
+  // ── Beban per permintaan: pemuatan LPDH & Tugas Harian tidak membaca sheet/Properties berulang ──
+  {
+    const tA = tk8('akn'), tP = tk8('pic');
+    const ukur = (fn) => { e8.__baca = {}; e8.__nProps = 0; e8.__nDrive = 0; const r = fn(); const tot = Object.values(e8.__baca).reduce((a, b) => a + b, 0); return { r, baca: Object.assign({}, e8.__baca), tot, props: e8.__nProps, drive: e8.__nDrive }; };
+    let m = ukur(() => call(e8, 'POST', { action: 'getDataLPDH', token: tA, dapur: 'D001', tanggal: '2026-10-21' }));
+    console.log('   getDataLPDH: ' + m.tot + ' baca sheet ' + JSON.stringify(m.baca) + ', ' + m.props + ' panggilan Properties');
+    ok(m.r.ok && (m.baca.Transaksi || 0) <= 1 && (m.baca.KwitansiHarian || 0) <= 1 && (m.baca.Users || 0) <= 2 && m.props <= 3, 'pemuatan LPDH: Transaksi, KwitansiHarian & Users dibaca sekali, Properties ≤ 3×');
+    m = ukur(() => call(e8, 'POST', { action: 'getTugasHarian', token: tP, tanggal: '2026-10-21' }));
+    console.log('   getTugasHarian: ' + m.tot + ' baca sheet ' + JSON.stringify(m.baca) + ', ' + m.props + ' panggilan Properties');
+    ok(m.r.ok && (m.baca.Transaksi || 0) <= 1 && (m.baca.KwitansiHarian || 0) <= 1 && m.props <= 3, 'Tugas Harian: tiap sheet dibaca sekali, Properties ≤ 3×');
+    m = ukur(() => call(e8, 'POST', { action: 'getKwitansiPerlu', token: tA, tanggal: '2026-10-21' }));
+    ok(m.r.ok && m.props <= 2 && (m.baca.KwitansiHarian || 0) <= 1, 'cek kwitansi yang perlu dibuat: ringan (' + m.tot + ' baca, ' + m.props + ' Properties)');
+    call(e8, 'POST', { action: 'getKwitansiCetak', token: tA, tanggal: '2026-10-21' });
+    m = ukur(() => call(e8, 'POST', { action: 'getKwitansiCetak', token: tA, tanggal: '2026-10-21' }));
+    ok(m.drive === 0, 'gambar tanda tangan diambil dari cache pada permintaan berikutnya (Drive dibuka ' + m.drive + '×)');
+    m = ukur(() => call(e8, 'POST', { action: 'getKwitansiCetak', token: tA, tanggal: '2026-10-21', jenis: 'INSENTIF' }));
+    ok(m.r.ok && m.r.data.rows.length === 0, 'cetak ulang hanya jenis yang diminta (baris lain tidak dibaca)');
   }
 
   console.log(fails ? '\n' + fails + ' GAGAL' : '\nSEMUA LULUS');
