@@ -1622,6 +1622,7 @@ function roKodeBank(b) {
   return s.trim();
 }
 function roFee(item, penerimaMap, bankVA) {
+  if (item.status === 'TRANSAKSI') return 0;   // transaksi tercatat: biaya admin (bila ada) sudah jadi baris sendiri
   const pn = penerimaMap && penerimaMap[item.penerima_id];
   if (!pn) return RO_FEE;
   const a = roKodeBank(pn.bank), b = roKodeBank(bankVA);
@@ -1746,8 +1747,8 @@ function roMatriks(items, ctx, setelan, hariSet, dariTgl) {
     tot[x.kategori] = (tot[x.kategori] || 0) + x.nominal;
     const f = roFee(x, pmap, ctx.bankVA);
     if (!x.tanggal) { tak[x.kategori] = (tak[x.kategori] || 0) + x.nominal + f; (takItems[x.kategori] = takItems[x.kategori] || []).push(x); return; }
-    const r = sel[x.tanggal] = sel[x.tanggal] || {}, c = r[x.kategori] = r[x.kategori] || { nominal: 0, n: 0, aju: 0, items: [] };
-    c.nominal += x.nominal; c.n++; if (x.pengajuan_id) c.aju++; c.items.push(x);
+    const r = sel[x.tanggal] = sel[x.tanggal] || {}, c = r[x.kategori] = r[x.kategori] || { nominal: 0, n: 0, aju: 0, luar: 0, items: [] };
+    c.nominal += x.nominal; c.n++; if (x.luar) c.luar++; else if (x.pengajuan_id) c.aju++; c.items.push(x);
     fee[x.tanggal] = (fee[x.tanggal] || 0) + f;
   });
   const kolom = Object.keys(tot).sort(function(a, b) {
@@ -1831,10 +1832,13 @@ function RencanaOpsPage({ session, scope, toast }) {
   if (!ctx) return <Card><div className="text-sm" style={{ color: COLORS.muted }}>Rencana tidak dapat dimuat.</div></Card>;
   const bisaUbah = ctx.bisaUbah && ctx.periode.status === 'AKTIF';
   const pmap = {}; ctx.penerima.forEach(function(p) { pmap[p.id] = p; });
-  const ring = roRingkas(items, ctx, setelan, hariSet, todayISO());
+  const ring = roRingkas(items.concat((ctx.luar || []).map(function(x) { return Object.assign({ luar: true }, x); })), ctx, setelan, hariSet, todayISO());
   const ubah = function(fn) { setItems(fn); setDirty(true); };
   const ubahHari = function(t, patch) { setHariSet(Object.assign({}, hariSet, { [t]: Object.assign({}, hariSet[t] || {}, patch) })); setDirty(true); };
-  const terkunci = function(x) { return !!x.pengajuan_id; };
+  const terkunci = function(x) { return !!x.pengajuan_id || !!x.luar; };
+  // operasional di luar rencana (menu Pengajuan / input darurat): ikut dihitung pagu, tampil biru, tidak bisa diubah di sini
+  const luarItems = (ctx.luar || []).map(function(x) { return Object.assign({ luar: true }, x); });
+  const hitung = items.concat(luarItems);
   const hariIni = todayISO();
   const lewat = function(t) { return !!t && t < hariIni; };   // tanggal yang sudah lewat: tidak bisa diisi / diajukan
   async function simpan(itemsArg) {
@@ -1847,7 +1851,7 @@ function RencanaOpsPage({ session, scope, toast }) {
   function usulkan() {
     seedRef.current += 1;
     const tetap = items.filter(function(x) { return terkunci(x) || lewat(x.tanggal); });
-    const u = roUsulkan(ctx, setelan, hariSet, seedRef.current, tetap, hariIni);
+    const u = roUsulkan(ctx, setelan, hariSet, seedRef.current, tetap.concat(luarItems), hariIni);   // pagu yang sudah dipakai di luar rencana ikut diperhitungkan
     const muat = u.items.filter(function(x) { return x.tanggal; });   // yang tidak muat tidak dimasukkan ke rencana
     const tak = u.items.length - muat.length, takNilai = u.items.filter(function(x) { return !x.tanggal; }).reduce(function(a, x) { return a + x.nominal; }, 0);
     ubah(function() { return tetap.concat(muat); });
@@ -1863,7 +1867,7 @@ function RencanaOpsPage({ session, scope, toast }) {
     if (!baris.length) { toast(hanyaId ? 'Pilih penerima baris ini dulu' : 'Belum ada baris siap diajukan (penerima belum dipilih)', 'error'); return; }
     const h = roHari(ctx.periode, hariSet).find(function(d) { return d.tanggal === t; });
     const nilai = function(a) { return a.reduce(function(sm, x) { return sm + x.nominal + roFee(x, pmap, ctx.bankVA); }, 0); };
-    const sudah = nilai(semua.filter(function(x) { return x.tanggal === t && terkunci(x); }));
+    const sudah = nilai(semua.concat(luarItems).filter(function(x) { return x.tanggal === t && terkunci(x); }));
     if (sudah + nilai(baris) > roPagu(h, setelan)) { toast('Melebihi pagu harian ' + fmt(roPagu(h, setelan)) + ' (sudah diajukan ' + fmt(sudah) + ') — kurangi atau pindahkan dulu', 'error'); return; }
     if (daftar) setItems(daftar);
     setKonfirmAju({ t: t, baris: baris, semua: semua, perluSimpan: !!(dirty || daftar) });   // konfirmasi dulu — cegah terkirim tak sengaja
@@ -1886,11 +1890,11 @@ function RencanaOpsPage({ session, scope, toast }) {
   }
   const stBaris = roStatusBaris(items, ctx.status), idPItem = roIdItemPengajuan(items);
   async function batalAju(x, alasan) {
-    const r = await apiPost('batalkanItem', { item_id: idPItem[x.id], alasan: alasan || 'Dibatalkan dari Rencana Ops' });
+    const r = await apiPost('batalkanItem', { item_id: x.pitem_id || idPItem[x.id], alasan: alasan || 'Dibatalkan dari Rencana Ops' });
     if (!r.ok) { toast('Gagal membatalkan: ' + (r.error || ''), 'error'); return; }
     setEdit(null); toast('Pengajuan ' + x.nomor + ' dibatalkan — baris bisa diubah lagi'); load();
   }
-  const statusAju = function(x) { return ({ DIAJUKAN: 'Menunggu persetujuan', DISETUJUI: 'Disetujui', REVISI: 'Perlu revisi — ubah di menu Pengajuan', TEREALISASI: 'Terealisasi' })[stBaris[x.id]] || 'Diajukan'; };
+  const statusAju = function(x) { return (x.luar ? 'Di luar rencana · ' : '') + (({ DIAJUKAN: 'Menunggu persetujuan', DISETUJUI: 'Disetujui', REVISI: 'Perlu revisi — ubah di menu Pengajuan', TEREALISASI: 'Terealisasi', TRANSAKSI: 'Transaksi tercatat' })[x.luar ? x.status : stBaris[x.id]] || 'Diajukan'); };
   const Baris = function({ x }) {
     const fee = roFee(x, pmap, ctx.bankVA), pn = pmap[x.penerima_id];
     return <button type="button" onClick={function() { setEdit(Object.assign({}, x)); }} className="w-full text-left flex items-start justify-between gap-2 py-2"
@@ -1898,7 +1902,7 @@ function RencanaOpsPage({ session, scope, toast }) {
       <div className="min-w-0">
         <div className="text-sm truncate" style={{ color: COLORS.ink }}>{x.rutin ? '↻ ' : ''}{x.uraian}{x.bagian ? ' · bagian ' + x.bagian : ''}</div>
         <div className="text-xs truncate" style={{ color: pn ? COLORS.muted : COLORS.danger }}>{x.kategori} · {pn ? pn.nama + ' (' + roKodeBank(pn.bank) + ')' : 'penerima belum dipilih'}{fee ? ' · admin ' + fmtNoRp(fee) : ''}</div>
-        {x.pengajuan_id && <div className="text-[11px] font-semibold" style={{ color: stBaris[x.id] === 'REVISI' ? COLORS.amber : COLORS.green }}>{x.nomor} · {statusAju(x)}</div>}
+        {(x.pengajuan_id || x.luar) && <div className="text-[11px] font-semibold" style={{ color: x.luar ? COLORS.blue : stBaris[x.id] === 'REVISI' ? COLORS.amber : COLORS.green }}>{x.nomor ? x.nomor + ' · ' : ''}{statusAju(x)}</div>}
         {!x.pengajuan_id && x.batal && <div className="text-[11px] font-semibold" style={{ color: COLORS.amber }}>Pengajuan sebelumnya {x.batal} — bisa diubah & diajukan lagi</div>}
       </div>
       <div className="text-sm font-semibold num shrink-0" style={{ color: COLORS.ink }}>{fmtNoRp(x.nominal)}</div>
@@ -1918,6 +1922,8 @@ function RencanaOpsPage({ session, scope, toast }) {
       <div className="rounded-lg p-3 text-sm space-y-1" style={{ background: COLORS.paper }}>
         <div className="flex justify-between"><span style={{ color: COLORS.muted }}>Pagu sisa periode ({ring.nAktif} HPE, mulai hari ini)</span><b className="num">{fmt(ring.paguAktif)}</b></div>
         <div className="flex justify-between"><span style={{ color: COLORS.muted }}>Terjadwal di hari tersisa (termasuk biaya transfer)</span><b className="num">{fmt(ring.rencanaAktif)}</b></div>
+        {luarItems.some(function(x) { return x.tanggal >= hariIni; }) && <div className="flex justify-between"><span style={{ color: COLORS.blue }}>— termasuk di luar rencana (menu Pengajuan / darurat)</span>
+          <b className="num" style={{ color: COLORS.blue }}>{fmt(luarItems.filter(function(x) { return x.tanggal >= hariIni; }).reduce(function(a, x) { return a + x.nominal + roFee(x, pmap, ctx.bankVA); }, 0))}</b></div>}
         <div className="flex justify-between"><span style={{ color: COLORS.muted }}>Sisa pagu belum terpakai</span><b className="num">{fmt(Math.max(0, ring.paguAktif - ring.rencanaAktif))}</b></div>
         {ring.nLebih > 0 && <div className="flex justify-between" style={{ color: COLORS.danger }}><span>{ring.nLebih} hari melebihi pagu</span><b className="num">{fmt(ring.lebih)}</b></div>}
         {ring.takMuat > 0 && <div className="flex justify-between" style={{ color: COLORS.danger }}><span>Tidak muat ({ring.takMuat} baris)</span><b className="num">{fmt(ring.takNilai)}</b></div>}
@@ -1942,7 +1948,7 @@ function RencanaOpsPage({ session, scope, toast }) {
         className="flex-1 rounded-lg py-2 text-sm font-semibold" style={{ background: tampil === t[0] ? COLORS.green : COLORS.surface, color: tampil === t[0] ? '#fff' : COLORS.ink, border: '1px solid ' + COLORS.line }}>{t[1]}</button>; })}
     </div>
 
-    {tampil === 'tabel' && <RencanaMatriks m={roMatriks(items, ctx, setelan, hariSet, hariIni)} bisaUbah={bisaUbah} ajukanTgl={ajukanTgl} lewat={lewat}
+    {tampil === 'tabel' && <RencanaMatriks m={roMatriks(hitung, ctx, setelan, hariSet, hariIni)} bisaUbah={bisaUbah} ajukanTgl={ajukanTgl} lewat={lewat}
       onPm={function(t, pm) { ubahHari(t, { pm: pm }); }} pmSetup={ctx.periode.penerima}
       onSel={function(t, k, c) {
         if (c && c.items.length === 1) setEdit(Object.assign({}, c.items[0]));
@@ -1958,7 +1964,7 @@ function RencanaOpsPage({ session, scope, toast }) {
     </Card>}
 
     {tampil === 'hari' && ring.hari.map(function(h) {
-      const baris = items.filter(function(x) { return x.tanggal === h.tanggal; });
+      const baris = hitung.filter(function(x) { return x.tanggal === h.tanggal; });
       const lebih = h.pakai > h.pagu, warn = !lebih && h.pakai > h.batas;
       const pct = h.pagu ? Math.min(100, Math.round(h.pakai / h.pagu * 100)) : (h.pakai ? 100 : 0);
       const belum = baris.filter(function(x) { return !terkunci(x) && x.penerima_id; });
@@ -2003,7 +2009,7 @@ function RencanaOpsPage({ session, scope, toast }) {
       onClose={function() { setHapusTak(false); }}/>}
     {konfirm && <ConfirmModal title="Usulkan ulang?" message="Baris yang belum diajukan akan diganti usulan baru (susunan hari berbeda). Baris yang sudah diajukan tetap." confirmLabel="Usulkan ulang" onConfirm={usulkan} onClose={function() { setKonfirm(false); }}/>}
     {edit && <RencanaItemModal x={edit} ctx={ctx} hari={ring.hari} kategori={kategori.filter(function(k) { return RO_TANPA.indexOf(k) < 0; })} bisaUbah={bisaUbah && !terkunci(edit) && !lewat(edit.tanggal)} pmap={pmap}
-      lewat={lewat} busy={!!ajukanTgl} toast={toast} statusBaris={stBaris[edit.id]} bisaBatal={role === 'akuntan' && ctx.periode.status === 'AKTIF'} onBatal={batalAju}
+      lewat={lewat} busy={!!ajukanTgl} toast={toast} statusBaris={edit.luar ? edit.status : stBaris[edit.id]} bisaBatal={role === 'akuntan' && ctx.periode.status === 'AKTIF'} onBatal={batalAju}
       onPenerima={function(saved) { setCtx(function(c) { const ada = c.penerima.some(function(p) { return p.id === saved.id; });
         return Object.assign({}, c, { penerima: (ada ? c.penerima.map(function(p) { return p.id === saved.id ? Object.assign({}, p, saved) : p; }) : c.penerima.concat([saved]))
           .sort(function(a, b) { return a.nama.localeCompare(b.nama); }) }); }); }}
@@ -2030,6 +2036,7 @@ function RencanaMatriks({ m, bisaUbah, ajukanTgl, onSel, onAjukan, terkunci, lew
       Tombol Ajukan mengirim baris yang penerimanya sudah dipilih; satu baris bisa diajukan sendiri dari selnya.
       PM tiap hari bisa diubah langsung di kolom Hari (bingkai kuning = berbeda dari PM setup {fmtNoRp(pmSetup)}); pagu hari itu ikut berubah — jangan lupa Simpan.
       <span className="inline-flex items-center gap-1 ml-2"><span style={{ width: 10, height: 10, background: '#DCEFE3', display: 'inline-block', borderRadius: 2 }}/> sudah diajukan</span>
+      <span className="inline-flex items-center gap-1 ml-2"><span style={{ width: 10, height: 10, background: '#E3ECF7', display: 'inline-block', borderRadius: 2 }}/> di luar rencana (menu Pengajuan / input darurat)</span>
       <span className="inline-flex items-center gap-1 ml-2"><span style={{ width: 10, height: 10, background: '#F8E9E5', display: 'inline-block', borderRadius: 2 }}/> melebihi pagu</span></div>
     <div style={{ overflowX: 'auto' }}>
       <table style={{ borderCollapse: 'separate', borderSpacing: 0, minWidth: '100%' }} aria-label="Matriks rencana operasional">
@@ -2042,7 +2049,7 @@ function RencanaMatriks({ m, bisaUbah, ajukanTgl, onSel, onAjukan, terkunci, lew
           {r.hari.map(function(h) {
             const row = m.sel[h.tanggal] || {}, lebih = h.pakai > h.pagu, sisa = h.pagu - h.pakai;
             const sudahLewat = lewat(h.tanggal);
-            const belum = kol.reduce(function(n, k) { return n + (row[k] ? row[k].items.filter(function(x) { return !x.pengajuan_id && x.penerima_id; }).length : 0); }, 0);
+            const belum = kol.reduce(function(n, k) { return n + (row[k] ? row[k].items.filter(function(x) { return !x.pengajuan_id && !x.luar && x.penerima_id; }).length : 0); }, 0);
             const bg = sudahLewat ? '#EEEEEA' : lebih ? '#F8E9E5' : h.libur ? COLORS.paper : COLORS.surface;
             return <tr key={h.tanggal}>
               <td style={Object.assign({}, td, kiri, { background: bg, fontWeight: 600, color: COLORS.ink })}>{h.nama} {h.tanggal.slice(8)}/{h.tanggal.slice(5, 7)}
@@ -2056,7 +2063,7 @@ function RencanaMatriks({ m, bisaUbah, ajukanTgl, onSel, onAjukan, terkunci, lew
               {kol.map(function(k) { const c = row[k];
                 const bisaTambah = !h.libur && !sudahLewat && bisaUbah;
                 return <td key={k} onClick={function() { if (c || bisaTambah) onSel(h.tanggal, k, c); }} style={Object.assign({}, td, { cursor: c || bisaTambah ? 'pointer' : 'default',
-                  background: c && c.aju === c.n ? '#DCEFE3' : bg, color: c ? (sudahLewat ? COLORS.muted : COLORS.ink) : COLORS.line })} aria-label={roLabel(k) + ' ' + h.tanggal}>
+                  background: c && c.luar === c.n ? '#E3ECF7' : c && c.aju + c.luar === c.n ? '#DCEFE3' : bg, color: c ? (sudahLewat ? COLORS.muted : COLORS.ink) : COLORS.line })} aria-label={roLabel(k) + ' ' + h.tanggal}>
                   {c ? singkat(c.nominal) + (c.n > 1 ? ' ×' + c.n : '') : (bisaTambah ? '·' : '')}</td>; })}
               <td style={Object.assign({}, td, { background: bg, color: COLORS.muted })}>{m.fee[h.tanggal] ? singkat(m.fee[h.tanggal]) : ''}</td>
               <td style={Object.assign({}, td, { background: bg, fontWeight: 700 })}>{h.pakai ? singkat(h.pakai) : ''}</td>
@@ -2099,6 +2106,9 @@ function RencanaItemModal({ x, ctx, hari, kategori, bisaUbah, pmap, onClose, onS
   const sisa = h ? h.pagu - h.pakai + lama : 0, butuh = (Number(f.nominal) || 0) + roFee(f, pmap, ctx.bankVA);
   const err = !f.kategori ? 'Pilih kategori' : !String(f.uraian || '').trim() ? 'Uraian wajib' : !(Number(f.nominal) > 0) ? 'Nominal wajib' : null;
   return <Modal title={x.baru ? 'Tambah kebutuhan' : (bisaUbah ? 'Ubah baris rencana' : 'Baris rencana')} onClose={onClose}>
+    {x.luar && x.status === 'TRANSAKSI' && <div className="rounded-lg p-2.5 mb-3 text-xs" style={{ background: '#E3ECF7', color: COLORS.blue }}>
+      Transaksi tanpa pengajuan (input darurat / manual){x.nomor ? ', no bukti ' + x.nomor : ''}. Ikut dihitung dalam pagu hari ini; ubah lewat menu Riwayat.</div>}
+    {x.pengajuan_id && x.luar && <div className="rounded-lg p-2.5 mb-1 text-xs" style={{ background: '#E3ECF7', color: COLORS.blue }}>Diajukan di luar rencana, lewat menu Pengajuan. Ikut dihitung dalam pagu hari itu.</div>}
     {x.pengajuan_id && <div className="rounded-lg p-2.5 mb-3 text-xs" style={{ background: '#E8F1EC', color: COLORS.deep }}>
       Sudah diajukan ({x.nomor}) — <b>{labelSt}</b>, hari H {fmtDateLong(x.tanggal)}. Lihat di menu <b>Pengajuan</b> → tampilan <b>Periode aktif</b>{statusBaris === 'DISETUJUI' ? ', dan di menu Realisasi' : ''}.
       {bolehBatal && <div className="mt-2">

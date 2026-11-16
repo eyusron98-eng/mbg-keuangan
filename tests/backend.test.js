@@ -85,7 +85,7 @@ const ok = (c, m) => { console.log((c ? 'PASS ' : 'FAIL ') + m); if (!c) fails++
     ['U3', 'off', 'xxxxxxx', 'Nonaktif', 'pic', 'D001', 'TIDAK'],
   ]);
   const B = env.__book;
-  ok(call(env, 'GET', { action: 'ping' }).version === 'v6-ba-sec18', 'ping menampilkan versi baru');
+  ok(call(env, 'GET', { action: 'ping' }).version === 'v6-ba-sec19', 'ping menampilkan versi baru');
 
   // 1. login lama (teks biasa) berhasil via POST dan password otomatis di-hash
   let r = call(env, 'POST', { action: 'login', username: 'AKUN1', password: 'RahasiaKu9' });
@@ -611,6 +611,10 @@ const ok = (c, m) => { console.log((c ? 'PASS ' : 'FAIL ') + m); if (!c) fails++
     const tAkn = tk8('akn');
     let r = call(e8, 'GET', { action: 'getRencanaOps', token: tAkn });
     ok(r.ok && r.data.periode.id === 'P1' && r.data.rencana === null && r.data.penerima.some(p => p.id === 'pn1'), 'rencana: periode aktif dimuat, belum ada rencana: ' + (r.error || ''));
+    { const L = r.data.luar || [];
+      ok(L.some(x => x.pitem_id === 'K-GAS' && x.status === 'TEREALISASI' && x.nominal === 200000), 'pengajuan operasional dari menu Pengajuan masuk daftar "di luar rencana" (' + L.length + ')');
+      ok(L.some(x => x.id === 'LUAR-T1' && x.status === 'TRANSAKSI' && x.kategori === 'Listrik'), 'transaksi operasional tanpa pengajuan ikut dihitung');
+      ok(!L.some(x => x.kategori === 'Semua Kategori' || /DITOLAK|DIBATALKAN/.test(x.status)), 'bahan baku & pengajuan batal/ditolak tidak ikut'); }
     const isi = { versi: 0, setelan: { indeks: 100, batas: 95 }, hari: { '2026-10-09': { pm: 200 }, '2026-10-12': { libur: true }, '2026-12-01': { pm: 5 } },
       items: [{ id: 'RO1', tanggal: '2026-10-09', kategori: 'Gas', uraian: 'Isi gas 12 kg', nominal: 300000, penerima_id: 'pn1' }, { id: 'RO2', tanggal: '', kategori: 'APD', uraian: 'Masker', nominal: 50000 }] };
     r = call(e8, 'POST', { action: 'saveRencanaOps', token: tAkn, data: isi });
