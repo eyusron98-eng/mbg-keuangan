@@ -85,7 +85,7 @@ const ok = (c, m) => { console.log((c ? 'PASS ' : 'FAIL ') + m); if (!c) fails++
     ['U3', 'off', 'xxxxxxx', 'Nonaktif', 'pic', 'D001', 'TIDAK'],
   ]);
   const B = env.__book;
-  ok(call(env, 'GET', { action: 'ping' }).version === 'v6-ba-sec20', 'ping menampilkan versi baru');
+  ok(call(env, 'GET', { action: 'ping' }).version === 'v6-ba-sec21', 'ping menampilkan versi baru');
 
   // 1. login lama (teks biasa) berhasil via POST dan password otomatis di-hash
   let r = call(env, 'POST', { action: 'login', username: 'AKUN1', password: 'RahasiaKu9' });
@@ -605,6 +605,17 @@ const ok = (c, m) => { console.log((c ? 'PASS ' : 'FAIL ') + m); if (!c) fails++
   ok(r.ok, 'edit dengan nomor notanya sendiri tetap boleh: ' + (r.error || ''));
 
   ok(e8.teksSel('01-2026') === "'01-2026" && e8.teksSel('1/10') === "'1/10" && e8.teksSel('NT-001') === 'NT-001' && e8.teksSel('') === '', 'nomor bukti mirip tanggal/angka disimpan sebagai teks');
+
+  // ── Catatan akuntan (mis. melebihi pagu harian) ikut ke Yayasan & tidak hilang saat diputuskan ──
+  {
+    let r = call(e8, 'POST', { action: 'createPengajuan', token: tk8('akn'), tanggal: '2026-10-16', request_id: 'cat-1',
+      items: [{ jenis: 'Operasional', kategori: 'Gas', uraian: 'Gas 12 kg', nominal: 900000, penerima_id: 'pn1', catatan: 'Melebihi pagu harian Rp 200.000. Alasan: stok gas habis' }] });
+    ok(r.ok, 'pengajuan dengan catatan akuntan terkirim: ' + (r.error || ''));
+    const it = B8.PengajuanItem.find(x => x[1] === r.data.id);
+    ok(it && it[15] === 'Catatan akuntan: Melebihi pagu harian Rp 200.000. Alasan: stok gas habis', 'catatan tersimpan dengan awalan "Catatan akuntan:" (' + (it && it[15]) + ')');
+    r = call(e8, 'POST', { action: 'decidePengajuan', token: tk8('adm'), pengajuan_id: it[1], keputusan: [{ item_id: it[0], status: 'DISETUJUI' }] });
+    ok(r.ok && it[14] === 'DISETUJUI' && /^Catatan akuntan: Melebihi pagu/.test(it[15]), 'disetujui tanpa catatan → catatan akuntan tetap ada: ' + (r.error || it[15]));
+  }
 
   // ── Rencana operasional per periode ──
   {

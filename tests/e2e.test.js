@@ -531,10 +531,17 @@ async function isiBahanBaku(page, uraian, volume, harga) {
     await page.waitForSelector('[aria-label="Matriks rencana operasional"]');
     assert(await page.isVisible('th:has-text("Gas")') && await page.isVisible('th:has-text("Listrik")'), 'pos di luar rencana tidak tampil di matriks');
     await page.waitForSelector('text=termasuk di luar rencana');
-    // 3 Nov: 2,5 jt + 0,3 jt di luar rencana + APD 0,4 jt = 3,2 jt > pagu 3 jt → ajukan APD ditolak
+    // 3 Nov: 2,5 jt + 0,3 jt di luar rencana + APD 0,4 jt = 3,2 jt > pagu 3 jt → boleh diajukan, tapi alasan wajib
     await page.click('button:has-text("Ajukan 1") >> nth=0');
-    await page.waitForSelector('text=Melebihi pagu harian');
-    assert(globalThis.__ro5.aju.length === 0, 'pengajuan melebihi pagu tetap terkirim');
+    await page.waitForSelector('text=Melebihi pagu harian Rp 200.000');
+    assert(await page.isDisabled('button:has-text("Ajukan dengan catatan")'), 'tanpa alasan, pengajuan melebihi pagu tetap bisa dikirim');
+    await page.fill('[aria-label="Catatan untuk Yayasan"]', 'Stok masker habis, harus beli hari ini');
+    await page.click('button:has-text("Ajukan dengan catatan")');
+    await page.waitForSelector('text=Pengajuan BA-9 terkirim');
+    const aj5 = globalThis.__ro5.aju[0];
+    assert(aj5 && /^Melebihi pagu harian Rp 200\.000 \(pagu Rp 3\.000\.000, PM 1\.000\)\. Alasan: Stok masker habis/.test(aj5.items[0].catatan), 'catatan tidak terkirim: ' + JSON.stringify(aj5));
+    assert(/Catatan:\* Melebihi pagu harian/.test(await page.inputValue('.sheet textarea')), 'catatan tidak ada di teks WA');
+    await page.click('button:has-text("Tutup")');
     await page.click('[aria-label="Gas 2026-11-03"]');
     await page.waitForSelector('text=Diajukan di luar rencana');
     assert(!(await page.isEnabled('[aria-label="Nominal rencana"]')), 'baris di luar rencana bisa diubah di matriks');
@@ -779,6 +786,7 @@ async function isiBahanBaku(page, uraian, volume, harga) {
     assert(await page.isVisible('text=Sudah diajukan, belum direalisasi (2 baris)') && await page.isVisible('text=belum diajukan — pastikan tidak dobel'), 'rincian pagu tidak lengkap');
     await page.fill('.rounded-lg input[inputmode=numeric] >> nth=0', '600000');
     await page.waitForSelector('text=melebihi pagu harian Rp 100.000');
+    await page.waitForSelector('[aria-label="Alasan melebihi pagu"]');
     assert(globalThis.__pg && globalThis.__pg.tanggal, 'getPaguOps tidak dipanggil');
     globalThis.__pg = null;
   });
