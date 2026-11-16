@@ -135,7 +135,7 @@ function handleRequest(e, method) {
     }
     let result;
     switch (action) {
-      case 'ping':              result = { ok: true, time: new Date().toISOString(), version: 'v6-ba-sec28' }; break;
+      case 'ping':              result = { ok: true, time: new Date().toISOString(), version: 'v6-ba-sec29' }; break;
       case 'login':             result = login(params); break;
       case 'getPeriodeList':    result = getPeriodeList(params); break;
       case 'getActivePeriode':  result = getActivePeriode(params); break;
@@ -2665,9 +2665,9 @@ function getDataLPDH(p) {
       no_sp2d: t.no_sp2d, no_kuitansi: t.no_kuitansi, bukti_url: t.bukti_url }; }),
     ppkTerakhir: ppkTerakhir(dapurId, insentif), kwitansi: (function() { const o = {}; Object.keys(kk.file).forEach(function(j) { o[j] = kk.file[j].url; }); return o; })(), kwitansiNomor: (function() {
       // nomor BASTI kwitansi PIC sekolah & kader hari itu → kolom No. Bukti LPDH
-      const out = { PIC_SEKOLAH: [], KADER: [] };
-      kk.kw.filter(function(x) { return out[x.jenis] && x.nomor; }).sort(function(a, b) { return a.seq - b.seq; })
-        .forEach(function(x) { out[x.jenis].push(x.nomor); });
+      const out = { PIC_SEKOLAH: [], KADER: [], RELAWAN: {} };
+      kk.kw.filter(function(x) { return x.nomor; }).sort(function(a, b) { return a.seq - b.seq; })
+        .forEach(function(x) { if (x.jenis === 'RELAWAN') out.RELAWAN[x.nama.trim().toLowerCase()] = x.nomor; else if (out[x.jenis]) out[x.jenis].push(x.nomor); });
       return out; })(),
     saldoRekening: (function() { const x = bacaSaldoRek(dapurId, tgl); return x ? { saldo_va: x.saldo_va, penjelasan: x.penjelasan } : null; })(),
   } };
@@ -3011,7 +3011,7 @@ function sigKwitansi(k, jenis) {
 function adaIsiKwitansi(k, jenis) { return jenis === 'INSENTIF' ? k.ins.length > 0 : k.kw.some(function(x) { return x.jenis === jenis; }); }
 // Jenis kwitansi yang punya isi tetapi PDF-nya belum ada / sudah usang → harus dibuat (ulang) agar link LPDH selalu ke kwitansi bertanda tangan
 function kwitansiPerlu(k) {
-  return JENIS_KW_FILE.filter(function(j) { return adaIsiKwitansi(k, j) && (!k.file[j] || k.file[j].sig !== sigKwitansi(k, j)); });
+  return JENIS_KW_FILE.filter(function(j) { return adaIsiKwitansi(k, j) && (!k.file[j] || k.file[j].sig !== sigKwitansi(k, j) || k.kw.some(function(x) { return x.jenis === j && !x.nomor; })); });
 }
 // Ringan: dipanggil saat tombol Unduh LPDH ditekan (bukan saat halaman dibuka)
 function getKwitansiPerlu(p) {
@@ -3056,6 +3056,7 @@ function getKwitansiCetak(p) {
   if (!bisaIsiLPDH(me)) return { ok: false, error: 'Hanya PIC, akuntan, atau admin' };
   const dapurId = lpdhDapur(me, p.dapur), tanggal = String(p.tanggal || '').substring(0, 10);
   if (!dapurId || !/^\d{4}-\d{2}-\d{2}$/.test(tanggal)) return { ok: false, error: 'Pilih dapur & tanggal' };
+  lengkapiNomorRelawan(dapurId, tanggal);   // kwitansi relawan lama diberi nomor TTUR sebelum dicetak
   const urut = { RELAWAN: 0, PIC_SEKOLAH: 1, KADER: 2 }, k = konteksKw(dapurId, tanggal), ident = readIdentitasLPDH(dapurId) || {};
   let jenis = p.jenis; if (typeof jenis === 'string') jenis = jenis ? jenis.split(',') : null;
   const mau = function(j) { return !jenis || jenis.indexOf(j) >= 0; };   // hanya jenis yang perlu dibuat → gambar TTD yang lain tidak dibaca
@@ -3073,6 +3074,33 @@ function getKwitansiCetak(p) {
   return { ok: true, data: Object.assign(dataKwitansi(dapurId, tanggal, k), { rows: rows, insentif: insentif,
     pengawas: { nama: ident.pengawas_nama || (k.akn && k.akn.nama) || '', ttd: k.akn ? readTtdDataUrl(k.akn.id, k.props) : null },
     pic: { nama: k.pic ? k.pic.nama : '', ttd: k.pic ? readTtdDataUrl(k.pic.id, k.props) : null }, perlu: kwitansiPerlu(k) }) };
+}
+// Nomor Tanda Terima Upah Relawan: urut per dapur per bulan, terpisah dari BASTI → NNN/TTUR/SPPG-<kode>/<bulan romawi>/<tahun>
+function nomorRelawan(seq, kode, tanggal) {
+  const b = Number(tanggal.substring(5, 7));
+  return (seq < 1000 ? ('00' + seq).slice(-3) : String(seq)) + '/TTUR/SPPG-' + (kode || 'X') + '/' + ROMAWI[b - 1] + '/' + tanggal.substring(0, 4);
+}
+// Penghitung nomor (BASTI / TTUR) per dapur per bulan: tidak pernah mundur walau kwitansi dibuang
+function nomorBerikut(semua, dapurId, bulan, relawan) {
+  const props = PropertiesService.getScriptProperties(), kunci = (relawan ? 'kw_seq_rl_' : 'kw_seq_') + dapurId + '_' + bulan;
+  let seq = Math.max(Number(props.getProperty(kunci)) || 0, semua.filter(function(k) { return (k.jenis === 'RELAWAN') === !!relawan && k.tanggal.substring(0, 7) === bulan; })
+    .reduce(function(m, k) { return Math.max(m, k.seq); }, 0));
+  return { ambil: function() { seq++; return seq; }, simpan: function() { props.setProperty(kunci, String(seq)); } };
+}
+// Kwitansi relawan yang terbit sebelum ada nomor → diberi nomor (urut nama), sekali saja
+function lengkapiNomorRelawan(dapurId, tanggal) {
+  const tanpa = bacaKwitansi(dapurId).filter(function(k) { return k.tanggal === tanggal && k.jenis === 'RELAWAN' && !k.nomor; });
+  if (!tanpa.length) return 0;
+  return withLock(function() {
+    const semua = bacaKwitansi(dapurId), sisa = semua.filter(function(k) { return k.tanggal === tanggal && k.jenis === 'RELAWAN' && !k.nomor; })
+      .sort(function(a, b) { return a.nama.localeCompare(b.nama); });
+    if (!sisa.length) return 0;
+    const kode = (getDapur().data.find(function(x) { return x.id === dapurId; }) || {}).kode || '';
+    const no = nomorBerikut(semua, dapurId, tanggal.substring(0, 7), true), sh = kwitansiSheet();
+    sisa.forEach(function(k) { const sq = no.ambil(); sh.getRange(k._row, 6, 1, 2).setValues([[nomorRelawan(sq, kode, tanggal), sq]]); });
+    no.simpan();
+    return sisa.length;
+  });
 }
 function nomorBasti(seq, kode, tanggal) {
   const b = Number(tanggal.substring(5, 7));
@@ -3151,21 +3179,24 @@ function terbitkanKwitansi(p) {
     const sh = kwitansiSheet(), semua = bacaKwitansi(dapurId), hariIni = semua.filter(function(k) { return k.tanggal === tanggal; });
     const kode = (getDapur().data.find(function(d) { return d.id === dapurId; }) || {}).kode || '';
     const bulan = tanggal.substring(0, 7);
-    const props = PropertiesService.getScriptProperties(), kunciSeq = 'kw_seq_' + dapurId + '_' + bulan, propsTtd = props.getProperties();
-    let seq = Math.max(Number(props.getProperty(kunciSeq)) || 0, semua.filter(function(k) { return k.jenis !== 'RELAWAN' && k.tanggal.substring(0, 7) === bulan; }).reduce(function(m, k) { return Math.max(m, k.seq); }, 0));
+    const propsTtd = PropertiesService.getScriptProperties().getProperties();
+    const noBasti = nomorBerikut(semua, dapurId, bulan, false), noRl = nomorBerikut(semua, dapurId, bulan, true);
     // urutan cetak: relawan, PIC sekolah, kader; dalam jenis menurut nama
     const urut = { RELAWAN: 0, PIC_SEKOLAH: 1, KADER: 2 };
     masuk.sort(function(x, y) { return (urut[x.pn.jenis] - urut[y.pn.jenis]) || x.pn.nama.localeCompare(y.pn.nama); });
     const hasil = masuk.map(function(m) {
       const ada = hariIni.find(function(k) { return k.penerima_id === m.pn.id; });
       let nomor = ada ? ada.nomor : '', sq = ada ? ada.seq : 0;
-      if (!ada && m.pn.jenis !== 'RELAWAN') { seq++; sq = seq; nomor = nomorBasti(seq, kode, tanggal); }
+      if (!nomor) {   // baru, atau kwitansi relawan lama yang belum bernomor
+        if (m.pn.jenis === 'RELAWAN') { sq = noRl.ambil(); nomor = nomorRelawan(sq, kode, tanggal); }
+        else { sq = noBasti.ambil(); nomor = nomorBasti(sq, kode, tanggal); }
+      }
       const baris = [ada ? ada.id : idUnik('KW'), dapurId, tanggal, m.pn.id, m.pn.jenis, nomor, sq, m.pn.nama, m.pn.jabatan, m.pn.lembaga, m.pm, m.nominal, m.keterangan, new Date(), me.id];
       if (ada) sh.getRange(ada._row, 1, 1, baris.length).setValues([baris]); else sh.appendRow(baris);
       return { penerima_id: m.pn.id, jenis: m.pn.jenis, nomor: nomor, nama: m.pn.nama, jabatan: m.pn.jabatan, lembaga: m.pn.lembaga, pm: m.pm, nominal: m.nominal,
         keterangan: m.keterangan, ttd: readTtdDataUrl('P_' + m.pn.id, propsTtd) };
     });
-    props.setProperty(kunciSeq, String(seq));
+    noBasti.simpan(); noRl.simpan();
     // yang tidak dipilih lagi dibuang dari tanggal ini (nomornya tidak dipakai ulang agar arsip tidak bentrok)
     hariIni.filter(function(k) { return !dipakai[k.penerima_id]; }).sort(function(x, y) { return y._row - x._row; }).forEach(function(k) { sh.deleteRow(k._row); });
     logActivity(me.id, 'terbitkanKwitansi', dapurId + ' ' + tanggal + ' (' + hasil.length + ')');

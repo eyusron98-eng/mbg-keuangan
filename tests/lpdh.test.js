@@ -149,13 +149,15 @@ function dataUji(nOp) {
     const wb3 = new ExcelJS.Workbook(); await wb3.xlsx.readFile(TPL);
     const d3 = dataUji(0);
     d3.kwitansi = { RELAWAN: 'https://drive.google.com/kw-relawan', PIC_SEKOLAH: 'https://drive.google.com/kw-pic', KADER: 'https://drive.google.com/kw-kader' };
-    d3.kwitansiNomor = { PIC_SEKOLAH: ['01/BASTI/SPPG-CPJ02/XI/2026', '02/BASTI/SPPG-CPJ02/XI/2026', '03/BASTI/SPPG-CPJ02/XI/2026', '05/BASTI/SPPG-CPJ02/XI/2026'], KADER: ['12/BASTI/SPPG-CPJ02/XI/2026'] };
+    d3.kwitansiNomor = { PIC_SEKOLAH: ['01/BASTI/SPPG-CPJ02/XI/2026', '02/BASTI/SPPG-CPJ02/XI/2026', '03/BASTI/SPPG-CPJ02/XI/2026', '05/BASTI/SPPG-CPJ02/XI/2026'], KADER: ['12/BASTI/SPPG-CPJ02/XI/2026'],
+      RELAWAN: { ani: '001/TTUR/SPPG-CPJ02/XI/2026', budi: '002/TTUR/SPPG-CPJ02/XI/2026' } };
     d3.transaksi = [tx(3, 'Operasional', 'Gaji/honor relawan pekerja SPPG', 90000, { relawan: [{ nama: 'Ani', tugas: 'Masak', hari: 1, upah: 50000, metode: 'Tunai' }, { nama: 'Budi', tugas: 'Supir', hari: 1, upah: 40000, metode: 'Transfer' }] }),
       tx(6, 'Operasional', 'Insentif Guru/PIC Sekolah', 100000), tx(7, 'Operasional', 'Insentif Kader Posyandu', 50000),
       tx(8, 'Fasilitas SPPG', 'Sewa Gedung', 300000, { insentif: { ttd_otomatis: true } })];
     L.isiLPDH(wb3, d3, { waktu: new Date(2026, 9, 29, 5, 30) });
     const w3 = (sh, a) => { const x = wb3.getWorksheet(sh).getCell(a).value; return x && x.formula ? '=' : x; };
     ok(w3('C1_Relawan', 'K6') === 'https://drive.google.com/kw-relawan' && w3('C1_Relawan', 'K7') === 'https://drive.google.com/kw-relawan', 'link tiap relawan di C1 = kwitansi relawan otomatis');
+    ok(w3('C1_Relawan', 'J6') === '001/TTUR/SPPG-CPJ02/XI/2026' && w3('C1_Relawan', 'J7') === '002/TTUR/SPPG-CPJ02/XI/2026', 'No. Bukti tiap relawan = nomor kwitansi TTUR (unik per orang)');
     ok(w3('C_Operasional', 'J7') === 'https://drive.google.com/kw-pic' && w3('C_Operasional', 'J8') === 'https://drive.google.com/kw-kader', 'link insentif PIC sekolah & kader = kwitansi (BASTI) otomatis');
     ok(w3('C_Operasional', 'I7') === '01–03, 05/BASTI/SPPG-CPJ02/XI/2026' && w3('C_Operasional', 'I8') === '12/BASTI/SPPG-CPJ02/XI/2026', 'No. Bukti PIC sekolah & kader = nomor BASTI kwitansi (' + w3('C_Operasional', 'I7') + ')');
     ok(w3('D_Insentif', 'C25') === 'Ya' && w3('D_Insentif', 'C26') === 'https://drive.google.com/file/d/8', 'insentif Mitra: ditandatangani Ya (TTD gambar otomatis), tautan = kuitansi otomatis');
@@ -165,7 +167,7 @@ function dataUji(nOp) {
     d3.kwitansi = {}; d3.kwitansiNomor = {};
     const wb4 = new ExcelJS.Workbook(); await wb4.xlsx.readFile(TPL);
     L.isiLPDH(wb4, d3, { waktu: new Date(2026, 9, 29, 5, 30) });
-    ok(wb4.getWorksheet('C_Operasional').getCell('J7').value === 'https://drive.google.com/file/d/6' && wb4.getWorksheet('C1_Relawan').getCell('K6').value === 'https://drive.google.com/file/d/3' && wb4.getWorksheet('C_Operasional').getCell('I7').value === 'NB-6', 'tanpa kwitansi harian: tetap memakai bukti transaksi');
+    ok(wb4.getWorksheet('C_Operasional').getCell('J7').value === 'https://drive.google.com/file/d/6' && wb4.getWorksheet('C1_Relawan').getCell('K6').value === 'https://drive.google.com/file/d/3' && wb4.getWorksheet('C_Operasional').getCell('I7').value === 'NB-6' && wb4.getWorksheet('C1_Relawan').getCell('J6').value === 'NB-3/1', 'tanpa kwitansi harian: tetap memakai bukti transaksi');
   }
   {
     const wb2 = new ExcelJS.Workbook(); await wb2.xlsx.readFile(TPL);

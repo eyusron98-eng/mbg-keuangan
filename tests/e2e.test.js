@@ -636,8 +636,8 @@ async function isiBahanBaku(page, uraian, volume, harga) {
         { penerima_id: 'K1', jenis: 'KADER', nama: 'Bu Rina', jabatan: '', lembaga: 'Posyandu Mawar', pm: 35, nominal: 50000, ada_ttd: true, pilih: true, nomor: '' }] } }
       : a === 'terbitkanKwitansi' ? (globalThis.__kw = p, { ok: true, data: { tanggal: p.tanggal, dapur: { id: 'D1', nama: 'SPPG Satu', kode: 'CPJ02', alamat: 'Jl. Raya 1' }, logo: null,
         akuntan: { nama: 'Wanda Azira Agustina, S.Ak', ttd: null }, kepala: { nama: 'Ners. Debbi Prasetiawan, S.Kep', nip: '', ttd: null },
-        rows: p.rows.map((r, i) => ({ penerima_id: r.penerima_id, jenis: r.penerima_id[0] === 'K' ? 'KADER' : 'RELAWAN', nomor: r.penerima_id[0] === 'K' ? '01/BASTI/SPPG-CPJ02/XI/2026' : '',
-          nama: r.penerima_id === 'K1' ? 'Bu Rina' : 'Siti Aminah', jabatan: 'Juru masak', lembaga: 'Posyandu Mawar', pm: r.pm, nominal: r.nominal, keterangan: '', ttd: null })) } }) : null }, async (page, srv) => {
+        rows: p.rows.map((r, i) => ({ penerima_id: r.penerima_id, jenis: r.penerima_id[0] === 'K' ? 'KADER' : 'RELAWAN', nomor: r.penerima_id[0] === 'K' ? '01/BASTI/SPPG-CPJ02/XI/2026' : '001/TTUR/SPPG-CPJ02/XI/2026',
+          nama: r.penerima_id === 'K1' ? 'Bu Rina' : 'Siti Aminah', jabatan: 'Juru masak', lembaga: 'Posyandu Mawar', pm: r.pm, nominal: r.nominal, keterangan: '', ttd: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==' })) } }) : null }, async (page, srv) => {
     await login(page, 'siti');
     await page.waitForSelector('header');
     await page.click('nav:visible >> text=Kwitansi');
@@ -654,6 +654,7 @@ async function isiBahanBaku(page, uraian, volume, harga) {
     const f = (process.env.SHOT || require('os').tmpdir()) + '/kwitansi.pdf'; await dl.saveAs(f);
     const isi = fs.readFileSync(f, 'latin1');
     assert((isi.match(/\/Type \/Page\b/g) || []).length === 2, 'harus 2 halaman');
+    assert(/DCTDecode/.test(isi), 'gambar TTD harus diperkecil ke JPEG di PDF');
     await page.waitForSelector('text=2 kwitansi diunduh & tertaut ke LPDH — belum ada: akuntan, Kepala SPPG');
     const up = srv.log.posts.filter(x => x.action === 'simpanKwitansiFile');
     assert(up.length === 2 && up.map(x => x.params.jenis).sort().join() === 'KADER,RELAWAN' && up.every(x => (x.params.fileData || '').startsWith('JVBER')), 'PDF per jenis harus disimpan ke Drive: ' + up.map(x => x.params.jenis));

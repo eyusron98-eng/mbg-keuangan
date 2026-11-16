@@ -3372,6 +3372,7 @@ try {
     }
     const R = S('C1_Relawan'),
       barisRL = [];
+    const nbRL = (data.kwitansiNomor || {}).RELAWAN || {};
     grup.rl.forEach(function (t) {
       if (t.relawan && t.relawan.length) t.relawan.forEach(function (x, i) {
         barisRL.push({
@@ -3380,7 +3381,7 @@ try {
           hari: x.hari,
           upah: x.upah,
           metode: x.metode,
-          nb: t.no_bukti + '/' + (i + 1),
+          nb: nbRL[String(x.nama || '').trim().toLowerCase()] || t.no_bukti + '/' + (i + 1),
           link: kwH.RELAWAN || t.bukti_url
         });
       });else barisRL.push({
@@ -6075,7 +6076,7 @@ try {
             isi = baru.data;
             setData(baru.data);
           }
-          if (gagal) toast(gagal + ' kwitansi gagal disiapkan — link bukti memakai bukti transaksi. Coba unduh lagi.', 'error');
+          if (gagal) toast(gagal + ' kwitansi gagal disiapkan (' + SIAPKAN_KW_GALAT.join('; ') + ') — link bukti memakai bukti transaksi. Coba unduh lagi.', 'error');
         }
         if (!window.ExcelJS) await loadScriptOnce(EXCELJS_URL);
         const res = await fetch(LPDH_TEMPLATE_URL);
@@ -13027,6 +13028,34 @@ try {
     KADER: 'Insentif Penanggung Jawab Posyandu dalam Rangka Pelaksanaan Program Makan Bergizi Gratis',
     PIC_SEKOLAH: 'Insentif PIC Sekolah dalam Rangka Pelaksanaan Program Makan Bergizi Gratis'
   };
+  const TTD_RINGKAS = {};
+  function ttdRingkas(dataUrl) {
+    if (!dataUrl) return Promise.resolve(null);
+    if (TTD_RINGKAS[dataUrl]) return TTD_RINGKAS[dataUrl];
+    TTD_RINGKAS[dataUrl] = new Promise(function (resolve) {
+      const im = new Image();
+      im.onload = function () {
+        const k = Math.min(1, 600 / im.naturalWidth, 240 / im.naturalHeight);
+        const c = document.createElement('canvas');
+        c.width = Math.max(1, Math.round(im.naturalWidth * k));
+        c.height = Math.max(1, Math.round(im.naturalHeight * k));
+        const ctx = c.getContext('2d');
+        ctx.fillStyle = '#fff';
+        ctx.fillRect(0, 0, c.width, c.height);
+        ctx.drawImage(im, 0, 0, c.width, c.height);
+        resolve({
+          url: c.toDataURL('image/jpeg', 0.85),
+          w: c.width,
+          h: c.height
+        });
+      };
+      im.onerror = function () {
+        resolve(null);
+      };
+      im.src = dataUrl;
+    });
+    return TTD_RINGKAS[dataUrl];
+  }
   async function ttdKolom(doc, cx, y, judul, img, nama, sub) {
     doc.setFont('helvetica', 'normal');
     doc.setFontSize(10);
@@ -13040,11 +13069,11 @@ try {
       maxW = 48,
       maxH = 22;
     if (img) {
-      const sz = await imgSize(img);
-      if (sz) {
-        const k = Math.min(maxW / sz.w, maxH / sz.h);
+      const g = await ttdRingkas(img);
+      if (g) {
+        const k = Math.min(maxW / g.w, maxH / g.h);
         try {
-          doc.addImage(img, 'PNG', cx - sz.w * k / 2, top + (maxH - sz.h * k) / 2, sz.w * k, sz.h * k);
+          doc.addImage(g.url, 'JPEG', cx - g.w * k / 2, top + (maxH - g.h * k) / 2, g.w * k, g.h * k);
         } catch (e) {}
       }
     }
@@ -13094,7 +13123,7 @@ try {
       y += 5.5;
       doc.setFont('helvetica', 'normal');
       doc.setFontSize(10);
-      doc.text(rel ? sppg : 'Nomor: ' + r.nomor, W / 2, y, {
+      doc.text(r.nomor ? 'Nomor: ' + r.nomor : sppg, W / 2, y, {
         align: 'center'
       });
       y += 10;
@@ -13138,7 +13167,7 @@ try {
       doc.setDrawColor(200);
       doc.setLineWidth(0.2);
       doc.line(M, 297 - 13, W - M, 297 - 13);
-      doc.text((rel ? 'Tanda terima upah relawan' : r.nomor) + '  ·  ' + k.tanggal + '  ·  Dibuat dari aplikasi Keuangan MBG', M, 297 - 9);
+      doc.text((r.nomor || 'Tanda terima upah relawan') + '  ·  ' + k.tanggal + '  ·  Dibuat dari aplikasi Keuangan MBG', M, 297 - 9);
       doc.text(i + 1 + '/' + k.rows.length, W - M, 297 - 9, {
         align: 'right'
       });
@@ -13210,7 +13239,9 @@ try {
     });
     return doc;
   }
+  let SIAPKAN_KW_GALAT = [];
   async function siapkanKwitansiLpdh(dapurId, tanggal, perlu) {
+    SIAPKAN_KW_GALAT = [];
     const r = await api('getKwitansiCetak', {
       dapur: dapurId,
       tanggal: tanggal,
@@ -13238,9 +13269,13 @@ try {
           jenis: jn,
           fileData: doc.output('datauristring').split(',')[1]
         });
-        if (!up.ok) gagal++;
+        if (!up.ok) {
+          gagal++;
+          SIAPKAN_KW_GALAT.push(jn + ': ' + (up.error || 'gagal'));
+        }
       } catch (e) {
         gagal++;
+        SIAPKAN_KW_GALAT.push(jn + ': ' + e.message);
       }
     }
     return gagal;

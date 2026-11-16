@@ -1581,8 +1581,10 @@ function isiLPDH(wb, data, opsi) {
     if (jl.length) set(C, 'M6', lpdhGabung(jl, '; ')); }
   // Honor relawan: satu baris per relawan dari daftar penerima (nomor bukti transaksi + /1, /2, …); tanpa daftar → satu baris per transaksi
   const R = S('C1_Relawan'), barisRL = [];
+  const nbRL = (data.kwitansiNomor || {}).RELAWAN || {};   // nomor kwitansi relawan (TTUR) per nama → No. Bukti unik per orang
   grup.rl.forEach(function(t) {
-    if (t.relawan && t.relawan.length) t.relawan.forEach(function(x, i) { barisRL.push({ nama: x.nama, tugas: x.tugas, hari: x.hari, upah: x.upah, metode: x.metode, nb: t.no_bukti + '/' + (i + 1), link: kwH.RELAWAN || t.bukti_url }); });
+    if (t.relawan && t.relawan.length) t.relawan.forEach(function(x, i) { barisRL.push({ nama: x.nama, tugas: x.tugas, hari: x.hari, upah: x.upah, metode: x.metode,
+      nb: nbRL[String(x.nama || '').trim().toLowerCase()] || t.no_bukti + '/' + (i + 1), link: kwH.RELAWAN || t.bukti_url }); });
     else barisRL.push({ nama: t.uraian, tugas: t.kategori, hari: 1, upah: t.riil, metode: t.sumber === 'Petty Cash' ? 'Tunai' : 'Transfer', nb: t.no_bukti, link: kwH.RELAWAN || t.bukti_url });
   });
   barisRL.slice(0, LPDH_KAP.rl).forEach(function(x, i) { const r = 6 + i;
@@ -2471,7 +2473,7 @@ function LpdhPage({ session, scope, toast }) {
         const gagal = await siapkanKwitansiLpdh(dapurId, tanggal, perlu);
         const baru = await api('getDataLPDH', { dapur: dapurId, tanggal: tanggal });
         if (baru.ok) { isi = baru.data; setData(baru.data); }
-        if (gagal) toast(gagal + ' kwitansi gagal disiapkan — link bukti memakai bukti transaksi. Coba unduh lagi.', 'error');
+        if (gagal) toast(gagal + ' kwitansi gagal disiapkan (' + SIAPKAN_KW_GALAT.join('; ') + ') — link bukti memakai bukti transaksi. Coba unduh lagi.', 'error');
       }
       if (!window.ExcelJS) await loadScriptOnce(EXCELJS_URL);
       const res = await fetch(LPDH_TEMPLATE_URL);
@@ -5103,12 +5105,31 @@ async function buildBeritaAcaraPdf(ba) {
 // ---------- Kwitansi harian (PDF, 1 orang 1 halaman) ----------
 const UNTUK_BASTI = { KADER: 'Insentif Penanggung Jawab Posyandu dalam Rangka Pelaksanaan Program Makan Bergizi Gratis',
   PIC_SEKOLAH: 'Insentif PIC Sekolah dalam Rangka Pelaksanaan Program Makan Bergizi Gratis' };
+// Gambar TTD diperkecil (lebar ≤ 600 px, JPEG berlatar putih) sebelum masuk PDF: foto TTD bisa ratusan KB,
+// 40 relawan × foto besar membuat PDF melebihi batas unggah. Hasil disimpan agar tiap TTD hanya diproses sekali.
+const TTD_RINGKAS = {};
+function ttdRingkas(dataUrl) {
+  if (!dataUrl) return Promise.resolve(null);
+  if (TTD_RINGKAS[dataUrl]) return TTD_RINGKAS[dataUrl];
+  TTD_RINGKAS[dataUrl] = new Promise(function(resolve) {
+    const im = new Image();
+    im.onload = function() {
+      const k = Math.min(1, 600 / im.naturalWidth, 240 / im.naturalHeight);
+      const c = document.createElement('canvas'); c.width = Math.max(1, Math.round(im.naturalWidth * k)); c.height = Math.max(1, Math.round(im.naturalHeight * k));
+      const ctx = c.getContext('2d'); ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, c.width, c.height); ctx.drawImage(im, 0, 0, c.width, c.height);
+      resolve({ url: c.toDataURL('image/jpeg', 0.85), w: c.width, h: c.height });
+    };
+    im.onerror = function() { resolve(null); };
+    im.src = dataUrl;
+  });
+  return TTD_RINGKAS[dataUrl];
+}
 async function ttdKolom(doc, cx, y, judul, img, nama, sub) {
   doc.setFont('helvetica', 'normal'); doc.setFontSize(10);
   judul.forEach(function(t, i) { doc.text(t, cx, y + i * 5, { align: 'center', maxWidth: 58 }); });
   const top = y + judul.length * 5 - 1, maxW = 48, maxH = 22;
-  if (img) { const sz = await imgSize(img);
-    if (sz) { const k = Math.min(maxW / sz.w, maxH / sz.h); try { doc.addImage(img, 'PNG', cx - sz.w * k / 2, top + (maxH - sz.h * k) / 2, sz.w * k, sz.h * k); } catch (e) {} } }
+  if (img) { const g = await ttdRingkas(img);
+    if (g) { const k = Math.min(maxW / g.w, maxH / g.h); try { doc.addImage(g.url, 'JPEG', cx - g.w * k / 2, top + (maxH - g.h * k) / 2, g.w * k, g.h * k); } catch (e) {} } }
   const ny = top + maxH + 5, nm = nama || '..............................';
   doc.setFont('helvetica', 'bold'); doc.text(nm, cx, ny, { align: 'center', maxWidth: 58 });
   const nw = Math.min(doc.getTextWidth(nm), 58); doc.setLineWidth(0.3); doc.line(cx - nw / 2, ny + 1, cx + nw / 2, ny + 1);
@@ -5130,7 +5151,7 @@ async function buildKwitansiPdf(k) {
     doc.setFont('helvetica', 'bold'); doc.setFontSize(13);
     doc.text(rel ? 'TANDA TERIMA UPAH RELAWAN' : 'BERITA ACARA SERAH TERIMA INSENTIF', W / 2, y, { align: 'center' }); y += 5.5;
     doc.setFont('helvetica', 'normal'); doc.setFontSize(10);
-    doc.text(rel ? sppg : 'Nomor: ' + r.nomor, W / 2, y, { align: 'center' }); y += 10;
+    doc.text(r.nomor ? 'Nomor: ' + r.nomor : sppg, W / 2, y, { align: 'center' }); y += 10;
     if (!rel) { const pa = doc.splitTextToSize('Pada hari ini ' + tg.hari + ', tanggal ' + tg.tgl + ', telah dilakukan serah terima insentif dengan rincian sebagai berikut:', W - 2 * M);
       doc.text(pa, M, y, { lineHeightFactor: 1.4 }); y += pa.length * 5 + 3; }
     const baris = rel ? [['Jumlah Hari Kerja', '1 (satu) hari'], ['Periode', tg.hari + ', ' + tg.tgl], ['Nama', r.nama], ['Jabatan', r.jabatan || '-'],
@@ -5155,7 +5176,7 @@ async function buildKwitansiPdf(k) {
       await ttdKolom(doc, kol[2], y, ['Menerima,', r.jenis === 'KADER' ? 'PJ Posyandu' : 'PIC Sekolah'], r.ttd, r.nama);
     }
     doc.setFontSize(7.5); doc.setTextColor(110); doc.setDrawColor(200); doc.setLineWidth(0.2); doc.line(M, 297 - 13, W - M, 297 - 13);
-    doc.text((rel ? 'Tanda terima upah relawan' : r.nomor) + '  ·  ' + k.tanggal + '  ·  Dibuat dari aplikasi Keuangan MBG', M, 297 - 9);
+    doc.text((r.nomor || 'Tanda terima upah relawan') + '  ·  ' + k.tanggal + '  ·  Dibuat dari aplikasi Keuangan MBG', M, 297 - 9);
     doc.text((i + 1) + '/' + k.rows.length, W - M, 297 - 9, { align: 'right' });
   }
   doc.setProperties({ title: 'Kwitansi ' + sppg + ' ' + k.tanggal, creator: 'Keuangan MBG' });
@@ -5191,7 +5212,9 @@ async function buildKuitansiInsentifPdf(k) {
   return doc;
 }
 // Buat (ulang) PDF kwitansi bertanda tangan yang diminta LPDH, simpan ke Drive → tautannya dipakai LPDH. Mengembalikan jumlah yang gagal.
+let SIAPKAN_KW_GALAT = [];
 async function siapkanKwitansiLpdh(dapurId, tanggal, perlu) {
+  SIAPKAN_KW_GALAT = [];
   const r = await api('getKwitansiCetak', { dapur: dapurId, tanggal: tanggal, jenis: perlu.join(',') });   // hanya jenis yang perlu → gambar TTD lain tidak dimuat
   if (!r.ok) return perlu.length;
   let gagal = 0;
@@ -5202,8 +5225,8 @@ async function siapkanKwitansiLpdh(dapurId, tanggal, perlu) {
       else { const bag = r.data.rows.filter(function(x) { return x.jenis === jn; }); if (bag.length) doc = await buildKwitansiPdf(Object.assign({}, r.data, { rows: bag })); }
       if (!doc) continue;
       const up = await apiUpload('simpanKwitansiFile', { dapur: dapurId, tanggal: tanggal, jenis: jn, fileData: doc.output('datauristring').split(',')[1] });
-      if (!up.ok) gagal++;
-    } catch (e) { gagal++; }
+      if (!up.ok) { gagal++; SIAPKAN_KW_GALAT.push(jn + ': ' + (up.error || 'gagal')); }
+    } catch (e) { gagal++; SIAPKAN_KW_GALAT.push(jn + ': ' + e.message); }
   }
   return gagal;
 }
