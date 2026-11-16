@@ -1420,6 +1420,27 @@ function lpdhGabung(arr, sep) {
   }
   return out;
 }
+// Nomor BASTI dipadatkan agar muat satu sel: 01–03, 05/BASTI/SPPG-CPJ02/XI/2026 (akhiran yang sama ditulis sekali)
+function lpdhNomorBasti(list) {
+  const grup = {}, urut = [];
+  (list || []).forEach(function(n) {
+    const m = String(n).match(/^(\d+)(\/.+)$/);
+    const k = m ? m[2] : String(n);
+    if (!grup[k]) { grup[k] = []; urut.push(k); }
+    if (m) grup[k].push(m[1]); else grup[k].push(null);
+  });
+  return urut.map(function(k) {
+    const a = grup[k].filter(function(x) { return x !== null; });
+    if (!a.length) return k;
+    const angka = a.map(Number).filter(function(x, i, arr) { return arr.indexOf(x) === i; }).sort(function(x, y) { return x - y; });
+    const lebar = Math.max.apply(null, a.map(function(x) { return x.length; }));
+    const pad = function(x) { return String(x).padStart(lebar, '0'); };
+    const bagian = []; let i = 0;
+    while (i < angka.length) { let j = i; while (j + 1 < angka.length && angka[j + 1] === angka[j] + 1) j++;
+      bagian.push(j > i ? pad(angka[i]) + '–' + pad(angka[j]) : pad(angka[i])); i = j + 1; }
+    return bagian.join(', ') + k;
+  }).join('; ');
+}
 function lpdhWarna(cell) { const f = cell.fill; return f && f.fgColor && f.fgColor.argb ? String(f.fgColor.argb).slice(-6).toUpperCase() : ''; }
 function lpdhRp(n) { return 'Rp ' + new Intl.NumberFormat('id-ID').format(Math.round(n || 0)); }
 
@@ -1486,7 +1507,9 @@ function isiLPDH(wb, data, opsi) {
     const a = perBaris[b[0]]; if (!a) return;
     const r = b[0], n = a.length;
     set(C, 'C' + r, tgl); set(C, 'E' + r, 1); set(C, 'F' + r, n === 1 ? 'transaksi' : n + ' transaksi'); set(C, 'G' + r, jml(a));
-    set(C, 'I' + r, lpdhGabung(a.map(function(t) { return t.no_bukti; }), '; '));
+    // PIC sekolah / kader: nomor bukti = nomor BASTI di kwitansi yang dibuat aplikasi; selain itu nomor bukti transaksi
+    const nomorKw = r === 7 ? (data.kwitansiNomor || {}).PIC_SEKOLAH : r === 8 ? (data.kwitansiNomor || {}).KADER : null;
+    set(C, 'I' + r, nomorKw && nomorKw.length ? lpdhNomorBasti(nomorKw) : lpdhGabung(a.map(function(t) { return t.no_bukti; }), '; '));
     // insentif PIC sekolah / kader: tautan kwitansi (BASTI) otomatis dari Data Penerima; selain itu bukti transaksi
     const kw = (r === 7 ? kwH.PIC_SEKOLAH : r === 8 ? kwH.KADER : '') || '';
     set(C, 'J' + r, (kw ? [kw] : a.map(function(t) { return t.bukti_url; })).filter(Boolean).join(' | '));

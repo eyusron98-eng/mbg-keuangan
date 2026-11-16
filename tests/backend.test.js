@@ -803,6 +803,7 @@ const ok = (c, m) => { console.log((c ? 'PASS ' : 'FAIL ') + m); if (!c) fails++
     call(e8, 'POST', { action: 'simpanKwitansiFile', token: tP, tanggal: '2026-10-21', jenis: 'KADER', fileData: 'JVBERg==' });
     r = call(e8, 'POST', { action: 'getDataLPDH', token: tA, dapur: 'D001', tanggal: '2026-10-21' });
     ok(r.data.kwitansiPerlu.length === 0 && /^https:/.test(r.data.kwitansi.KADER), 'setelah PDF tersimpan: tidak perlu dibuat lagi, link masuk LPDH');
+    ok(JSON.stringify(r.data.kwitansiNomor) === JSON.stringify({ PIC_SEKOLAH: [], KADER: ['02/BASTI/SPPG-S1/X/2026'] }), 'LPDH membawa nomor BASTI kwitansi hari itu (' + JSON.stringify(r.data.kwitansiNomor) + ')');
     call(e8, 'POST', { action: 'saveTtd', token: tA, untuk: 'penerima', id: idKd, fileData: png });
     r = call(e8, 'POST', { action: 'getDataLPDH', token: tA, dapur: 'D001', tanggal: '2026-10-21' });
     ok(JSON.stringify(r.data.kwitansiPerlu) === '["KADER"]', 'tanda tangan penerima berubah → PDF lama dianggap usang & dibuat ulang');

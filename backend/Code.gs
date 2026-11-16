@@ -2646,7 +2646,12 @@ function getDataLPDH(p) {
     harian: (function() { const h = bacaHarian(dapurId, tgl).tepat; return h ? h.data : null; })(),
     topups: topups.filter(function(t) { return t.tanggal === tgl; }).map(function(t) { return { id: t.id, tanggal: t.tanggal, jumlah: t.jumlah, keterangan: t.keterangan,
       no_sp2d: t.no_sp2d, no_kuitansi: t.no_kuitansi, bukti_url: t.bukti_url }; }),
-    ppkTerakhir: ppkTerakhir(dapurId, insentif), kwitansi: linkKwitansiHari(dapurId, tgl), kwitansiPerlu: bisaIsiLPDH(me) ? kwitansiPerlu(dapurId, tgl) : [],
+    ppkTerakhir: ppkTerakhir(dapurId, insentif), kwitansi: linkKwitansiHari(dapurId, tgl), kwitansiPerlu: bisaIsiLPDH(me) ? kwitansiPerlu(dapurId, tgl) : [], kwitansiNomor: (function() {
+      // nomor BASTI kwitansi PIC sekolah & kader hari itu → kolom No. Bukti LPDH
+      const out = { PIC_SEKOLAH: [], KADER: [] };
+      bacaKwitansi(dapurId).filter(function(x) { return x.tanggal === tgl && out[x.jenis] && x.nomor; }).sort(function(a, b) { return a.seq - b.seq; })
+        .forEach(function(x) { out[x.jenis].push(x.nomor); });
+      return out; })(),
     saldoRekening: (function() { const x = bacaSaldoRek(dapurId, tgl); return x ? { saldo_va: x.saldo_va, penjelasan: x.penjelasan } : null; })(),
   } };
 }

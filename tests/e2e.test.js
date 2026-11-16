@@ -666,7 +666,7 @@ async function isiBahanBaku(page, uraian, volume, harga) {
         transaksi: [{ id: 'T6', tanggal: p.tanggal, no_bukti: 'K-6', jenis: 'Operasional', kategori: 'Insentif Kader Posyandu', uraian: 'Insentif kader', sumber: 'VA', riil: 50000, bukti_url: 'https://drive.google.com/bukti-transfer' },
           { id: 'T8', tanggal: p.tanggal, no_bukti: 'INS-8', jenis: 'Fasilitas SPPG', kategori: 'Sewa Gedung', uraian: 'Sewa gedung', sumber: 'VA', riil: 300000, bukti_url: 'https://drive.google.com/kuitansi-lama', insentif: { ttd_otomatis: true } }],
         topups: [], komponen: { awal: [5000000, 1500000, 500000], topups: [], geser: [], nama: ['Bahan Baku', 'Operasional', 'Insentif'] },
-        kwitansi: globalThis.__kwf || {}, kwitansiPerlu: globalThis.__kwf ? [] : ['KADER', 'INSENTIF'] } }
+        kwitansi: globalThis.__kwf || {}, kwitansiPerlu: globalThis.__kwf ? [] : ['KADER', 'INSENTIF'], kwitansiNomor: { PIC_SEKOLAH: [], KADER: ['01/BASTI/SPPG-S1/X/2026'] } } }
       : a === 'getKwitansiCetak' ? { ok: true, data: { tanggal: p.tanggal, dapur: { id: 'D1', nama: 'SPPG Satu', kode: 'S1' }, logo: null,
         akuntan: { nama: 'Wanda', ttd: null }, kepala: { nama: 'Debbi', nip: '', ttd: null }, pengawas: { nama: 'Wanda', ttd: null }, pic: { nama: 'Pemilik', ttd: null },
         rows: [{ penerima_id: 'K1', jenis: 'KADER', nomor: '01/BASTI/SPPG-S1/X/2026', nama: 'Bu Rina', jabatan: '', lembaga: 'Posyandu Mawar', pm: 35, nominal: 50000, keterangan: '', ttd: null }],
@@ -683,6 +683,7 @@ async function isiBahanBaku(page, uraian, volume, harga) {
     const wb = new ExcelJS.Workbook(); await wb.xlsx.readFile(await dl.path());
     const v = (s, a) => wb.getWorksheet(s).getCell(a).value;
     assert(v('C_Operasional', 'J8') === 'https://drive.google.com/kw-KADER', 'link kader harus kwitansi BASTI bertanda tangan: ' + v('C_Operasional', 'J8'));
+    assert(v('C_Operasional', 'I8') === '01/BASTI/SPPG-S1/X/2026', 'No. Bukti kader harus nomor BASTI: ' + v('C_Operasional', 'I8'));
     assert(v('D_Insentif', 'C26') === 'https://drive.google.com/kw-INSENTIF' && v('D_Insentif', 'C25') === 'Ya', 'link insentif harus kuitansi bertanda tangan: ' + v('D_Insentif', 'C26'));
     globalThis.__kwf = null;
   });
