@@ -5212,7 +5212,7 @@ function DataPenerimaPage({ session, scope, toast }) {
   const [edit, setEdit] = useState(null);
   const [ttd, setTtd] = useState(null);
   const [hapus, setHapus] = useState(null);
-  function load() { if (!dapurId) return; setData(null); api('getDataPenerima', { dapur: dapurId }).then(function(r) { if (r.ok) setData(r.data); else { toast(r.error, 'error'); setData({ rows: [] }); } }); }
+  function load() { if (!dapurId) return; setData(null); api('getDataPenerima', { dapur: dapurId }).then(function(r) { if (r.ok) { setData(r.data); if (r.data.diimpor) toast(r.data.diimpor + ' relawan dari data pembayaran honor sebelumnya dimasukkan. Periksa upah & status aktif.'); } else { toast(r.error, 'error'); setData({ rows: [] }); } }); }
   useEffect(load, [dapurId]);
   if (!dapurId) return <Card><div className="text-sm" style={{ color: COLORS.muted }}>Pilih satu dapur di atas untuk mengelola data penerima.</div></Card>;
   const j = JENIS_DP.find(function(x) { return x[0] === jenis; });

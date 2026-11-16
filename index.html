@@ -13269,7 +13269,10 @@ try {
       api('getDataPenerima', {
         dapur: dapurId
       }).then(function (r) {
-        if (r.ok) setData(r.data);else {
+        if (r.ok) {
+          setData(r.data);
+          if (r.data.diimpor) toast(r.data.diimpor + ' relawan dari data pembayaran honor sebelumnya dimasukkan. Periksa upah & status aktif.');
+        } else {
           toast(r.error, 'error');
           setData({
             rows: []
