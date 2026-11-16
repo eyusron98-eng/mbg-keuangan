@@ -5937,6 +5937,7 @@ try {
     const bisaIsi = role === 'admin' || role === 'akuntan' || role === 'pic';
     const [busy, setBusy] = useState(false);
     const [hasil, setHasil] = useState(null);
+    const [konfirmSaldo, setKonfirmSaldo] = useState(false);
     function load() {
       if (!dapurId) return;
       setLoading(true);
@@ -6008,6 +6009,8 @@ try {
     }, 0) - (data.transaksi || []).reduce(function (s2, t) {
       return s2 + t.riil;
     }, 0)) : 0;
+    const saldoTersimpan = data && data.saldoRekening && data.saldoRekening.saldo_va !== '' && data.saldoRekening.saldo_va != null ? Math.round(Number(data.saldoRekening.saldo_va)) : null;
+    const saldoBeda = saldoTersimpan !== null && saldoTersimpan !== saldoAkhirApp && !String((data.saldoRekening || {}).penjelasan || '').trim();
     async function kirimTtd(t, file) {
       setUnggahTtd(t.id);
       try {
@@ -6490,13 +6493,33 @@ try {
       }
     }, "Nomor bukti kosong/\"-\"/kembar: ", kembar.map(function (k) {
       return '"' + (k || 'kosong') + '"';
-    }).join(', '), ". PPK mewajibkan nomor bukti unik \u2014 akan ditandai DUPLIKAT di file."), React.createElement("div", {
+    }).join(', '), ". PPK mewajibkan nomor bukti unik \u2014 akan ditandai DUPLIKAT di file."), saldoBeda && React.createElement("div", {
+      className: "text-sm rounded-lg p-3 mt-3",
+      style: {
+        background: '#F8E9E5',
+        color: COLORS.danger
+      },
+      "aria-label": "Saldo tidak sinkron"
+    }, React.createElement("b", null, "Saldo VA tidak sinkron."), " Tersimpan ", fmt(saldoTersimpan), ", sedangkan menurut transaksi hari ini ", fmt(saldoAkhirApp), " (selisih ", fmt(saldoAkhirApp - saldoTersimpan), "). Biasanya karena ada transaksi yang diubah/dihapus setelah saldo disimpan. Cocokkan dengan mutasi rekening, lalu perbarui ", React.createElement("b", null, "Saldo VA menurut rekening"), " di atas (atau isi penjelasan bila memang berbeda)."), React.createElement("div", {
       className: "mt-4"
     }, React.createElement(Btn, {
       full: true,
-      onClick: unduh,
+      onClick: function () {
+        if (saldoBeda) setKonfirmSaldo(true);else unduh();
+      },
       disabled: busy
-    }, busy ? I.spinner : I.download, " Unduh LPDH (.xlsx)")), !data.transaksi.length && !data.topups.length && React.createElement("div", {
+    }, busy ? I.spinner : I.download, " Unduh LPDH (.xlsx)")), konfirmSaldo && React.createElement(ConfirmModal, {
+      title: "Saldo VA tidak sinkron",
+      confirmLabel: "Tetap unduh",
+      onClose: function () {
+        setKonfirmSaldo(false);
+      },
+      onConfirm: function () {
+        setKonfirmSaldo(false);
+        unduh();
+      },
+      message: 'Saldo VA tersimpan ' + fmt(saldoTersimpan) + ' berbeda ' + fmt(saldoAkhirApp - saldoTersimpan) + ' dari transaksi hari ini (' + fmt(saldoAkhirApp) + ') tanpa penjelasan. Di LPDH, cek PPK "saldo komponen = saldo VA" akan menunjukkan selisih ini. Sebaiknya perbarui saldo dulu sesuai mutasi rekening.'
+    }), !data.transaksi.length && !data.topups.length && React.createElement("div", {
       className: "text-xs mt-2 text-center",
       style: {
         color: COLORS.muted

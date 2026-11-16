@@ -2401,6 +2401,7 @@ function LpdhPage({ session, scope, toast }) {
   const bisaIsi = role === 'admin' || role === 'akuntan' || role === 'pic';
   const [busy, setBusy] = useState(false);
   const [hasil, setHasil] = useState(null);
+  const [konfirmSaldo, setKonfirmSaldo] = useState(false);
 
   function load() {
     if (!dapurId) return;
@@ -2433,6 +2434,9 @@ function LpdhPage({ session, scope, toast }) {
   if (nBarisBB > LPDH_KAP.bb) lebih.push(LPDH_KAP.bb + ' baris bahan (hari ini ' + nBarisBB + ')');
   if (nBarisRL > LPDH_KAP.rl) lebih.push(LPDH_KAP.rl + ' baris relawan (hari ini ' + nBarisRL + ')');
   const saldoAkhirApp = data ? Math.round(data.saldoAwal + data.topups.reduce(function(s2, t) { return s2 + t.jumlah; }, 0) - (data.transaksi || []).reduce(function(s2, t) { return s2 + t.riil; }, 0)) : 0;
+  // saldo VA yang sudah disimpan tetapi tidak lagi sama dengan transaksi (mis. transaksi dihapus setelah saldo diketik) dan tanpa penjelasan
+  const saldoTersimpan = data && data.saldoRekening && data.saldoRekening.saldo_va !== '' && data.saldoRekening.saldo_va != null ? Math.round(Number(data.saldoRekening.saldo_va)) : null;
+  const saldoBeda = saldoTersimpan !== null && saldoTersimpan !== saldoAkhirApp && !String((data.saldoRekening || {}).penjelasan || '').trim();
   async function kirimTtd(t, file) {
     setUnggahTtd(t.id);
     try {
@@ -2591,7 +2595,12 @@ function LpdhPage({ session, scope, toast }) {
         </div>}
         {kembar.length > 0 && <div className="text-sm rounded-lg p-3 mt-3" style={{ background: '#FBF3E2', color: '#7A5408' }}>
           Nomor bukti kosong/"-"/kembar: {kembar.map(function(k) { return '"' + (k || 'kosong') + '"'; }).join(', ')}. PPK mewajibkan nomor bukti unik — akan ditandai DUPLIKAT di file.</div>}
-        <div className="mt-4"><Btn full onClick={unduh} disabled={busy}>{busy ? I.spinner : I.download} Unduh LPDH (.xlsx)</Btn></div>
+        {saldoBeda && <div className="text-sm rounded-lg p-3 mt-3" style={{ background: '#F8E9E5', color: COLORS.danger }} aria-label="Saldo tidak sinkron">
+          <b>Saldo VA tidak sinkron.</b> Tersimpan {fmt(saldoTersimpan)}, sedangkan menurut transaksi hari ini {fmt(saldoAkhirApp)} (selisih {fmt(saldoAkhirApp - saldoTersimpan)}).
+          Biasanya karena ada transaksi yang diubah/dihapus setelah saldo disimpan. Cocokkan dengan mutasi rekening, lalu perbarui <b>Saldo VA menurut rekening</b> di atas (atau isi penjelasan bila memang berbeda).</div>}
+        <div className="mt-4"><Btn full onClick={function() { if (saldoBeda) setKonfirmSaldo(true); else unduh(); }} disabled={busy}>{busy ? I.spinner : I.download} Unduh LPDH (.xlsx)</Btn></div>
+        {konfirmSaldo && <ConfirmModal title="Saldo VA tidak sinkron" confirmLabel="Tetap unduh" onClose={function() { setKonfirmSaldo(false); }} onConfirm={function() { setKonfirmSaldo(false); unduh(); }}
+          message={'Saldo VA tersimpan ' + fmt(saldoTersimpan) + ' berbeda ' + fmt(saldoAkhirApp - saldoTersimpan) + ' dari transaksi hari ini (' + fmt(saldoAkhirApp) + ') tanpa penjelasan. Di LPDH, cek PPK "saldo komponen = saldo VA" akan menunjukkan selisih ini. Sebaiknya perbarui saldo dulu sesuai mutasi rekening.'}/>}
         {!data.transaksi.length && !data.topups.length && <div className="text-xs mt-2 text-center" style={{ color: COLORS.muted }}>Tidak ada transaksi atau top up pada tanggal ini — LPDH tetap bisa diunduh (pengeluaran nihil, saldo awal = saldo akhir).</div>}
       </>}
     </Card>
