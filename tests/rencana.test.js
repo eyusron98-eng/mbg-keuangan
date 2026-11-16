@@ -55,6 +55,12 @@ ok(!u5.items.some(x => x.bagian && x.nominal < 250000), 'belanja kecil tidak dip
   const takTot = Object.keys(m.tak).reduce((a, k) => a + m.tak[k], 0);
   ok(takTot === s5.takNilai && m.kolom.every(k => m.terjadwal[k] + (m.tak[k] ? m.takItems[k].reduce((a, x) => a + x.nominal, 0) : 0) === u5.items.filter(x => x.kategori === k).reduce((a, x) => a + x.nominal, 0)), 'baris Terjadwal + Tidak muat per pos = total kebutuhan pos');
   ok(m.sel['2026-11-09']['Gaji/honor relawan pekerja SPPG'].nominal === 1500000 && !m.sel['2026-11-14'], 'sel hari × pos berisi nominal; Sabtu kosong'); }
+{ const ctxS = Object.assign({}, ctx, { riwayat: Object.assign({}, ctx.riwayat, { tx: ctx.riwayat.tx.concat(['2026-11-02', '2026-11-03', '2026-11-04', '2026-11-05', '2026-11-06'].map(t => ({ tanggal: t, kategori: 'Sewa Kendaraan', uraian: 'Sewa minibus', nominal: 270000, penerima_id: 'WANDA' }))) }) });
+  const us = R.roUsulkan(ctxS, set, {}, 1);
+  ok(!us.items.some(x => x.kategori === 'Sewa Kendaraan'), 'Sewa Kendaraan tidak lagi diusulkan (rutin maupun kebutuhan)'); }
+{ const ul = R.roUsulkan(ctx, set, {}, 1, [], '2026-11-12');
+  ok(ul.items.length > 0 && ul.items.every(x => !x.tanggal || x.tanggal >= '2026-11-12'), 'tanggal sebelum hari ini tidak dijadwalkan');
+  ok(ul.items.filter(x => x.rutin && x.kategori.startsWith('Gaji')).length === 7, 'honor hanya untuk 7 HPE tersisa (12–20 Nov)'); }
 const kosong = R.roUsulkan(Object.assign({}, ctx, { riwayat: null }), set, {}, 1);
 ok(kosong.items.length === 0 && /manual/.test(kosong.catatan), 'tanpa riwayat: tidak ada usulan, diminta isi manual');
 

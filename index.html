@@ -3381,7 +3381,8 @@ try {
   };
   const RO_PAGU_PM = 3000;
   const RO_FEE = 6500;
-  const RO_RUTIN = ['Gaji/honor relawan pekerja SPPG', 'Insentif Guru/PIC Sekolah', 'Insentif Kader Posyandu', 'Sewa Kendaraan'];
+  const RO_RUTIN = ['Gaji/honor relawan pekerja SPPG', 'Insentif Guru/PIC Sekolah', 'Insentif Kader Posyandu'];
+  const RO_TANPA = ['Sewa Kendaraan'];
   const RO_MIN_PECAH = 500000;
   const RO_NAMA_HARI = ['Min', 'Sen', 'Sel', 'Rab', 'Kam', 'Jum', 'Sab'];
   function roTglList(mulai, akhir) {
@@ -3486,15 +3487,15 @@ try {
     });
     return map;
   }
-  function roUsulkan(ctx, setelan, hariSet, seed, tetap) {
+  function roUsulkan(ctx, setelan, hariSet, seed, tetap, dariTgl) {
     tetap = tetap || [];
     const r = ctx.riwayat;
     const hari = roHari(ctx.periode, hariSet).filter(function (h) {
-      return !h.libur;
+      return !h.libur && (!dariTgl || h.tanggal >= dariTgl);
     });
     if (!r || !r.tx || !r.tx.length || !hari.length) return {
       items: [],
-      catatan: !r ? 'Belum ada periode sebelumnya dengan transaksi operasional — isi kebutuhan secara manual.' : 'Tidak ada HPE di periode ini.'
+      catatan: !r ? 'Belum ada periode sebelumnya dengan transaksi operasional — isi kebutuhan secara manual.' : 'Tidak ada HPE tersisa di periode ini.'
     };
     const rng = roRng(roHash(ctx.periode.id + '|' + (seed || 0)));
     const pmap = {};
@@ -3509,7 +3510,7 @@ try {
     const items = [];
     const grupRutin = {};
     r.tx.forEach(function (t) {
-      if (RO_RUTIN.indexOf(t.kategori) < 0) return;
+      if (RO_RUTIN.indexOf(t.kategori) < 0 || RO_TANPA.indexOf(t.kategori) >= 0) return;
       const k = t.kategori + '|' + t.penerima_id;
       (grupRutin[k] = grupRutin[k] || []).push(t);
     });
@@ -3546,7 +3547,7 @@ try {
     });
     const grup = {};
     r.tx.forEach(function (t) {
-      if (dipakaiRutin[t.kategori + '|' + t.penerima_id]) return;
+      if (dipakaiRutin[t.kategori + '|' + t.penerima_id] || RO_TANPA.indexOf(t.kategori) >= 0) return;
       const ur = roBersih(t.uraian),
         k = t.kategori + '|' + ur.toLowerCase() + '|' + t.penerima_id;
       (grup[k] = grup[k] || {
@@ -3785,6 +3786,7 @@ try {
     const [tampil, setTampil] = useState('tabel');
     const [pilihSel, setPilihSel] = useState(null);
     const seedRef = useRef(0);
+    const versiRef = useRef(0);
     const [kategori, setKategori] = useState([]);
     useEffect(function () {
       api('getKategori').then(function (r) {
@@ -3808,15 +3810,20 @@ try {
       }
       const d = r.data,
         rc = d.rencana || {};
+      const semua = rc.items || [],
+        dipakai = semua.filter(function (x) {
+          return x.pengajuan_id || RO_TANPA.indexOf(x.kategori) < 0;
+        });
       setCtx(d);
-      setItems(rc.items || []);
+      setItems(dipakai);
       setHariSet(rc.hari || {});
       setSetelan(rc.setelan || {
         indeks: 100,
         batas: 95
       });
       setVersi(rc.versi || 0);
-      setDirty(false);
+      versiRef.current = rc.versi || 0;
+      setDirty(dipakai.length !== semua.length);
       seedRef.current = (rc.versi || 0) * 7;
     }
     useEffect(function () {
@@ -3856,13 +3863,17 @@ try {
     const terkunci = function (x) {
       return !!x.pengajuan_id;
     };
+    const hariIni = todayISO();
+    const lewat = function (t) {
+      return !!t && t < hariIni;
+    };
     async function simpan(itemsArg) {
       setSaving(true);
       const r = await apiPost('saveRencanaOps', {
         dapur: dapurId,
         periode_id: ctx.periode.id,
         data: {
-          versi: versi,
+          versi: versiRef.current,
           setelan: setelan,
           hari: hariSet,
           items: itemsArg || items
@@ -3873,14 +3884,17 @@ try {
         toast(r.error || 'Gagal menyimpan', 'error');
         return false;
       }
+      versiRef.current = r.data.versi;
       setVersi(r.data.versi);
       setDirty(false);
       return true;
     }
     function usulkan() {
       seedRef.current += 1;
-      const tetap = items.filter(terkunci);
-      const u = roUsulkan(ctx, setelan, hariSet, seedRef.current, tetap);
+      const tetap = items.filter(function (x) {
+        return terkunci(x) || lewat(x.tanggal);
+      });
+      const u = roUsulkan(ctx, setelan, hariSet, seedRef.current, tetap, hariIni);
       ubah(function () {
         return tetap.concat(u.items);
       });
@@ -3888,19 +3902,37 @@ try {
       setKonfirm(false);
       toast(u.items.length ? 'Usulan dibuat — periksa lalu Simpan' : u.catatan, u.items.length ? undefined : 'error');
     }
-    async function ajukan(t) {
-      const baris = items.filter(function (x) {
-        return x.tanggal === t && !terkunci(x);
+    async function ajukan(t, hanyaId, daftar) {
+      const semua = daftar || items;
+      if (lewat(t)) {
+        toast('Tanggal sudah lewat — tidak bisa diajukan', 'error');
+        return;
+      }
+      const baris = semua.filter(function (x) {
+        return x.tanggal === t && !terkunci(x) && x.penerima_id && (!hanyaId || x.id === hanyaId);
       });
-      if (!baris.length) return;
-      if (baris.some(function (x) {
-        return !x.penerima_id;
-      })) {
-        toast('Lengkapi penerima semua baris tanggal ini dulu', 'error');
+      if (!baris.length) {
+        toast(hanyaId ? 'Pilih penerima baris ini dulu' : 'Belum ada baris siap diajukan (penerima belum dipilih)', 'error');
+        return;
+      }
+      const h = roHari(ctx.periode, hariSet).find(function (d) {
+        return d.tanggal === t;
+      });
+      const nilai = function (a) {
+        return a.reduce(function (sm, x) {
+          return sm + x.nominal + roFee(x, pmap, ctx.bankVA);
+        }, 0);
+      };
+      const sudah = nilai(semua.filter(function (x) {
+        return x.tanggal === t && terkunci(x);
+      }));
+      if (sudah + nilai(baris) > roPagu(h, setelan)) {
+        toast('Melebihi pagu harian ' + fmt(roPagu(h, setelan)) + ' (sudah diajukan ' + fmt(sudah) + ') — kurangi atau pindahkan dulu', 'error');
         return;
       }
       setAjukanTgl(t);
-      if (dirty && !(await simpan())) {
+      if (daftar) setItems(daftar);
+      if ((dirty || daftar) && !(await simpan(semua))) {
         setAjukanTgl('');
         return;
       }
@@ -3928,7 +3960,7 @@ try {
       baris.forEach(function (x) {
         ids[x.id] = 1;
       });
-      const baru = items.map(function (x) {
+      const baru = semua.map(function (x) {
         return ids[x.id] ? Object.assign({}, x, {
           pengajuan_id: res.data.id,
           nomor: res.data.nomor
@@ -4141,12 +4173,13 @@ try {
       m: roMatriks(items, ctx, setelan, hariSet),
       bisaUbah: bisaUbah,
       ajukanTgl: ajukanTgl,
+      lewat: lewat,
       onSel: function (t, k, c) {
         if (c && c.items.length === 1) setEdit(Object.assign({}, c.items[0]));else if (c && c.items.length > 1) setPilihSel({
           tanggal: t,
           kategori: k,
           items: c.items
-        });else if (bisaUbah && t) setEdit({
+        });else if (bisaUbah && t && !lewat(t)) setEdit({
           id: 'RO' + Date.now().toString(36),
           tanggal: t,
           kategori: k,
@@ -4181,8 +4214,9 @@ try {
         warn = !lebih && h.pakai > h.batas;
       const pct = h.pagu ? Math.min(100, Math.round(h.pakai / h.pagu * 100)) : h.pakai ? 100 : 0;
       const belum = baris.filter(function (x) {
-        return !terkunci(x);
+        return !terkunci(x) && x.penerima_id;
       });
+      const sudahLewat = lewat(h.tanggal);
       if (h.libur && !baris.length && !bisaUbah) return null;
       return React.createElement(Card, {
         key: h.tanggal
@@ -4198,7 +4232,7 @@ try {
         style: {
           color: COLORS.muted
         }
-      }, h.libur ? 'Bukan HPE — pagu 0' : 'PM ' + fmtNoRp(h.pm) + ' · pagu ' + fmt(h.pagu), h.aktual ? ' · terealisasi ' + fmt(h.aktual) : '')), bisaUbah && React.createElement("label", {
+      }, sudahLewat ? 'Sudah lewat · ' : '', h.libur ? 'Bukan HPE — pagu 0' : 'PM ' + fmtNoRp(h.pm) + ' · pagu ' + fmt(h.pagu), h.aktual ? ' · terealisasi ' + fmt(h.aktual) : '')), bisaUbah && !sudahLewat && React.createElement("label", {
         className: "text-xs flex items-center gap-1 shrink-0",
         style: {
           color: COLORS.ink
@@ -4212,7 +4246,7 @@ try {
           });
         },
         "aria-label": 'HPE ' + h.tanggal
-      }), " HPE")), !h.libur && bisaUbah && React.createElement("div", {
+      }), " HPE")), !h.libur && bisaUbah && !sudahLewat && React.createElement("div", {
         className: "flex items-center gap-2 mt-2 text-xs",
         style: {
           color: COLORS.muted
@@ -4253,23 +4287,23 @@ try {
           key: x.id,
           x: x
         });
-      }), bisaUbah && belum.length > 0 && React.createElement("div", {
+      }), bisaUbah && !sudahLewat && belum.length > 0 && React.createElement("div", {
         className: "mt-2"
       }, React.createElement(Btn, {
         size: "sm",
         full: true,
-        disabled: lebih || !!ajukanTgl,
+        disabled: !!ajukanTgl,
         onClick: function () {
           ajukan(h.tanggal);
         }
-      }, ajukanTgl === h.tanggal ? I.spinner : I.file, " Ajukan ", belum.length, " baris (", fmt(belum.reduce(function (s, x) {
+      }, ajukanTgl === h.tanggal ? I.spinner : I.file, " Ajukan ", belum.length, " baris siap (", fmt(belum.reduce(function (s, x) {
         return s + x.nominal;
-      }, 0)), ")"), lebih && React.createElement("div", {
+      }, 0)), ")"), React.createElement("div", {
         className: "text-xs mt-1",
         style: {
-          color: COLORS.danger
+          color: COLORS.muted
         }
-      }, "Pindahkan atau kurangi baris dulu \u2014 pagu harian tidak boleh terlampaui.")));
+      }, "Baris tanpa penerima dilewati. Bisa juga diajukan satu per satu dari baris masing-masing.")));
     }), pilihSel && React.createElement(Modal, {
       title: roLabel(pilihSel.kategori) + ' · ' + (pilihSel.tanggal ? fmtDate(pilihSel.tanggal) : 'tidak muat'),
       onClose: function () {
@@ -4318,9 +4352,26 @@ try {
       x: edit,
       ctx: ctx,
       hari: ring.hari,
-      kategori: kategori,
-      bisaUbah: bisaUbah && !terkunci(edit),
+      kategori: kategori.filter(function (k) {
+        return RO_TANPA.indexOf(k) < 0;
+      }),
+      bisaUbah: bisaUbah && !terkunci(edit) && !lewat(edit.tanggal),
       pmap: pmap,
+      lewat: lewat,
+      busy: !!ajukanTgl,
+      onAjukan: function (v) {
+        const daftar = items.some(function (x) {
+          return x.id === v.id;
+        }) ? items.map(function (x) {
+          return x.id === v.id ? Object.assign({}, v, {
+            baru: undefined
+          }) : x;
+        }) : items.concat([Object.assign({}, v, {
+          baru: undefined
+        })]);
+        setEdit(null);
+        ajukan(v.tanggal, v.id, daftar);
+      },
       onClose: function () {
         setEdit(null);
       },
@@ -4350,7 +4401,8 @@ try {
     ajukanTgl,
     onSel,
     onAjukan,
-    terkunci
+    terkunci,
+    lewat
   }) {
     const r = m.ring,
       kol = m.kolom;
@@ -4405,7 +4457,7 @@ try {
       style: {
         color: COLORS.muted
       }
-    }, "Geser ke samping untuk melihat semua pos. Ketuk sel untuk mengubah/menambah; ketuk sel merah \"Tidak muat\" untuk melihat barangnya. Usulan otomatis hanya mengisi sampai ", m.batas, "% pagu (cadangan bila PM turun); sisanya boleh diisi manual.", React.createElement("span", {
+    }, "Geser ke samping untuk melihat semua pos. Ketuk sel untuk mengubah/menambah; ketuk sel merah \"Tidak muat\" untuk melihat barangnya. Usulan otomatis hanya mengisi sampai ", m.batas, "% pagu (cadangan bila PM turun); sisanya boleh diisi manual. Tanggal yang sudah lewat (abu-abu) tidak bisa diisi atau diajukan. Tombol Ajukan mengirim baris yang penerimanya sudah dipilih; satu baris bisa diajukan sendiri dari selnya.", React.createElement("span", {
       className: "inline-flex items-center gap-1 ml-2"
     }, React.createElement("span", {
       style: {
@@ -4461,10 +4513,13 @@ try {
       const row = m.sel[h.tanggal] || {},
         lebih = h.pakai > h.pagu,
         sisa = h.pagu - h.pakai;
+      const sudahLewat = lewat(h.tanggal);
       const belum = kol.reduce(function (n, k) {
-        return n + (row[k] ? row[k].n - row[k].aju : 0);
+        return n + (row[k] ? row[k].items.filter(function (x) {
+          return !x.pengajuan_id && x.penerima_id;
+        }).length : 0);
       }, 0);
-      const bg = lebih ? '#F8E9E5' : h.libur ? COLORS.paper : COLORS.surface;
+      const bg = sudahLewat ? '#EEEEEA' : lebih ? '#F8E9E5' : h.libur ? COLORS.paper : COLORS.surface;
       return React.createElement("tr", {
         key: h.tanggal
       }, React.createElement("td", {
@@ -4479,20 +4534,21 @@ try {
           fontWeight: 400,
           color: COLORS.muted
         }
-      }, h.libur ? 'bukan HPE' : 'PM ' + fmtNoRp(h.pm))), kol.map(function (k) {
+      }, sudahLewat ? 'sudah lewat' : h.libur ? 'bukan HPE' : 'PM ' + fmtNoRp(h.pm))), kol.map(function (k) {
         const c = row[k];
+        const bisaTambah = !h.libur && !sudahLewat && bisaUbah;
         return React.createElement("td", {
           key: k,
           onClick: function () {
-            if (!h.libur || c) onSel(h.tanggal, k, c);
+            if (c || bisaTambah) onSel(h.tanggal, k, c);
           },
           style: Object.assign({}, td, {
-            cursor: !h.libur && bisaUbah || c ? 'pointer' : 'default',
+            cursor: c || bisaTambah ? 'pointer' : 'default',
             background: c && c.aju === c.n ? '#DCEFE3' : bg,
-            color: c ? COLORS.ink : COLORS.line
+            color: c ? sudahLewat ? COLORS.muted : COLORS.ink : COLORS.line
           }),
           "aria-label": roLabel(k) + ' ' + h.tanggal
-        }, c ? singkat(c.nominal) + (c.n > 1 ? ' ×' + c.n : '') : h.libur ? '' : '·');
+        }, c ? singkat(c.nominal) + (c.n > 1 ? ' ×' + c.n : '') : bisaTambah ? '·' : '');
       }), React.createElement("td", {
         style: Object.assign({}, td, {
           background: bg,
@@ -4518,20 +4574,19 @@ try {
         style: Object.assign({}, td, {
           background: bg
         })
-      }, belum > 0 && React.createElement("button", {
+      }, belum > 0 && !sudahLewat && React.createElement("button", {
         type: "button",
-        disabled: lebih || !!ajukanTgl,
+        disabled: !!ajukanTgl,
         onClick: function () {
           onAjukan(h.tanggal);
         },
         className: "rounded-md px-2 py-1 text-[11px] font-semibold",
         style: {
-          background: lebih ? COLORS.muted : COLORS.green,
-          color: '#fff',
-          opacity: lebih ? 0.5 : 1
+          background: COLORS.green,
+          color: '#fff'
         },
-        title: lebih ? 'Melebihi pagu — kurangi dulu' : 'Ajukan ' + belum + ' baris'
-      }, ajukanTgl === h.tanggal ? '…' : 'Ajukan')));
+        title: 'Ajukan ' + belum + ' baris yang penerimanya sudah dipilih'
+      }, ajukanTgl === h.tanggal ? '…' : 'Ajukan ' + belum)));
     })), React.createElement("tfoot", null, React.createElement("tr", null, React.createElement("td", {
       style: Object.assign({}, td, kiri, {
         background: COLORS.paper,
@@ -4661,7 +4716,10 @@ try {
     pmap,
     onClose,
     onSave,
-    onDelete
+    onDelete,
+    onAjukan,
+    lewat,
+    busy
   }) {
     const [f, setF] = useState(x);
     const set = function (k, v) {
@@ -4698,7 +4756,7 @@ try {
     }, React.createElement("option", {
       value: ""
     }, "Belum dijadwalkan"), hari.filter(function (d) {
-      return !d.libur;
+      return !d.libur && (!lewat(d.tanggal) || d.tanggal === x.tanggal);
     }).map(function (d) {
       const s = d.pagu - d.pakai + (x.tanggal === d.tanggal ? lama : 0);
       return React.createElement("option", {
@@ -4765,7 +4823,13 @@ try {
         key: p.id,
         value: p.id
       }, p.nama, " \xB7 ", roKodeBank(p.bank), " ", p.no_rek);
-    }))), bisaUbah && React.createElement("div", {
+    }))), x.tanggal && lewat(x.tanggal) && !x.pengajuan_id && React.createElement("div", {
+      className: "rounded-lg p-2 mb-3 text-xs",
+      style: {
+        background: COLORS.paper,
+        color: COLORS.muted
+      }
+    }, "Tanggal sudah lewat \u2014 baris ini tidak bisa diubah atau diajukan."), bisaUbah && React.createElement("div", {
       className: "flex gap-2"
     }, !x.baru && React.createElement(Btn, {
       kind: "ghost",
@@ -4774,6 +4838,7 @@ try {
       className: "flex-1"
     }, React.createElement(Btn, {
       full: true,
+      kind: "ghost",
       disabled: !!err,
       onClick: function () {
         onSave(Object.assign({}, f, {
@@ -4781,7 +4846,23 @@ try {
           uraian: String(f.uraian).trim()
         }));
       }
-    }, I.check, " ", err || 'Simpan baris'))));
+    }, I.check, " ", err || 'Simpan baris'))), bisaUbah && React.createElement("div", {
+      className: "mt-2"
+    }, React.createElement(Btn, {
+      full: true,
+      disabled: !!err || !f.tanggal || !f.penerima_id || lewat(f.tanggal) || busy || h && butuh > sisa,
+      onClick: function () {
+        onAjukan(Object.assign({}, f, {
+          nominal: Number(f.nominal) || 0,
+          uraian: String(f.uraian).trim()
+        }));
+      }
+    }, I.file, " Ajukan baris ini"), (!f.tanggal || !f.penerima_id) && React.createElement("div", {
+      className: "text-xs mt-1",
+      style: {
+        color: COLORS.muted
+      }
+    }, "Pilih tanggal dan penerima untuk mengajukan.")));
   }
   function LpdhPage({
     session,
