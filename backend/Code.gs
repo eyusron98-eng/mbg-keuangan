@@ -135,7 +135,7 @@ function handleRequest(e, method) {
     }
     let result;
     switch (action) {
-      case 'ping':              result = { ok: true, time: new Date().toISOString(), version: 'v6-ba-sec17' }; break;
+      case 'ping':              result = { ok: true, time: new Date().toISOString(), version: 'v6-ba-sec18' }; break;
       case 'login':             result = login(params); break;
       case 'getPeriodeList':    result = getPeriodeList(params); break;
       case 'getActivePeriode':  result = getActivePeriode(params); break;
@@ -2915,17 +2915,23 @@ function getRencanaOps(p) {
   const semuaPer = readAllPeriode(dapurId).filter(function(r) { return r.tanggal_mulai < per.tanggal_mulai; })
     .sort(function(a, b) { return a.tanggal_mulai < b.tanggal_mulai ? 1 : -1; });
   const semuaTx = readAllTransaksi([dapurId]);
-  let riwayat = null;
+  // periode terakhir yang datanya cukup (≥ 3 hari belanja bahan baku & ≥ 5 transaksi operasional selain sewa kendaraan);
+  // periode yang pencatatannya belum lengkap dilewati, dicatat di 'dilewati'
+  let riwayat = null, cadangan = null; const dilewati = [];
   for (let k = 0; k < semuaPer.length && !riwayat; k++) {
     const pr = semuaPer[k];
     const tx = semuaTx.filter(function(t) { return t.periode_id === pr.id; });
     const ops = tx.filter(function(t) { return t.jenis === 'Operasional' && t.kategori !== 'Biaya Admin Bank' && !isFeeLink(t.pengajuan_item_id); });
-    if (!ops.length) continue;
+    if (!ops.length) { dilewati.push(pr.periode_no); continue; }
     const hariBB = {}; tx.forEach(function(t) { if (t.jenis === 'Bahan Baku') hariBB[t.tanggal] = 1; });
-    riwayat = { periode_no: pr.periode_no, hari: Math.max(1, Object.keys(hariBB).length),
+    const cukup = Object.keys(hariBB).length >= 3 && ops.filter(function(t) { return t.kategori !== 'Sewa Kendaraan'; }).length >= 5;
+    const cand = { periode_no: pr.periode_no, hari: Math.max(1, Object.keys(hariBB).length),
       tx: ops.map(function(t) { const it = items[String(t.pengajuan_item_id)]; return { tanggal: t.tanggal, kategori: t.kategori, uraian: String(t.uraian || ''),
         nominal: nilaiLPDH(t), penerima_id: it ? it.penerima_id : '' }; }) };
+    if (cukup) riwayat = cand; else { dilewati.push(pr.periode_no); if (!cadangan) cadangan = cand; }
   }
+  if (!riwayat) riwayat = cadangan;
+  if (riwayat) riwayat.dilewati = dilewati.filter(function(n) { return n !== riwayat.periode_no; });
   const ada = bacaRencana(dapurId, per.id);
   const rencana = ada ? ada.data : null;
   // status pengajuan yang dibuat dari rencana
