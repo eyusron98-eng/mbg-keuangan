@@ -5350,18 +5350,18 @@ try {
           background: bg,
           fontWeight: 700
         })
-      }, h.pakai ? singkat(h.pakai) : ''), React.createElement("td", {
+      }, h.pakai ? fmt(h.pakai) : ''), React.createElement("td", {
         style: Object.assign({}, td, {
           background: bg,
           color: COLORS.muted
         })
-      }, h.pagu ? singkat(h.pagu) : '0'), React.createElement("td", {
+      }, h.pagu ? fmt(h.pagu) : 'Rp 0'), React.createElement("td", {
         style: Object.assign({}, td, {
           background: bg,
           fontWeight: 700,
           color: lebih ? COLORS.danger : COLORS.green
         })
-      }, h.libur && !h.pakai ? '' : lebih ? '−' + singkat(-sisa) : singkat(sisa)), bisaUbah && React.createElement("td", {
+      }, h.libur && !h.pakai ? '' : lebih ? '−' + fmt(-sisa) : fmt(sisa)), bisaUbah && React.createElement("td", {
         style: Object.assign({}, td, {
           background: bg
         })
@@ -5428,24 +5428,24 @@ try {
         fontWeight: 700
       }),
       title: "hari ini s.d. akhir periode"
-    }, singkat(r.rencanaAktif)), React.createElement("td", {
+    }, fmt(r.rencanaAktif)), React.createElement("td", {
       style: Object.assign({}, td, {
         background: COLORS.paper
       }),
       title: "pagu hari ini s.d. akhir periode"
-    }, singkat(r.paguAktif)), React.createElement("td", {
+    }, fmt(r.paguAktif)), React.createElement("td", {
       style: Object.assign({}, td, {
         background: COLORS.paper,
         fontWeight: 700,
         color: r.paguAktif - r.rencanaAktif < 0 ? COLORS.danger : COLORS.green
       })
-    }, (r.paguAktif - r.rencanaAktif < 0 ? '−' : '') + singkat(Math.abs(r.paguAktif - r.rencanaAktif)), r.lebih > 0 && React.createElement("div", {
+    }, (r.paguAktif - r.rencanaAktif < 0 ? '−' : '') + fmt(Math.abs(r.paguAktif - r.rencanaAktif)), r.lebih > 0 && React.createElement("div", {
       style: {
         fontSize: 10,
         fontWeight: 600,
         color: COLORS.danger
       }
-    }, r.nLebih, " hari lebih \u2212", singkat(r.lebih))), bisaUbah && React.createElement("td", {
+    }, r.nLebih, " hari lebih \u2212", fmt(r.lebih))), bisaUbah && React.createElement("td", {
       style: Object.assign({}, td, {
         background: COLORS.paper
       })
@@ -5487,7 +5487,7 @@ try {
         color: COLORS.danger,
         fontWeight: 700
       })
-    }, totTak ? singkat(totTak) : '0'), React.createElement("td", {
+    }, totTak ? fmt(totTak) : 'Rp 0'), React.createElement("td", {
       style: Object.assign({}, td, {
         background: '#FBF1EE'
       })
@@ -5525,7 +5525,7 @@ try {
         background: COLORS.paper,
         fontWeight: 700
       })
-    }, singkat(totTerjadwal + totTak + totFee + totBB)), React.createElement("td", {
+    }, fmt(totTerjadwal + totTak + totFee + totBB)), React.createElement("td", {
       style: Object.assign({}, td, {
         background: COLORS.paper
       })
@@ -5535,7 +5535,7 @@ try {
         fontWeight: 700,
         color: r.kurang ? COLORS.danger : COLORS.green
       })
-    }, r.takNilai > 0 || r.paguAktif < r.rencanaAktif ? 'kurang ' + singkat(r.takNilai + Math.max(0, r.rencanaAktif - r.paguAktif)) : r.lebih > 0 ? 'cukup, geser ' + singkat(r.lebih) : 'cukup'), bisaUbah && React.createElement("td", {
+    }, r.takNilai > 0 || r.paguAktif < r.rencanaAktif ? 'kurang ' + fmt(r.takNilai + Math.max(0, r.rencanaAktif - r.paguAktif)) : r.lebih > 0 ? 'cukup, geser ' + fmt(r.lebih) : 'cukup'), bisaUbah && React.createElement("td", {
       style: Object.assign({}, td, {
         background: COLORS.paper
       })
