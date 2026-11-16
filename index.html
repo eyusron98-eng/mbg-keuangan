@@ -3846,6 +3846,7 @@ try {
     const [ajukanTgl, setAjukanTgl] = useState('');
     const [tampil, setTampil] = useState('tabel');
     const [pilihSel, setPilihSel] = useState(null);
+    const [hapusTak, setHapusTak] = useState(false);
     const seedRef = useRef(0);
     const versiRef = useRef(0);
     const [kategori, setKategori] = useState([]);
@@ -3958,12 +3959,21 @@ try {
         return terkunci(x) || lewat(x.tanggal);
       });
       const u = roUsulkan(ctx, setelan, hariSet, seedRef.current, tetap, hariIni);
-      ubah(function () {
-        return tetap.concat(u.items);
+      const muat = u.items.filter(function (x) {
+        return x.tanggal;
       });
-      setCatatan(u.catatan);
+      const tak = u.items.length - muat.length,
+        takNilai = u.items.filter(function (x) {
+          return !x.tanggal;
+        }).reduce(function (a, x) {
+          return a + x.nominal;
+        }, 0);
+      ubah(function () {
+        return tetap.concat(muat);
+      });
+      setCatatan(u.catatan + (tak ? ' ' + tak + ' kebutuhan (' + fmt(takNilai) + ') tidak muat di pagu harian — tidak dimasukkan; tambahkan manual bila perlu.' : ''));
       setKonfirm(false);
-      toast(u.items.length ? 'Usulan dibuat — periksa lalu Simpan' : u.catatan, u.items.length ? undefined : 'error');
+      toast(muat.length ? 'Usulan dibuat — periksa lalu Simpan' : u.catatan, muat.length ? undefined : 'error');
     }
     async function ajukan(t, hanyaId, daftar) {
       const semua = daftar || items;
@@ -4221,7 +4231,13 @@ try {
           baru: true
         });
       }
-    }, I.plus, " Tambah kebutuhan"), React.createElement(Btn, {
+    }, I.plus, " Tambah kebutuhan"), tak.length > 0 && React.createElement(Btn, {
+      size: "sm",
+      kind: "ghost",
+      onClick: function () {
+        setHapusTak(true);
+      }
+    }, I.trash, " Hapus semua yang tidak muat (", tak.length, ")"), React.createElement(Btn, {
       size: "sm",
       kind: dirty ? 'amber' : 'ghost',
       disabled: !dirty || saving,
@@ -4423,7 +4439,24 @@ try {
           baru: true
         });
       }
-    }, I.plus, " Tambah baris ", roLabel(pilihSel.kategori)))), konfirm && React.createElement(ConfirmModal, {
+    }, I.plus, " Tambah baris ", roLabel(pilihSel.kategori)))), hapusTak && React.createElement(ConfirmModal, {
+      title: "Hapus yang tidak muat?",
+      danger: true,
+      confirmLabel: "Hapus",
+      message: 'Hapus ' + tak.length + ' baris yang tidak muat (' + fmt(ring.takNilai) + ') dari rencana? Baris terjadwal tidak berubah.',
+      onConfirm: function () {
+        ubah(function (a) {
+          return a.filter(function (x) {
+            return x.tanggal || x.pengajuan_id;
+          });
+        });
+        setHapusTak(false);
+        toast('Baris tidak muat dihapus — tekan Simpan');
+      },
+      onClose: function () {
+        setHapusTak(false);
+      }
+    }), konfirm && React.createElement(ConfirmModal, {
       title: "Usulkan ulang?",
       message: "Baris yang belum diajukan akan diganti usulan baru (susunan hari berbeda). Baris yang sudah diajukan tetap.",
       confirmLabel: "Usulkan ulang",
@@ -4442,6 +4475,21 @@ try {
       pmap: pmap,
       lewat: lewat,
       busy: !!ajukanTgl,
+      toast: toast,
+      onPenerima: function (saved) {
+        setCtx(function (c) {
+          const ada = c.penerima.some(function (p) {
+            return p.id === saved.id;
+          });
+          return Object.assign({}, c, {
+            penerima: (ada ? c.penerima.map(function (p) {
+              return p.id === saved.id ? Object.assign({}, p, saved) : p;
+            }) : c.penerima.concat([saved])).sort(function (a, b) {
+              return a.nama.localeCompare(b.nama);
+            })
+          });
+        });
+      },
       onAjukan: function (v) {
         const daftar = items.some(function (x) {
           return x.id === v.id;
@@ -4838,7 +4886,9 @@ try {
     onDelete,
     onAjukan,
     lewat,
-    busy
+    busy,
+    toast,
+    onPenerima
   }) {
     const [f, setF] = useState(x);
     const set = function (k, v) {
@@ -4933,17 +4983,23 @@ try {
     })), React.createElement(Field, {
       label: "Penerima / toko",
       hint: f.penerima_id && roFee(f, pmap, ctx.bankVA) ? 'Beda bank dengan VA → biaya transfer Rp 6.500 ikut dihitung' : f.penerima_id ? 'Sesama bank VA → tanpa biaya transfer' : 'Wajib diisi sebelum diajukan'
-    }, React.createElement("select", {
-      value: f.penerima_id,
-      disabled: !bisaUbah,
-      onChange: function (e) {
-        set('penerima_id', e.target.value);
-      },
-      style: inputStyle,
+    }, bisaUbah ? React.createElement("div", {
       "aria-label": "Penerima rencana"
+    }, React.createElement(PenerimaSelect, {
+      list: ctx.penerima,
+      value: f.penerima_id,
+      toast: toast,
+      onChange: function (v) {
+        set('penerima_id', v);
+      },
+      onListChange: onPenerima
+    })) : React.createElement("select", {
+      value: f.penerima_id,
+      disabled: true,
+      style: inputStyle
     }, React.createElement("option", {
       value: ""
-    }, "Pilih\u2026"), ctx.penerima.map(function (p) {
+    }, "\u2014"), ctx.penerima.map(function (p) {
       return React.createElement("option", {
         key: p.id,
         value: p.id

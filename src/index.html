@@ -1799,6 +1799,7 @@ function RencanaOpsPage({ session, scope, toast }) {
   const [ajukanTgl, setAjukanTgl] = useState('');
   const [tampil, setTampil] = useState('tabel');
   const [pilihSel, setPilihSel] = useState(null);
+  const [hapusTak, setHapusTak] = useState(false);
   const seedRef = useRef(0);
   const versiRef = useRef(0);   // versi terbaru (dipakai simpan berturut-turut dalam satu aksi)
   const [kategori, setKategori] = useState([]);
@@ -1840,9 +1841,12 @@ function RencanaOpsPage({ session, scope, toast }) {
     seedRef.current += 1;
     const tetap = items.filter(function(x) { return terkunci(x) || lewat(x.tanggal); });
     const u = roUsulkan(ctx, setelan, hariSet, seedRef.current, tetap, hariIni);
-    ubah(function() { return tetap.concat(u.items); });
-    setCatatan(u.catatan); setKonfirm(false);
-    toast(u.items.length ? 'Usulan dibuat — periksa lalu Simpan' : u.catatan, u.items.length ? undefined : 'error');
+    const muat = u.items.filter(function(x) { return x.tanggal; });   // yang tidak muat tidak dimasukkan ke rencana
+    const tak = u.items.length - muat.length, takNilai = u.items.filter(function(x) { return !x.tanggal; }).reduce(function(a, x) { return a + x.nominal; }, 0);
+    ubah(function() { return tetap.concat(muat); });
+    setCatatan(u.catatan + (tak ? ' ' + tak + ' kebutuhan (' + fmt(takNilai) + ') tidak muat di pagu harian — tidak dimasukkan; tambahkan manual bila perlu.' : ''));
+    setKonfirm(false);
+    toast(muat.length ? 'Usulan dibuat — periksa lalu Simpan' : u.catatan, muat.length ? undefined : 'error');
   }
   // Ajukan baris siap (penerima terisi) di tanggal t; hanyaId = satu baris saja. Baris yang belum lengkap dilewati.
   async function ajukan(t, hanyaId, daftar) {
@@ -1911,6 +1915,7 @@ function RencanaOpsPage({ session, scope, toast }) {
       {bisaUbah && <div className="flex flex-wrap gap-2 mt-3">
         <Btn size="sm" onClick={function() { items.some(function(x) { return !terkunci(x); }) ? setKonfirm(true) : usulkan(); }}>{I.trend} {items.length ? 'Usulkan ulang' : 'Usulkan otomatis'}</Btn>
         <Btn size="sm" kind="ghost" onClick={function() { setEdit({ id: 'RO' + Date.now().toString(36), tanggal: '', kategori: '', uraian: '', nominal: 0, penerima_id: '', baru: true }); }}>{I.plus} Tambah kebutuhan</Btn>
+        {tak.length > 0 && <Btn size="sm" kind="ghost" onClick={function() { setHapusTak(true); }}>{I.trash} Hapus semua yang tidak muat ({tak.length})</Btn>}
         <Btn size="sm" kind={dirty ? 'amber' : 'ghost'} disabled={!dirty || saving} onClick={function() { simpan().then(function(ok) { if (ok) toast('Rencana tersimpan'); }); }}>{saving ? I.spinner : I.check} {dirty ? 'Simpan perubahan' : 'Tersimpan'}</Btn>
       </div>}
     </Card>
@@ -1969,9 +1974,15 @@ function RencanaOpsPage({ session, scope, toast }) {
       {bisaUbah && <div className="mt-3"><Btn size="sm" kind="ghost" onClick={function() { const p = pilihSel; setPilihSel(null);
         setEdit({ id: 'RO' + Date.now().toString(36), tanggal: p.tanggal, kategori: p.kategori, uraian: roLabel(p.kategori), nominal: 0, penerima_id: '', baru: true }); }}>{I.plus} Tambah baris {roLabel(pilihSel.kategori)}</Btn></div>}
     </Modal>}
+    {hapusTak && <ConfirmModal title="Hapus yang tidak muat?" danger confirmLabel="Hapus" message={'Hapus ' + tak.length + ' baris yang tidak muat (' + fmt(ring.takNilai) + ') dari rencana? Baris terjadwal tidak berubah.'}
+      onConfirm={function() { ubah(function(a) { return a.filter(function(x) { return x.tanggal || x.pengajuan_id; }); }); setHapusTak(false); toast('Baris tidak muat dihapus — tekan Simpan'); }}
+      onClose={function() { setHapusTak(false); }}/>}
     {konfirm && <ConfirmModal title="Usulkan ulang?" message="Baris yang belum diajukan akan diganti usulan baru (susunan hari berbeda). Baris yang sudah diajukan tetap." confirmLabel="Usulkan ulang" onConfirm={usulkan} onClose={function() { setKonfirm(false); }}/>}
     {edit && <RencanaItemModal x={edit} ctx={ctx} hari={ring.hari} kategori={kategori.filter(function(k) { return RO_TANPA.indexOf(k) < 0; })} bisaUbah={bisaUbah && !terkunci(edit) && !lewat(edit.tanggal)} pmap={pmap}
-      lewat={lewat} busy={!!ajukanTgl}
+      lewat={lewat} busy={!!ajukanTgl} toast={toast}
+      onPenerima={function(saved) { setCtx(function(c) { const ada = c.penerima.some(function(p) { return p.id === saved.id; });
+        return Object.assign({}, c, { penerima: (ada ? c.penerima.map(function(p) { return p.id === saved.id ? Object.assign({}, p, saved) : p; }) : c.penerima.concat([saved]))
+          .sort(function(a, b) { return a.nama.localeCompare(b.nama); }) }); }); }}
       onAjukan={function(v) { const daftar = items.some(function(x) { return x.id === v.id; }) ? items.map(function(x) { return x.id === v.id ? Object.assign({}, v, { baru: undefined }) : x; }) : items.concat([Object.assign({}, v, { baru: undefined })]);
         setEdit(null); ajukan(v.tanggal, v.id, daftar); }}
       onClose={function() { setEdit(null); }}
@@ -2052,7 +2063,7 @@ function RencanaMatriks({ m, bisaUbah, ajukanTgl, onSel, onAjukan, terkunci, lew
     </div>
   </Card>;
 }
-function RencanaItemModal({ x, ctx, hari, kategori, bisaUbah, pmap, onClose, onSave, onDelete, onAjukan, lewat, busy }) {
+function RencanaItemModal({ x, ctx, hari, kategori, bisaUbah, pmap, onClose, onSave, onDelete, onAjukan, lewat, busy, toast, onPenerima }) {
   const [f, setF] = useState(x);
   const set = function(k, v) { setF(Object.assign({}, f, { [k]: v })); };
   const h = hari.find(function(d) { return d.tanggal === f.tanggal; });
@@ -2075,8 +2086,8 @@ function RencanaItemModal({ x, ctx, hari, kategori, bisaUbah, pmap, onClose, onS
     <Field label="Uraian"><input value={f.uraian} disabled={!bisaUbah} onChange={function(e) { set('uraian', e.target.value); }} style={inputStyle} aria-label="Uraian rencana" placeholder="cth. Isi gas 12 kg 8 tabung"/></Field>
     <Field label="Nominal"><RupiahInput value={String(f.nominal || '')} disabled={!bisaUbah} onChange={function(v) { set('nominal', Number(v) || 0); }} label="Nominal rencana"/></Field>
     <Field label="Penerima / toko" hint={f.penerima_id && roFee(f, pmap, ctx.bankVA) ? 'Beda bank dengan VA → biaya transfer Rp 6.500 ikut dihitung' : f.penerima_id ? 'Sesama bank VA → tanpa biaya transfer' : 'Wajib diisi sebelum diajukan'}>
-      <select value={f.penerima_id} disabled={!bisaUbah} onChange={function(e) { set('penerima_id', e.target.value); }} style={inputStyle} aria-label="Penerima rencana">
-        <option value="">Pilih…</option>{ctx.penerima.map(function(p) { return <option key={p.id} value={p.id}>{p.nama} · {roKodeBank(p.bank)} {p.no_rek}</option>; })}</select></Field>
+      {bisaUbah ? <div aria-label="Penerima rencana"><PenerimaSelect list={ctx.penerima} value={f.penerima_id} toast={toast} onChange={function(v) { set('penerima_id', v); }} onListChange={onPenerima}/></div>
+        : <select value={f.penerima_id} disabled style={inputStyle}><option value="">—</option>{ctx.penerima.map(function(p) { return <option key={p.id} value={p.id}>{p.nama} · {roKodeBank(p.bank)} {p.no_rek}</option>; })}</select>}</Field>
     {x.tanggal && lewat(x.tanggal) && !x.pengajuan_id && <div className="rounded-lg p-2 mb-3 text-xs" style={{ background: COLORS.paper, color: COLORS.muted }}>Tanggal sudah lewat — baris ini tidak bisa diubah atau diajukan.</div>}
     {bisaUbah && <div className="flex gap-2">
       {!x.baru && <Btn kind="ghost" onClick={onDelete}>{I.trash} Hapus</Btn>}
