@@ -3043,7 +3043,7 @@ try {
     if (/^gaji\/honor relawan/i.test(String(t.kategori || ''))) return 'rl';
     return 'op';
   }
-  const LPDH_BHP_KATA = [['APD', /masker|sarung\s*tangan|hand\s*scoo?n|glove|hair\s*net|penutup\s*kepala|celemek|apron|sepatu\s*boot|\bapd\b/i], ['Alat Kebersihan', /mama\s*lemon|sunlight|deterj?en|detergen|soklin|vixal|supersol|kinclong|sabun|wipol|\bpel\b|sapu|sikat|spons|sponge|kanebo|\blap\b|tr[au]?sh\s*bag|thrush\s*bag|plastik\s*sampah|kantong\s*sampah|tis+u|tissue|pembersih|rinso|kebersihan/i], ['ATK', /kertas|\bhvs\b|pulpen|\bpena\b|spidol|tinta|\bmap\b|lakban|stapler|amplop|materai|buku\s*tulis|\batk\b|printer|isolasi|cartridge/i]];
+  const LPDH_BHP_KATA = [['APD', /masker|sarung\s*tangan|hand\s*scoo?n|glove|hair\s*net|penutup\s*kepala|celemek|apron|sepatu\s*boot|\bapd\b/i], ['Alat Kebersihan', /mama\s*lemon|sunlight|deterj?en|detergen|soklin|vixal|supersol|kinclong|sabun|wipol|\bpel\b|sapu|sikat|spons|sponge|kanebo|\blap\b|tr[au]?sh\s*bag|thrush\s*bag|plastik\s*sampah|kantong\s*sampah|tis+u|tissue|pembersih|rinso|kebersihan/i], ['ATK', /kertas|\bhvs\b|pulpen|\bpena\b|spidol|tinta|\bmap\b|lakban|stapler|amplop|materai|buku\s*tulis|\batk\b|printer|isolasi|cartridge/i], ['Air Minum', /galon|air\s*mineral|le\s*minerale?|leminerale?|\baqua\b|air\s*minum|gelas\s*air/i]];
   function lpdhBarisOps(kategori, uraian) {
     if (kategori === 'Barang Habis Pakai') {
       for (let j = 0; j < LPDH_BHP_KATA.length; j++) if (LPDH_BHP_KATA[j][1].test(String(uraian || ''))) {
@@ -3216,13 +3216,19 @@ try {
         return 'Penjelasan: ' + t.catatan;
       });
       const adm = a.filter(function (t) {
-          return t.kategori === 'Biaya Admin Bank';
-        }),
-        lainnya = a.filter(function (t) {
-          return t.kategori !== 'Biaya Admin Bank';
-        });
+        return t.kategori === 'Biaya Admin Bank';
+      });
+      const bhp = r === 21 ? a.filter(function (t) {
+        return t.kategori === 'Barang Habis Pakai';
+      }) : [];
+      const lainnya = a.filter(function (t) {
+        return t.kategori !== 'Biaya Admin Bank' && bhp.indexOf(t) < 0;
+      });
       const ringkasAdm = adm.length ? ['Biaya admin transfer bank: ' + adm.length + ' transaksi = ' + lpdhRp(jml(adm))] : [];
-      set(C, 'M' + r, lpdhGabung(jelas.concat(ringkasAdm, lainnya.map(function (t) {
+      const ringkasBhp = bhp.length ? ['Barang habis pakai: ' + bhp.length + ' transaksi = ' + lpdhRp(jml(bhp)) + ' (' + bhp.map(function (t) {
+        return t.uraian;
+      }).join(', ') + ')'] : [];
+      set(C, 'M' + r, lpdhGabung(jelas.concat(ringkasBhp, ringkasAdm, lainnya.map(function (t) {
         return t.kategori === b[1] || b[2].indexOf(t.kategori) >= 0 ? t.uraian : t.kategori + ': ' + t.uraian;
       })), '; '));
       opsRingkas.push({
@@ -3230,7 +3236,9 @@ try {
         jumlah: n,
         total: jml(a),
         admin: adm.length,
-        adminTotal: jml(adm)
+        adminTotal: jml(adm),
+        bhp: bhp.length,
+        bhpTotal: jml(bhp)
       });
     });
     {
