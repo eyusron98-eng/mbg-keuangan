@@ -17,6 +17,8 @@ const MAP = [
   [/unpkg\.com\/xlsx@/, NM + '/xlsx/dist/xlsx.full.min.js'],
   [/unpkg\.com\/exceljs@/, NM + '/exceljs/dist/exceljs.min.js'],
   [/unpkg\.com\/@babel\/standalone@/, NM + '/@babel/standalone/babel.min.js'],
+  [/unpkg\.com\/jspdf@/, NM + '/jspdf/dist/jspdf.umd.min.js'],
+  [/unpkg\.com\/jspdf-autotable@/, NM + '/jspdf-autotable/dist/jspdf.plugin.autotable.min.js'],
 ];
 
 const P1 = { id: 'P1', periode_no: 1, dapur: 'D1', status: 'DITUTUP', tanggal_mulai: '2026-09-01', tanggal_akhir: '2026-09-30', penerima: 100, saldoVA: 10000000, saldoPettyAwal: 0 };
@@ -625,6 +627,35 @@ async function isiBahanBaku(page, uraian, volume, harga) {
     await page.waitForSelector('text=Tanda tangan Kepala SPPG');
     await page.waitForSelector('text=Tanda tangan saya');
     globalThis.__dp = null;
+  });
+
+  all &= await run('Kwitansi harian: pilih penerima, ubah PM, terbitkan → PDF terunduh (1 orang 1 halaman)', { role: 'akuntan',
+    override: (a, m, p) => a === 'getKwitansiHarian' ? { ok: true, data: { sudahTerbit: 0, dariHonor: true, bisaUbah: true, rows: [
+        { penerima_id: 'R1', jenis: 'RELAWAN', nama: 'Siti Aminah', jabatan: 'Juru masak', lembaga: '', pm: 0, nominal: 150000, ada_ttd: true, pilih: true, nomor: '' },
+        { penerima_id: 'R2', jenis: 'RELAWAN', nama: 'Joko', jabatan: 'Distribusi', lembaga: '', pm: 0, nominal: 120000, ada_ttd: false, pilih: false, nomor: '' },
+        { penerima_id: 'K1', jenis: 'KADER', nama: 'Bu Rina', jabatan: '', lembaga: 'Posyandu Mawar', pm: 35, nominal: 50000, ada_ttd: true, pilih: true, nomor: '' }] } }
+      : a === 'terbitkanKwitansi' ? (globalThis.__kw = p, { ok: true, data: { tanggal: p.tanggal, dapur: { id: 'D1', nama: 'SPPG Satu', kode: 'CPJ02', alamat: 'Jl. Raya 1' }, logo: null,
+        akuntan: { nama: 'Wanda Azira Agustina, S.Ak', ttd: null }, kepala: { nama: 'Ners. Debbi Prasetiawan, S.Kep', nip: '', ttd: null },
+        rows: p.rows.map((r, i) => ({ penerima_id: r.penerima_id, jenis: r.penerima_id[0] === 'K' ? 'KADER' : 'RELAWAN', nomor: r.penerima_id[0] === 'K' ? '01/BASTI/SPPG-CPJ02/XI/2026' : '',
+          nama: r.penerima_id === 'K1' ? 'Bu Rina' : 'Siti Aminah', jabatan: 'Juru masak', lembaga: 'Posyandu Mawar', pm: r.pm, nominal: r.nominal, keterangan: '', ttd: null })) } }) : null }, async (page, srv) => {
+    await login(page, 'siti');
+    await page.waitForSelector('header');
+    await page.click('nav:visible >> text=Kwitansi');
+    await page.waitForSelector('text=Relawan dicentang sesuai kehadiran');
+    await page.waitForSelector('text=2 kwitansi');
+    await page.fill('[aria-label="PM Bu Rina"]', '40');
+    await page.check('[aria-label="Pilih Joko"]');
+    await page.waitForSelector('text=3 kwitansi');
+    await page.uncheck('[aria-label="Pilih Joko"]');
+    const [dl] = await Promise.all([page.waitForEvent('download'), page.click('button:has-text("Terbitkan & unduh PDF")')]);
+    const k = globalThis.__kw;
+    assert(k.rows.length === 2 && k.rows.find(r => r.penerima_id === 'K1').pm === 40 && k.rows.find(r => r.penerima_id === 'R1').nominal === 150000, 'kiriman salah: ' + JSON.stringify(k.rows));
+    assert(/^Kwitansi_CPJ02_\d{4}-\d{2}-\d{2}\.pdf$/.test(dl.suggestedFilename()), 'nama file: ' + dl.suggestedFilename());
+    const f = (process.env.SHOT || require('os').tmpdir()) + '/kwitansi.pdf'; await dl.saveAs(f);
+    const isi = fs.readFileSync(f, 'latin1');
+    assert((isi.match(/\/Type \/Page\b/g) || []).length === 2, 'harus 2 halaman');
+    await page.waitForSelector('text=2 kwitansi diunduh — belum ada: akuntan, Kepala SPPG');
+    globalThis.__kw = null;
   });
 
   all &= await run('Relawan: daftar kosong bisa diisi (tombol tidak tertutup) & tempel dari Excel', { role: 'akuntan',

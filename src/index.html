@@ -4815,13 +4815,10 @@ function imgSize(dataUrl) {
   return new Promise(function(resolve) { const im = new Image(); im.onload = function(){ resolve({ w: im.naturalWidth, h: im.naturalHeight }); }; im.onerror = function(){ resolve(null); }; im.src = dataUrl; });
 }
 
-async function buildBeritaAcaraPdf(ba) {
-  const JsPDF = await ensureJsPDF();
-  const doc = new JsPDF({ unit: 'mm', format: 'a4', orientation: 'portrait' });
-  const W = 210, M = 15, CW = W - 2 * M;
-  const ink = [33, 37, 41], muted = [110, 110, 110], green = [21, 87, 36];
-  const tg = tglPanjang(ba.tanggal);
-  const sppg = /^SPPG\b/i.test(ba.dapur.nama) ? ba.dapur.nama : 'SPPG ' + ba.dapur.nama;
+async function kopSppg(doc, dapur, logoData) {
+  const W = 210, M = 15, ink = [33, 37, 41];
+  const ba = { dapur: dapur, logo: logoData };
+  const sppg = /^SPPG\b/i.test(dapur.nama) ? dapur.nama : 'SPPG ' + dapur.nama;
   // Kop SPPG: logo BGN di kiri, teks di tengah area kanan logo
   const kopTop = 12, logoBox = 22;
   let textX = W / 2;
@@ -4845,8 +4842,17 @@ async function buildBeritaAcaraPdf(ba) {
   }
   const kontak = kontakDapur(ba.dapur);
   if (kontak) { doc.text(doc.splitTextToSize(kontak, kopW)[0], textX, ky, { align: 'center' }); ky += 4; }
-  let y = Math.max(ky, kopTop + logoBox + 2) + 1;
-  doc.setDrawColor(40); doc.setLineWidth(0.6); doc.line(M, y, W - M, y); doc.setLineWidth(0.2); doc.line(M, y + 0.9, W - M, y + 0.9); y += 9;
+  const y = Math.max(ky, kopTop + logoBox + 2) + 1;
+  doc.setDrawColor(40); doc.setLineWidth(0.6); doc.line(M, y, W - M, y); doc.setLineWidth(0.2); doc.line(M, y + 0.9, W - M, y + 0.9); return y + 9;
+}
+async function buildBeritaAcaraPdf(ba) {
+  const JsPDF = await ensureJsPDF();
+  const doc = new JsPDF({ unit: 'mm', format: 'a4', orientation: 'portrait' });
+  const W = 210, M = 15, CW = W - 2 * M;
+  const ink = [33, 37, 41], muted = [110, 110, 110], green = [21, 87, 36];
+  const tg = tglPanjang(ba.tanggal);
+  const sppg = /^SPPG\b/i.test(ba.dapur.nama) ? ba.dapur.nama : 'SPPG ' + ba.dapur.nama;
+  let y = await kopSppg(doc, ba.dapur, ba.logo);
   doc.setFont('helvetica', 'bold'); doc.setFontSize(12.5);
   doc.text('BERITA ACARA PENGAJUAN ANGGARAN', W / 2, y, { align: 'center' }); y += 5.5;
   doc.setFont('helvetica', 'normal'); doc.setFontSize(10);
@@ -4910,6 +4916,139 @@ async function buildBeritaAcaraPdf(ba) {
   }
   doc.setProperties({ title: 'Berita Acara ' + ba.nomor, subject: 'Berita Acara Pengajuan Anggaran', creator: 'Keuangan MBG' });
   return doc;
+}
+
+// ---------- Kwitansi harian (PDF, 1 orang 1 halaman) ----------
+const UNTUK_BASTI = { KADER: 'Insentif Penanggung Jawab Posyandu dalam Rangka Pelaksanaan Program Makan Bergizi Gratis',
+  PIC_SEKOLAH: 'Insentif PIC Sekolah dalam Rangka Pelaksanaan Program Makan Bergizi Gratis' };
+async function ttdKolom(doc, cx, y, judul, img, nama, sub) {
+  doc.setFont('helvetica', 'normal'); doc.setFontSize(10);
+  judul.forEach(function(t, i) { doc.text(t, cx, y + i * 5, { align: 'center', maxWidth: 58 }); });
+  const top = y + judul.length * 5 - 1, maxW = 48, maxH = 22;
+  if (img) { const sz = await imgSize(img);
+    if (sz) { const k = Math.min(maxW / sz.w, maxH / sz.h); try { doc.addImage(img, 'PNG', cx - sz.w * k / 2, top + (maxH - sz.h * k) / 2, sz.w * k, sz.h * k); } catch (e) {} } }
+  const ny = top + maxH + 5, nm = nama || '..............................';
+  doc.setFont('helvetica', 'bold'); doc.text(nm, cx, ny, { align: 'center', maxWidth: 58 });
+  const nw = Math.min(doc.getTextWidth(nm), 58); doc.setLineWidth(0.3); doc.line(cx - nw / 2, ny + 1, cx + nw / 2, ny + 1);
+  doc.setFont('helvetica', 'normal');
+  if (sub) { doc.setFontSize(8.5); doc.text(sub, cx, ny + 5, { align: 'center' }); doc.setFontSize(10); }
+}
+async function buildKwitansiPdf(k) {
+  const JsPDF = await ensureJsPDF();
+  const doc = new JsPDF({ unit: 'mm', format: 'a4', orientation: 'portrait' });
+  const W = 210, M = 15, ink = [33, 37, 41];
+  const tg = tglPanjang(k.tanggal);
+  const sppg = /^SPPG\b/i.test(k.dapur.nama) ? k.dapur.nama : 'SPPG ' + k.dapur.nama;
+  const kol = [M + 30, W / 2, W - M - 30];
+  for (let i = 0; i < k.rows.length; i++) {
+    const r = k.rows[i]; if (i) doc.addPage();
+    let y = await kopSppg(doc, k.dapur, k.logo);
+    doc.setTextColor.apply(doc, ink);
+    const rel = r.jenis === 'RELAWAN';
+    doc.setFont('helvetica', 'bold'); doc.setFontSize(13);
+    doc.text(rel ? 'TANDA TERIMA UPAH RELAWAN' : 'BERITA ACARA SERAH TERIMA INSENTIF', W / 2, y, { align: 'center' }); y += 5.5;
+    doc.setFont('helvetica', 'normal'); doc.setFontSize(10);
+    doc.text(rel ? sppg : 'Nomor: ' + r.nomor, W / 2, y, { align: 'center' }); y += 10;
+    if (!rel) { const pa = doc.splitTextToSize('Pada hari ini ' + tg.hari + ', tanggal ' + tg.tgl + ', telah dilakukan serah terima insentif dengan rincian sebagai berikut:', W - 2 * M);
+      doc.text(pa, M, y, { lineHeightFactor: 1.4 }); y += pa.length * 5 + 3; }
+    const baris = rel ? [['Jumlah Hari Kerja', '1 (satu) hari'], ['Periode', tg.hari + ', ' + tg.tgl], ['Nama', r.nama], ['Jabatan', r.jabatan || '-'],
+        ['Honor', fmt(r.nominal) + ' / hari'], ['Total', fmt(r.nominal), 'b'], ['Terbilang', terbilang(r.nominal), 'i']]
+      : [['Telah Menerima dari', sppg], ['Jumlah', fmt(r.nominal), 'b'], ['Terbilang', terbilang(r.nominal), 'i'], ['Untuk Pembayaran', UNTUK_BASTI[r.jenis]],
+        ['Diterima oleh', r.nama], [r.jenis === 'KADER' ? 'Nama Posyandu' : 'Nama Sekolah', r.lembaga], ['Total Penerima Manfaat', (r.pm || 0) + ' orang']];
+    if (r.keterangan) baris.push(['Keterangan', r.keterangan]);
+    baris.forEach(function(b) {
+      doc.setFont('helvetica', 'normal'); doc.text(b[0], M + 4, y); doc.text(':', M + 52, y);
+      doc.setFont('helvetica', b[2] === 'b' ? 'bold' : b[2] === 'i' ? 'italic' : 'normal');
+      const v = doc.splitTextToSize(String(b[1] || ''), W - M - (M + 56)); doc.text(v, M + 56, y, { lineHeightFactor: 1.35 }); y += Math.max(1, v.length) * 4.8 + 2.4;
+    });
+    doc.setFont('helvetica', 'normal'); y += 8;
+    doc.text(tg.tgl, kol[2], y, { align: 'center' }); y += 7;
+    if (rel) {
+      await ttdKolom(doc, kol[0], y, ['Penerima,', ''], r.ttd, r.nama);
+      await ttdKolom(doc, kol[1], y, ['Mengetahui,', 'Akuntan'], k.akuntan.ttd, k.akuntan.nama);
+      await ttdKolom(doc, kol[2], y, ['Menyetujui,', 'Kepala SPPG'], k.kepala.ttd, k.kepala.nama, k.kepala.nip ? 'NIP. ' + k.kepala.nip : '');
+    } else {
+      await ttdKolom(doc, kol[0], y, ['Mengetahui,', 'Akuntan'], k.akuntan.ttd, k.akuntan.nama);
+      await ttdKolom(doc, kol[1], y, ['Menyerahkan,', 'Kepala SPPG'], k.kepala.ttd, k.kepala.nama, k.kepala.nip ? 'NIP. ' + k.kepala.nip : '');
+      await ttdKolom(doc, kol[2], y, ['Menerima,', r.jenis === 'KADER' ? 'PJ Posyandu' : 'PIC Sekolah'], r.ttd, r.nama);
+    }
+    doc.setFontSize(7.5); doc.setTextColor(110); doc.setDrawColor(200); doc.setLineWidth(0.2); doc.line(M, 297 - 13, W - M, 297 - 13);
+    doc.text((rel ? 'Tanda terima upah relawan' : r.nomor) + '  ·  ' + k.tanggal + '  ·  Dibuat dari aplikasi Keuangan MBG', M, 297 - 9);
+    doc.text((i + 1) + '/' + k.rows.length, W - M, 297 - 9, { align: 'right' });
+  }
+  doc.setProperties({ title: 'Kwitansi ' + sppg + ' ' + k.tanggal, creator: 'Keuangan MBG' });
+  return doc;
+}
+function KwitansiPage({ session, scope, toast }) {
+  const role = session.user.role;
+  const dapurId = (role === 'akuntan' || role === 'pic') ? session.user.dapur : (scope && scope !== 'ALL' ? scope : '');
+  const [tanggal, setTanggal] = useState(todayISO());
+  const [data, setData] = useState(null);
+  const [rows, setRows] = useState([]);
+  const [busy, setBusy] = useState(false);
+  function load() { if (!dapurId) return; setData(null);
+    api('getKwitansiHarian', { dapur: dapurId, tanggal: tanggal }).then(function(r) {
+      if (!r.ok) { toast(r.error, 'error'); setData({ rows: [] }); setRows([]); return; }
+      setData(r.data); setRows(r.data.rows.map(function(x) { return Object.assign({}, x, { nominal: String(x.nominal), pm: String(x.pm || '') }); }));
+    }); }
+  useEffect(load, [dapurId, tanggal]);
+  if (!dapurId) return <Card><div className="text-sm" style={{ color: COLORS.muted }}>Pilih satu dapur di atas untuk membuat kwitansi.</div></Card>;
+  function ubah(id, k, v) { setRows(rows.map(function(x) { return x.penerima_id === id ? Object.assign({}, x, { [k]: v }) : x; })); }
+  const dipilih = rows.filter(function(x) { return x.pilih; });
+  const total = dipilih.reduce(function(a, x) { return a + (Number(x.nominal) || 0); }, 0);
+  const tanpaTtd = dipilih.filter(function(x) { return !x.ada_ttd; });
+  async function terbit() {
+    setBusy(true);
+    try {
+      const r = await apiPost('terbitkanKwitansi', { dapur: dapurId, tanggal: tanggal, rows: dipilih.map(function(x) { return { penerima_id: x.penerima_id, nominal: Number(x.nominal) || 0, pm: Number(x.pm) || 0, keterangan: x.keterangan || '' }; }) });
+      if (!r.ok) { toast(r.error, 'error'); return; }
+      const doc = await buildKwitansiPdf(r.data);
+      doc.save('Kwitansi_' + String(r.data.dapur.kode || r.data.dapur.nama).replace(/[^A-Za-z0-9]+/g, '_') + '_' + tanggal + '.pdf');
+      const kurang = [];
+      if (!r.data.akuntan.ttd) kurang.push('akuntan');
+      if (!r.data.kepala.ttd) kurang.push('Kepala SPPG');
+      if (!r.data.kepala.nama) kurang.push('nama Kepala SPPG (Identitas LPDH)');
+      toast(r.data.rows.length + ' kwitansi diunduh' + (kurang.length ? ' — belum ada: ' + kurang.join(', ') : ''), kurang.length ? 'error' : undefined);
+      load();
+    } catch (e) { toast('Gagal membuat PDF: ' + e.message, 'error'); }
+    finally { setBusy(false); }
+  }
+  return <div>
+    <div className="mb-3"><Eyebrow>Kwitansi Harian</Eyebrow>
+      <div className="text-xs" style={{ color: COLORS.muted }}>Relawan: Tanda Terima Upah. PIC Sekolah & Kader: BASTI bernomor urut per bulan. Tanda tangan penerima, akuntan, dan Kepala SPPG ditempel otomatis.</div></div>
+    <Card className="mb-3">
+      <Field label="Tanggal"><input type="date" value={tanggal} onChange={function(e) { if (e.target.value) setTanggal(e.target.value); }} style={inputStyle} aria-label="Tanggal kwitansi"/></Field>
+      {data && data.sudahTerbit > 0 && <div className="text-xs rounded-lg p-2.5" style={{ background: '#EAF0F8', color: COLORS.blue }}>{data.sudahTerbit} kwitansi sudah terbit untuk tanggal ini. Cetak ulang memakai nomor yang sama; yang dihapus centangnya dibuang (nomornya tidak dipakai ulang).</div>}
+      {data && !data.sudahTerbit && data.dariHonor && <div className="text-xs rounded-lg p-2.5" style={{ background: '#EAF3EC', color: COLORS.green }}>Relawan dicentang sesuai kehadiran di pembayaran honor tanggal ini.</div>}
+    </Card>
+    {!data ? <div className="text-sm flex items-center gap-2" style={{ color: COLORS.muted }}>{I.spinner} Memuat…</div>
+      : !rows.length ? <Card><div className="text-sm text-center" style={{ color: COLORS.muted }}>Belum ada Data Penerima aktif. Isi dulu di menu <b>Data Penerima</b>.</div></Card>
+      : JENIS_DP.map(function(j) {
+        const g = rows.filter(function(x) { return x.jenis === j[0]; });
+        if (!g.length) return null;
+        return <Card key={j[0]} pad={false} className="mb-3">
+          <div className="px-4 pt-3 pb-1 flex justify-between items-center"><Eyebrow>{j[1]}</Eyebrow>
+            <span className="text-xs flex gap-3"><button onClick={function() { setRows(rows.map(function(x) { return x.jenis === j[0] ? Object.assign({}, x, { pilih: true }) : x; })); }} style={{ color: COLORS.blue }}>Semua</button>
+              <button onClick={function() { setRows(rows.map(function(x) { return x.jenis === j[0] ? Object.assign({}, x, { pilih: false }) : x; })); }} style={{ color: COLORS.blue }}>Kosongkan</button></span></div>
+          {g.map(function(x) { return <div key={x.penerima_id} className="px-4 py-2.5 flex items-center gap-2" style={{ borderTop: '1px solid ' + COLORS.line, opacity: x.pilih ? 1 : 0.5 }}>
+            <input type="checkbox" checked={!!x.pilih} onChange={function(e) { ubah(x.penerima_id, 'pilih', e.target.checked); }} style={{ width: 22, height: 22, flexShrink: 0 }} aria-label={'Pilih ' + x.nama}/>
+            <div className="flex-1 min-w-0">
+              <div className="text-sm truncate" style={{ color: COLORS.ink }}>{x.nama}{x.nomor && <span className="text-[11px]" style={{ color: COLORS.muted }}> · {x.nomor}</span>}</div>
+              <div className="text-[11px] truncate" style={{ color: x.ada_ttd ? COLORS.muted : COLORS.danger }}>{x.jenis === 'RELAWAN' ? (x.jabatan || '—') : x.lembaga}{x.ada_ttd ? '' : ' · belum ada TTD'}</div>
+            </div>
+            {x.pilih && x.jenis !== 'RELAWAN' && <input value={x.pm} inputMode="numeric" onChange={function(e) { ubah(x.penerima_id, 'pm', e.target.value.replace(/\D/g, '')); }} title="Penerima manfaat"
+              style={Object.assign({}, inputStyle, { width: 58, minHeight: 36, padding: '6px 8px', textAlign: 'center' })} aria-label={'PM ' + x.nama}/>}
+            {x.pilih && <input value={x.nominal} inputMode="numeric" onChange={function(e) { ubah(x.penerima_id, 'nominal', e.target.value.replace(/\D/g, '')); }}
+              style={Object.assign({}, inputStyle, { width: 96, minHeight: 36, padding: '6px 8px', textAlign: 'right' })} aria-label={'Nominal ' + x.nama}/>}
+          </div>; })}
+        </Card>; })}
+    {rows.length > 0 && <Card>
+      <div className="flex justify-between text-sm mb-2" style={{ color: COLORS.ink }}><span>{dipilih.length} kwitansi</span><b>{fmt(total)}</b></div>
+      {tanpaTtd.length > 0 && <div className="text-xs mb-2" style={{ color: COLORS.amber }}>{tanpaTtd.length} penerima belum punya TTD — kolomnya akan kosong.</div>}
+      {data && data.bisaUbah ? <Btn full disabled={busy || !dipilih.length} onClick={terbit}>{busy ? I.spinner : I.download} Terbitkan & unduh PDF</Btn>
+        : <div className="text-xs" style={{ color: COLORS.muted }}>Hanya PIC, akuntan, atau admin yang bisa menerbitkan.</div>}
+    </Card>}
+  </div>;
 }
 
 function BAButton({ g, toast, compact }) {
@@ -5703,6 +5842,7 @@ function App() {
       ['lpdh','LPDH Harian',I.download],
       ['riwayat','Riwayat',I.list],
       ['bukubesar','Buku Besar',I.trend],
+      ['kwitansi','Kwitansi',I.download],
       ['penerima','Data Penerima',I.users],
       ['profil','Profil',I.user],
     ],
@@ -5720,6 +5860,7 @@ function App() {
       ['lpdh','LPDH Harian',I.download],
       ['riwayat','Riwayat',I.list],
       ['bukubesar','Buku Besar',I.trend],
+      ['kwitansi','Kwitansi',I.download],
       ['penerima','Data Penerima',I.users],
       ['profil','Profil',I.user],
     ],
@@ -5744,6 +5885,7 @@ function App() {
       ['lpdh','LPDH Harian',I.download],
       ['riwayat','Riwayat',I.list],
       ['bukubesar','Buku Besar',I.trend],
+      ['kwitansi','Kwitansi',I.download],
       ['penerima','Data Penerima',I.users],
       ['darurat','Input Darurat',I.warn],
       ['perubahan','Persetujuan Edit',I.edit],
@@ -5827,6 +5969,7 @@ function App() {
           {view === 'riwayat' && <Riwayat session={session} scope={effScope} toast={toast} refreshKey={refreshKey}/>}
           {view === 'bukubesar' && <BukuBesar session={session} scope={effScope} toast={toast}/>}
           {view === 'periode' && <PeriodeAdmin session={session} toast={toast}/>}
+          {view === 'kwitansi' && <KwitansiPage session={session} scope={effScope} toast={toast}/>}
           {view === 'penerima' && <DataPenerimaPage session={session} scope={effScope} toast={toast}/>}
           {view === 'profil'  && <Profil session={session} toast={toast} onUpdated={onProfileUpdated}/>}
           {view === 'users'   && <Pengguna session={session} toast={toast}/>}

@@ -135,7 +135,7 @@ function handleRequest(e, method) {
     }
     let result;
     switch (action) {
-      case 'ping':              result = { ok: true, time: new Date().toISOString(), version: 'v6-ba-sec23' }; break;
+      case 'ping':              result = { ok: true, time: new Date().toISOString(), version: 'v6-ba-sec24' }; break;
       case 'login':             result = login(params); break;
       case 'getPeriodeList':    result = getPeriodeList(params); break;
       case 'getActivePeriode':  result = getActivePeriode(params); break;
@@ -182,6 +182,8 @@ function handleRequest(e, method) {
       // v6 — Berita Acara & tanda tangan akuntan
       case 'getTtd':            result = getTtd(params); break;
       case 'saveTtd':           result = saveTtd(params); break;
+      case 'getKwitansiHarian': result = getKwitansiHarian(params); break;
+      case 'terbitkanKwitansi': result = terbitkanKwitansi(params); break;
       case 'hapusTtd':          result = hapusTtd(params); break;
       case 'getDataPenerima':   result = getDataPenerima(params); break;
       case 'saveDataPenerima':  result = saveDataPenerima(params); break;
@@ -2886,6 +2888,112 @@ function hapusDataPenerima(p) {
     if (fid) { try { DriveApp.getFileById(fid).setTrashed(true); } catch (e) {} props.deleteProperty(ttdKey('P_' + pn.id)); }
     logActivity(me.id, 'hapusDataPenerima', pn.id + ' ' + pn.nama);
     return { ok: true };
+  });
+}
+
+// ============================================================
+//  KWITANSI HARIAN — 1 orang 1 kwitansi per hari, dari Data Penerima
+//  Relawan: "Tanda Terima Upah Relawan" (tanpa nomor). PIC Sekolah & Kader: BASTI bernomor urut per dapur per bulan
+//  (NN/BASTI/SPPG-<kode dapur>/<bulan romawi>/<tahun>). Nomor yang sudah terbit tetap saat dicetak ulang.
+//  KwitansiHarian: id | dapur_id | tanggal | penerima_id | jenis | nomor | seq | nama | jabatan | lembaga | pm | nominal | keterangan | updated_at | updated_by
+// ============================================================
+const ROMAWI = ['I', 'II', 'III', 'IV', 'V', 'VI', 'VII', 'VIII', 'IX', 'X', 'XI', 'XII'];
+function kwitansiSheet() { return sheetOtomatis('KwitansiHarian', ['id', 'dapur_id', 'tanggal', 'penerima_id', 'jenis', 'nomor', 'seq', 'nama', 'jabatan', 'lembaga', 'pm', 'nominal', 'keterangan', 'updated_at', 'updated_by']); }
+function tglTeks(v) { return v instanceof Date ? Utilities.formatDate(v, 'GMT+7', 'yyyy-MM-dd') : String(v || '').substring(0, 10); }
+function bacaKwitansi(dapurId) {
+  const d = kwitansiSheet().getDataRange().getValues(), out = [];
+  for (let i = 1; i < d.length; i++) {
+    if (!d[i][0] || d[i][1] !== dapurId) continue;
+    out.push({ _row: i + 1, id: String(d[i][0]), tanggal: tglTeks(d[i][2]), penerima_id: String(d[i][3]), jenis: String(d[i][4]), nomor: String(d[i][5] || ''), seq: Number(d[i][6]) || 0,
+      nama: String(d[i][7] || ''), jabatan: String(d[i][8] || ''), lembaga: String(d[i][9] || ''), pm: Number(d[i][10]) || 0, nominal: Number(d[i][11]) || 0, keterangan: String(d[i][12] || '') });
+  }
+  return out;
+}
+function nomorBasti(seq, kode, tanggal) {
+  const b = Number(tanggal.substring(5, 7));
+  return ('0' + seq).slice(-2) + '/BASTI/SPPG-' + (kode || 'X') + '/' + ROMAWI[b - 1] + '/' + tanggal.substring(0, 4);
+}
+// relawan yang hadir menurut pembayaran honor tanggal itu (bila sudah diisi di LPDH) → dicentang otomatis
+function relawanHadirTanggal(dapurId, tanggal) {
+  const semua = bacaRelawanSemua(dapurId), nama = {};
+  let ada = false;
+  readAllTransaksi([dapurId]).forEach(function(t) {
+    if (t.tanggal !== tanggal || !isHonorRelawan(t) || !semua[t.id]) return;
+    ada = true; semua[t.id].rows.forEach(function(r) { if (r.hadir !== false) nama[String(r.nama).toLowerCase()] = 1; });
+  });
+  return ada ? nama : null;
+}
+function dataKwitansi(dapurId, tanggal) {
+  const dapurRow = getDapur().data.find(function(d) { return d.id === dapurId; }) || {};
+  const ident = readIdentitasLPDH(dapurId) || {};
+  const users = getSheet(SHEETS.USERS).getDataRange().getValues().slice(1);
+  const akn = users.find(function(u) { return String(u[4]).toLowerCase() === 'akuntan' && u[5] === dapurId && String(u[6]).toUpperCase() === 'YA'; });
+  return { tanggal: tanggal,
+    dapur: { id: dapurId, nama: dapurRow.nama || dapurId, kode: dapurRow.kode || '', alamat: dapurRow.alamat || '', telepon: dapurRow.telepon || '', email: dapurRow.email || '' },
+    logo: readLogoKop(),
+    akuntan: { nama: akn ? akn[3] : '', ttd: akn ? readTtdDataUrl(akn[0]) : null },
+    kepala: { nama: ident.kepala_nama || '', nip: ident.kepala_nip || '', ttd: readTtdDataUrl('KEPALA_' + dapurId) } };
+}
+function getKwitansiHarian(p) {
+  const me = authUser(p);
+  if (!me) return { ok: false, error: SESI_ERR };
+  const dapurId = lpdhDapur(me, p.dapur), tanggal = String(p.tanggal || '').substring(0, 10);
+  if (!dapurId || !/^\d{4}-\d{2}-\d{2}$/.test(tanggal)) return { ok: false, error: 'Pilih dapur & tanggal' };
+  const terbit = bacaKwitansi(dapurId).filter(function(k) { return k.tanggal === tanggal; }), byP = {};
+  terbit.forEach(function(k) { byP[k.penerima_id] = k; });
+  const hadir = relawanHadirTanggal(dapurId, tanggal);
+  const props = PropertiesService.getScriptProperties().getProperties();
+  const rows = bacaDataPenerima(dapurId).filter(function(x) { return x.aktif || byP[x.id]; }).map(function(x) {
+    const k = byP[x.id];
+    return { penerima_id: x.id, jenis: x.jenis, nama: x.nama, jabatan: x.jabatan, lembaga: x.lembaga, ada_ttd: !!props[ttdKey('P_' + x.id)],
+      pm: k ? k.pm : x.pm, nominal: k ? k.nominal : x.nominal, keterangan: k ? k.keterangan : '', nomor: k ? k.nomor : '', terbit: !!k,
+      pilih: k ? true : terbit.length ? false : x.jenis === 'RELAWAN' && hadir ? !!hadir[x.nama.toLowerCase()] : true };
+  });
+  return { ok: true, data: { rows: rows, sudahTerbit: terbit.length, dariHonor: !!hadir, bisaUbah: bisaIsiLPDH(me) } };
+}
+function terbitkanKwitansi(p) {
+  const me = authUser(p);
+  if (!me) return { ok: false, error: SESI_ERR };
+  if (!bisaIsiLPDH(me)) return { ok: false, error: 'Hanya PIC, akuntan, atau admin' };
+  const dapurId = lpdhDapur(me, p.dapur), tanggal = String(p.tanggal || '').substring(0, 10);
+  if (!dapurId || !/^\d{4}-\d{2}-\d{2}$/.test(tanggal)) return { ok: false, error: 'Pilih dapur & tanggal' };
+  let a = p.rows; if (typeof a === 'string') a = bacaJson(a);
+  if (!Array.isArray(a) || !a.length) return { ok: false, error: 'Pilih minimal satu penerima' };
+  if (a.length > 300) return { ok: false, error: 'Maksimal 300 kwitansi per hari' };
+  const dp = {}; bacaDataPenerima(dapurId).forEach(function(x) { dp[x.id] = x; });
+  const masuk = [], dipakai = {};
+  for (let i = 0; i < a.length; i++) {
+    const x = a[i] || {}, pn = dp[String(x.penerima_id || '')];
+    if (!pn) return { ok: false, error: 'Penerima tidak ditemukan di Data Penerima dapur ini' };
+    if (dipakai[pn.id]) return { ok: false, error: pn.nama + ' tercantum dua kali — 1 orang 1 kwitansi per hari' };
+    dipakai[pn.id] = 1;
+    const nominal = Math.round(Number(x.nominal) || 0);
+    if (!(nominal > 0)) return { ok: false, error: 'Nominal ' + pn.nama + ' wajib > 0' };
+    masuk.push({ pn: pn, nominal: nominal, pm: Math.max(0, Math.round(Number(x.pm) || 0)), keterangan: String(x.keterangan || '').trim().substring(0, 120) });
+  }
+  return withLock(function() {
+    const sh = kwitansiSheet(), semua = bacaKwitansi(dapurId), hariIni = semua.filter(function(k) { return k.tanggal === tanggal; });
+    const kode = (getDapur().data.find(function(d) { return d.id === dapurId; }) || {}).kode || '';
+    const bulan = tanggal.substring(0, 7);
+    const props = PropertiesService.getScriptProperties(), kunciSeq = 'kw_seq_' + dapurId + '_' + bulan;
+    let seq = Math.max(Number(props.getProperty(kunciSeq)) || 0, semua.filter(function(k) { return k.jenis !== 'RELAWAN' && k.tanggal.substring(0, 7) === bulan; }).reduce(function(m, k) { return Math.max(m, k.seq); }, 0));
+    // urutan cetak: relawan, PIC sekolah, kader; dalam jenis menurut nama
+    const urut = { RELAWAN: 0, PIC_SEKOLAH: 1, KADER: 2 };
+    masuk.sort(function(x, y) { return (urut[x.pn.jenis] - urut[y.pn.jenis]) || x.pn.nama.localeCompare(y.pn.nama); });
+    const hasil = masuk.map(function(m) {
+      const ada = hariIni.find(function(k) { return k.penerima_id === m.pn.id; });
+      let nomor = ada ? ada.nomor : '', sq = ada ? ada.seq : 0;
+      if (!ada && m.pn.jenis !== 'RELAWAN') { seq++; sq = seq; nomor = nomorBasti(seq, kode, tanggal); }
+      const baris = [ada ? ada.id : idUnik('KW'), dapurId, tanggal, m.pn.id, m.pn.jenis, nomor, sq, m.pn.nama, m.pn.jabatan, m.pn.lembaga, m.pm, m.nominal, m.keterangan, new Date(), me.id];
+      if (ada) sh.getRange(ada._row, 1, 1, baris.length).setValues([baris]); else sh.appendRow(baris);
+      return { penerima_id: m.pn.id, jenis: m.pn.jenis, nomor: nomor, nama: m.pn.nama, jabatan: m.pn.jabatan, lembaga: m.pn.lembaga, pm: m.pm, nominal: m.nominal,
+        keterangan: m.keterangan, ttd: readTtdDataUrl('P_' + m.pn.id) };
+    });
+    props.setProperty(kunciSeq, String(seq));
+    // yang tidak dipilih lagi dibuang dari tanggal ini (nomornya tidak dipakai ulang agar arsip tidak bentrok)
+    hariIni.filter(function(k) { return !dipakai[k.penerima_id]; }).sort(function(x, y) { return y._row - x._row; }).forEach(function(k) { sh.deleteRow(k._row); });
+    logActivity(me.id, 'terbitkanKwitansi', dapurId + ' ' + tanggal + ' (' + hasil.length + ')');
+    return { ok: true, data: Object.assign(dataKwitansi(dapurId, tanggal), { rows: hasil }) };
   });
 }
 
