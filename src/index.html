@@ -2458,10 +2458,13 @@ function LpdhPage({ session, scope, toast }) {
     setBusy(true);
     try {
       // link bukti relawan, PIC sekolah, kader & insentif Mitra harus ke kwitansi bertanda tangan: yang belum ada / usang dibuat dulu
+      // dicek saat tombol ditekan (bukan saat halaman dibuka) agar pemuatan LPDH tetap ringan
       let isi = data;
-      if (bisaIsi && (data.kwitansiPerlu || []).length) {
-        toast('Menyiapkan kwitansi bertanda tangan (' + data.kwitansiPerlu.length + ' berkas)…');
-        const gagal = await siapkanKwitansiLpdh(dapurId, tanggal, data.kwitansiPerlu);
+      const cek = bisaIsi ? await api('getKwitansiPerlu', { dapur: dapurId, tanggal: tanggal }) : null;
+      const perlu = cek && cek.ok && cek.data ? (cek.data.perlu || []) : [];
+      if (perlu.length) {
+        toast('Menyiapkan kwitansi bertanda tangan (' + perlu.length + ' berkas)…');
+        const gagal = await siapkanKwitansiLpdh(dapurId, tanggal, perlu);
         const baru = await api('getDataLPDH', { dapur: dapurId, tanggal: tanggal });
         if (baru.ok) { isi = baru.data; setData(baru.data); }
         if (gagal) toast(gagal + ' kwitansi gagal disiapkan — link bukti memakai bukti transaksi. Coba unduh lagi.', 'error');
@@ -5180,7 +5183,7 @@ async function buildKuitansiInsentifPdf(k) {
 }
 // Buat (ulang) PDF kwitansi bertanda tangan yang diminta LPDH, simpan ke Drive → tautannya dipakai LPDH. Mengembalikan jumlah yang gagal.
 async function siapkanKwitansiLpdh(dapurId, tanggal, perlu) {
-  const r = await api('getKwitansiCetak', { dapur: dapurId, tanggal: tanggal });
+  const r = await api('getKwitansiCetak', { dapur: dapurId, tanggal: tanggal, jenis: perlu.join(',') });   // hanya jenis yang perlu → gambar TTD lain tidak dimuat
   if (!r.ok) return perlu.length;
   let gagal = 0;
   for (const jn of perlu) {
