@@ -93,7 +93,7 @@ const ok = (c, m) => { console.log((c ? 'PASS ' : 'FAIL ') + m); if (!c) fails++
     ['U3', 'off', 'xxxxxxx', 'Nonaktif', 'pic', 'D001', 'TIDAK'],
   ]);
   const B = env.__book;
-  ok(call(env, 'GET', { action: 'ping' }).version === 'v6-ba-sec28', 'ping menampilkan versi baru');
+  ok(call(env, 'GET', { action: 'ping' }).version === 'v6-ba-sec29', 'ping menampilkan versi baru');
 
   // 1. login lama (teks biasa) berhasil via POST dan password otomatis di-hash
   let r = call(env, 'POST', { action: 'login', username: 'AKUN1', password: 'RahasiaKu9' });
@@ -700,7 +700,7 @@ const ok = (c, m) => { console.log((c ? 'PASS ' : 'FAIL ') + m); if (!c) fails++
     r = call(e8, 'POST', { action: 'terbitkanKwitansi', token: tA, tanggal: '2026-10-21', rows: [{ penerima_id: kd, nominal: 50000, pm: 40 }, { penerima_id: ps, nominal: 100000, pm: 300 }, { penerima_id: siti.penerima_id, nominal: 160000 }] });
     ok(r.ok && r.data.rows.length === 3, 'kwitansi terbit: ' + (r.error || ''));
     const nr = Object.fromEntries(r.data.rows.map(x => [x.penerima_id, x.nomor]));
-    ok(r.data.rows[0].jenis === 'RELAWAN' && nr[siti.penerima_id] === '' && nr[ps] === '01/BASTI/SPPG-S1/X/2026' && nr[kd] === '02/BASTI/SPPG-S1/X/2026', 'relawan tanpa nomor; BASTI urut (PIC sekolah lalu kader): ' + JSON.stringify(nr));
+    ok(r.data.rows[0].jenis === 'RELAWAN' && nr[siti.penerima_id] === '001/TTUR/SPPG-S1/X/2026' && nr[ps] === '01/BASTI/SPPG-S1/X/2026' && nr[kd] === '02/BASTI/SPPG-S1/X/2026', 'relawan bernomor TTUR sendiri; BASTI urut (PIC sekolah lalu kader): ' + JSON.stringify(nr));
     ok(r.data.rows.find(x => x.penerima_id === kd).pm === 40 && /^data:image/.test(r.data.rows.find(x => x.penerima_id === siti.penerima_id).ttd) && r.data.kepala && r.data.akuntan, 'PM disesuaikan; TTD penerima ikut; data akuntan & kepala tersedia');
     r = call(e8, 'POST', { action: 'terbitkanKwitansi', token: tA, tanggal: '2026-10-21', rows: [{ penerima_id: kd, nominal: 55000, pm: 40 }] });
     ok(r.ok && r.data.rows[0].nomor === '02/BASTI/SPPG-S1/X/2026' && r.data.rows[0].nominal === 55000, 'cetak ulang: nomor tetap, nominal ikut berubah');
@@ -804,7 +804,7 @@ const ok = (c, m) => { console.log((c ? 'PASS ' : 'FAIL ') + m); if (!c) fails++
     call(e8, 'POST', { action: 'simpanKwitansiFile', token: tP, tanggal: '2026-10-21', jenis: 'KADER', fileData: 'JVBERg==' });
     r = call(e8, 'POST', { action: 'getDataLPDH', token: tA, dapur: 'D001', tanggal: '2026-10-21' });
     ok(call(e8, 'POST', { action: 'getKwitansiPerlu', token: tA, tanggal: '2026-10-21' }).data.perlu.length === 0 && /^https:/.test(r.data.kwitansi.KADER), 'setelah PDF tersimpan: tidak perlu dibuat lagi, link masuk LPDH');
-    ok(JSON.stringify(r.data.kwitansiNomor) === JSON.stringify({ PIC_SEKOLAH: [], KADER: ['02/BASTI/SPPG-S1/X/2026'] }), 'LPDH membawa nomor BASTI kwitansi hari itu (' + JSON.stringify(r.data.kwitansiNomor) + ')');
+    ok(JSON.stringify(r.data.kwitansiNomor) === JSON.stringify({ PIC_SEKOLAH: [], KADER: ['02/BASTI/SPPG-S1/X/2026'], RELAWAN: {} }), 'LPDH membawa nomor BASTI kwitansi hari itu (' + JSON.stringify(r.data.kwitansiNomor) + ')');
     call(e8, 'POST', { action: 'saveTtd', token: tA, untuk: 'penerima', id: idKd, fileData: png });
     r = call(e8, 'POST', { action: 'getDataLPDH', token: tA, dapur: 'D001', tanggal: '2026-10-21' });
     ok(JSON.stringify(call(e8, 'POST', { action: 'getKwitansiPerlu', token: tA, tanggal: '2026-10-21' }).data.perlu) === '["KADER"]', 'tanda tangan penerima berubah → PDF lama dianggap usang & dibuat ulang');
@@ -858,6 +858,26 @@ const ok = (c, m) => { console.log((c ? 'PASS ' : 'FAIL ') + m); if (!c) fails++
     ok(m.drive === 0, 'gambar tanda tangan diambil dari cache pada permintaan berikutnya (Drive dibuka ' + m.drive + '×)');
     m = ukur(() => call(e8, 'POST', { action: 'getKwitansiCetak', token: tA, tanggal: '2026-10-21', jenis: 'INSENTIF' }));
     ok(m.r.ok && m.r.data.rows.length === 0, 'cetak ulang hanya jenis yang diminta (baris lain tidak dibaca)');
+  }
+
+
+  // ── Nomor kwitansi relawan (TTUR): unik per orang, kwitansi lama tanpa nomor dilengkapi ──
+  {
+    const tA = tk8('akn'), tP = tk8('pic');
+    let r = call(e8, 'POST', { action: 'getKwitansiHarian', token: tA, tanggal: '2026-10-27' });
+    const rel = r.data.rows.filter(x => x.jenis === 'RELAWAN');
+    r = call(e8, 'POST', { action: 'terbitkanKwitansi', token: tA, tanggal: '2026-10-27', rows: rel.map(x => ({ penerima_id: x.penerima_id, nominal: x.nominal })) });
+    ok(r.ok && r.data.rows.every(x => /^\d{3}\/TTUR\/SPPG-S1\/X\/2026$/.test(x.nomor)) && new Set(r.data.rows.map(x => x.nomor)).size === r.data.rows.length,
+      'tiap relawan dapat nomor TTUR unik (' + r.data.rows.map(x => x.nomor).join(', ') + ')');
+    const sebelum = r.data.rows.map(x => x.nomor).join();
+    // tiru kwitansi relawan lama (terbit sebelum ada nomor): kosongkan nomornya di sheet
+    B8.KwitansiHarian.forEach((row, i) => { if (i && row[2] === '2026-10-27' && row[4] === 'RELAWAN') { row[5] = ''; row[6] = 0; } });
+    ok(JSON.stringify(call(e8, 'POST', { action: 'getKwitansiPerlu', token: tA, tanggal: '2026-10-27' }).data.perlu).indexOf('RELAWAN') >= 0, 'kwitansi relawan tanpa nomor → perlu dibuat ulang');
+    r = call(e8, 'POST', { action: 'getKwitansiCetak', token: tA, tanggal: '2026-10-27' });
+    const sesudah = r.data.rows.filter(x => x.jenis === 'RELAWAN').map(x => x.nomor);
+    ok(sesudah.length && sesudah.every(n => /\/TTUR\//.test(n)) && sesudah.join() !== sebelum, 'kwitansi relawan lama diberi nomor baru saat dicetak; nomor lama tidak dipakai ulang (' + sesudah.join(', ') + ')');
+    r = call(e8, 'POST', { action: 'getDataLPDH', token: tA, dapur: 'D001', tanggal: '2026-10-27' });
+    ok(Object.values(r.data.kwitansiNomor.RELAWAN).length === sesudah.length, 'LPDH membawa nomor kwitansi relawan per nama');
   }
 
   console.log(fails ? '\n' + fails + ' GAGAL' : '\nSEMUA LULUS');
