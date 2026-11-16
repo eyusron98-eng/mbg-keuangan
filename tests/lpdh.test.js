@@ -138,6 +138,9 @@ function dataUji(nOp) {
     ok(w3('C1_Relawan', 'K6') === 'https://drive.google.com/kw-relawan' && w3('C1_Relawan', 'K7') === 'https://drive.google.com/kw-relawan', 'link tiap relawan di C1 = kwitansi relawan otomatis');
     ok(w3('C_Operasional', 'J7') === 'https://drive.google.com/kw-pic' && w3('C_Operasional', 'J8') === 'https://drive.google.com/kw-kader', 'link insentif PIC sekolah & kader = kwitansi (BASTI) otomatis');
     ok(w3('D_Insentif', 'C25') === 'Ya' && w3('D_Insentif', 'C26') === 'https://drive.google.com/file/d/8', 'insentif Mitra: ditandatangani Ya (TTD gambar otomatis), tautan = kuitansi otomatis');
+    { const wb6 = new ExcelJS.Workbook(); await wb6.xlsx.readFile(TPL);
+      L.isiLPDH(wb6, Object.assign({}, d3, { kwitansi: Object.assign({}, d3.kwitansi, { INSENTIF: 'https://drive.google.com/kw-insentif' }) }), { waktu: new Date(2026, 9, 29, 5, 30) });
+      ok(wb6.getWorksheet('D_Insentif').getCell('C26').value === 'https://drive.google.com/kw-insentif' && wb6.getWorksheet('D_Insentif').getCell('C25').value === 'Ya', 'insentif Mitra: tautan = kuitansi bertanda tangan buatan aplikasi'); }
     d3.kwitansi = {};
     const wb4 = new ExcelJS.Workbook(); await wb4.xlsx.readFile(TPL);
     L.isiLPDH(wb4, d3, { waktu: new Date(2026, 9, 29, 5, 30) });

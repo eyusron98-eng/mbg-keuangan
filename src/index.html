@@ -1548,9 +1548,9 @@ function isiLPDH(wb, data, opsi) {
     // nomor kuitansi = nomor kuitansi otomatis (nomor bukti realisasi)
     set(D, 'C24', lpdhGabung(ins.map(function(t, i) { return ki[i].no_kuitansi || t.no_bukti; }), '; '));
     // ditandatangani Mitra = kuitansi bertanda tangan sudah diunggah PIC
-    set(D, 'C25', ki.every(function(x) { return x.ttd_otomatis || x.ttd_url || x.kuitansi_ttd === 'Ya'; }) ? 'Ya' : 'Tidak');
-    // tautan bukti bayar = kuitansi otomatis (tanda tangan dari gambar tersimpan); berkas unggahan manual hanya cadangan bila kuitansi otomatis tidak ada
-    set(D, 'C26', ins.map(function(t, i) { return t.bukti_url || ki[i].ttd_url; }).filter(Boolean).join(' | '));
+    set(D, 'C25', kwH.INSENTIF || ki.every(function(x) { return x.ttd_otomatis || x.ttd_url || x.kuitansi_ttd === 'Ya'; }) ? 'Ya' : 'Tidak');
+    // tautan bukti bayar = kuitansi bertanda tangan (dibuat aplikasi dari TTD tersimpan); bila belum ada: kuitansi realisasi, lalu unggahan manual
+    set(D, 'C26', kwH.INSENTIF || ins.map(function(t, i) { return t.bukti_url || ki[i].ttd_url; }).filter(Boolean).join(' | '));
     // referensi = referensi yang tertulis di kuitansi (nomor Berita Acara pengajuan #baris)
     set(D, 'C27', lpdhGabung(ins.map(function(t, i) { return ki[i].ref_va || t.ref || ''; }), '; '));
   }
@@ -2383,12 +2383,21 @@ function LpdhPage({ session, scope, toast }) {
   async function unduh() {
     setBusy(true);
     try {
+      // link bukti relawan, PIC sekolah, kader & insentif Mitra harus ke kwitansi bertanda tangan: yang belum ada / usang dibuat dulu
+      let isi = data;
+      if (bisaIsi && (data.kwitansiPerlu || []).length) {
+        toast('Menyiapkan kwitansi bertanda tangan (' + data.kwitansiPerlu.length + ' berkas)…');
+        const gagal = await siapkanKwitansiLpdh(dapurId, tanggal, data.kwitansiPerlu);
+        const baru = await api('getDataLPDH', { dapur: dapurId, tanggal: tanggal });
+        if (baru.ok) { isi = baru.data; setData(baru.data); }
+        if (gagal) toast(gagal + ' kwitansi gagal disiapkan — link bukti memakai bukti transaksi. Coba unduh lagi.', 'error');
+      }
       if (!window.ExcelJS) await loadScriptOnce(EXCELJS_URL);
       const res = await fetch(LPDH_TEMPLATE_URL);
       if (!res.ok) throw new Error('template LPDH tidak ditemukan');
       const wb = new window.ExcelJS.Workbook();
       await wb.xlsx.load(await res.arrayBuffer());
-      const r = isiLPDH(wb, data, Object.assign({}, opsi, { waktu: new Date() }));
+      const r = isiLPDH(wb, isi, Object.assign({}, opsi, { waktu: new Date() }));
       const blob = new Blob([await wb.xlsx.writeBuffer()], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
       const a = document.createElement('a');
       a.href = URL.createObjectURL(blob); a.download = r.namaFile;
@@ -2475,12 +2484,14 @@ function LpdhPage({ session, scope, toast }) {
               <div className="text-xs" style={{ color: lengkap ? COLORS.green : '#9A6A0B' }}>{lengkap ? 'SP2D ' + t.no_sp2d + ' · kuitansi ' + t.no_kuitansi : 'SP2D / kuitansi / link bukti terima belum lengkap'}</div></div>
             {bisaLengkapi && <Btn size="sm" kind={lengkap ? 'ghost' : 'solid'} onClick={function() { setEditTopup(t); }}>{lengkap ? 'Ubah' : 'Lengkapi'}</Btn>}
           </div>; })}
-          {grup.ins.map(function(t) { const k = t.insentif || {}; const ppk = k.no_ppk || data.ppkTerakhir; const ttd = !!(k.ttd_url || k.kuitansi_ttd === 'Ya');
+          {grup.ins.map(function(t) { const k = t.insentif || {}; const ppk = k.no_ppk || data.ppkTerakhir; const kwIns = (data.kwitansi || {}).INSENTIF, ttd = !!(kwIns || k.ttd_otomatis || k.ttd_url || k.kuitansi_ttd === 'Ya');
             return <div key={t.id} className="py-1.5 text-sm" style={{ borderTop: '1px solid ' + COLORS.line }}>
             <div className="flex items-center justify-between gap-2">
               <div className="min-w-0"><div className="truncate" style={{ color: COLORS.ink }}>Insentif {fmt(t.riil)}{t.no_bukti ? ' · kuitansi ' + t.no_bukti : ''}</div>
                 <div className="text-xs" style={{ color: ppk ? COLORS.green : '#9A6A0B' }}>{ppk ? 'Pernyataan PPK ' + ppk + (k.no_ppk ? '' : ' (nomor terakhir)') : 'Nomor pernyataan PPK belum pernah diketik'}</div>
-                <div className="text-xs" style={{ color: ttd ? COLORS.green : '#9A6A0B' }}>{ttd ? <>Kuitansi bertanda tangan Mitra ✓ {k.ttd_url && <a href={k.ttd_url} target="_blank" rel="noopener" className="underline">lihat</a>}</> : 'Kuitansi bertanda tangan belum diunggah'}</div></div>
+                <div className="text-xs" style={{ color: ttd ? COLORS.green : '#9A6A0B' }}>{kwIns ? <>Kuitansi bertanda tangan ✓ (otomatis, tertaut di LPDH) <a href={kwIns} target="_blank" rel="noopener" className="underline">lihat</a></>
+                  : k.ttd_otomatis ? 'Kuitansi bertanda tangan dibuat otomatis saat LPDH diunduh'
+                  : ttd ? <>Kuitansi bertanda tangan Mitra ✓ {k.ttd_url && <a href={k.ttd_url} target="_blank" rel="noopener" className="underline">lihat</a>}</> : 'TTD akuntan / PIC belum diunggah di Profil — kuitansi belum bisa ditandatangani otomatis'}</div></div>
               <div className="flex flex-col gap-1 shrink-0">
                 {bisaIsi && <label className="inline-flex items-center justify-center gap-1 rounded-lg px-3 py-2 text-xs font-semibold cursor-pointer" style={{ background: ttd ? 'transparent' : COLORS.green, color: ttd ? COLORS.green : '#fff', border: '1px solid ' + (ttd ? COLORS.line : COLORS.green), minHeight: 36 }}>
                   {unggahTtd === t.id ? I.spinner : I.camera} {ttd ? 'Ganti ttd' : 'Unggah ttd'}
@@ -5007,6 +5018,52 @@ async function buildKwitansiPdf(k) {
   }
   doc.setProperties({ title: 'Kwitansi ' + sppg + ' ' + k.tanggal, creator: 'Keuangan MBG' });
   return doc;
+}
+// Kuitansi insentif Mitra/Yayasan (Fasilitas SPPG) bertanda tangan: Pengawas Keuangan (menyerahkan) & PIC/pemilik gedung (menerima)
+async function buildKuitansiInsentifPdf(k) {
+  const JsPDF = await ensureJsPDF();
+  const doc = new JsPDF({ unit: 'mm', format: 'a4', orientation: 'portrait' });
+  const W = 210, M = 15, ink = [33, 37, 41];
+  const sppg = /^SPPG\b/i.test(k.dapur.nama) ? k.dapur.nama : 'SPPG ' + k.dapur.nama;
+  for (let i = 0; i < k.insentif.length; i++) {
+    const t = k.insentif[i]; if (i) doc.addPage();
+    let y = await kopSppg(doc, k.dapur, k.logo);
+    doc.setTextColor.apply(doc, ink);
+    doc.setFont('helvetica', 'bold'); doc.setFontSize(13); doc.text('KUITANSI / BUKTI PEMBAYARAN', W / 2, y, { align: 'center' }); y += 5.5;
+    doc.setFont('helvetica', 'normal'); doc.setFontSize(10); doc.text('Nomor: ' + t.no_bukti, W / 2, y, { align: 'center' }); y += 11;
+    const tg = tglPanjang(t.tanggal);
+    [['Telah terima dari', sppg], ['Uang sejumlah', fmt(t.nominal), 'b'], ['Terbilang', terbilang(t.nominal), 'i'], ['Untuk pembayaran', t.kategori + ' — ' + t.uraian],
+      ['Dibayarkan kepada', t.penerima || '-'], ['Rekening tujuan', ((t.bank || '') + ' ' + (t.no_rek || '')).trim() || '-'], ['Tanggal pembayaran', tg.hari + ', ' + tg.tgl], ['Referensi', t.ref || '-']].forEach(function(b) {
+      doc.setFont('helvetica', 'normal'); doc.text(b[0], M + 4, y); doc.text(':', M + 52, y);
+      doc.setFont('helvetica', b[2] === 'b' ? 'bold' : b[2] === 'i' ? 'italic' : 'normal');
+      const v = doc.splitTextToSize(String(b[1] || ''), W - M - (M + 56)); doc.text(v, M + 56, y, { lineHeightFactor: 1.35 }); y += Math.max(1, v.length) * 4.8 + 2.4;
+    });
+    doc.setFont('helvetica', 'normal'); y += 8;
+    doc.text(tg.tgl, W - M - 40, y, { align: 'center' }); y += 7;
+    await ttdKolom(doc, M + 40, y, ['Yang menyerahkan,', 'Pengawas Keuangan'], k.pengawas.ttd, k.pengawas.nama);
+    await ttdKolom(doc, W - M - 40, y, ['Yang menerima,', ''], k.pic.ttd, t.penerima || k.pic.nama);
+    doc.setFontSize(7.5); doc.setTextColor(110); doc.setDrawColor(200); doc.setLineWidth(0.2); doc.line(M, 297 - 13, W - M, 297 - 13);
+    doc.text(t.no_bukti + '  ·  ' + t.tanggal + '  ·  Dibuat dari aplikasi Keuangan MBG', M, 297 - 9);
+  }
+  doc.setProperties({ title: 'Kuitansi insentif ' + sppg + ' ' + k.tanggal, creator: 'Keuangan MBG' });
+  return doc;
+}
+// Buat (ulang) PDF kwitansi bertanda tangan yang diminta LPDH, simpan ke Drive → tautannya dipakai LPDH. Mengembalikan jumlah yang gagal.
+async function siapkanKwitansiLpdh(dapurId, tanggal, perlu) {
+  const r = await api('getKwitansiCetak', { dapur: dapurId, tanggal: tanggal });
+  if (!r.ok) return perlu.length;
+  let gagal = 0;
+  for (const jn of perlu) {
+    try {
+      let doc = null;
+      if (jn === 'INSENTIF') { if (r.data.insentif.length) doc = await buildKuitansiInsentifPdf(r.data); }
+      else { const bag = r.data.rows.filter(function(x) { return x.jenis === jn; }); if (bag.length) doc = await buildKwitansiPdf(Object.assign({}, r.data, { rows: bag })); }
+      if (!doc) continue;
+      const up = await apiUpload('simpanKwitansiFile', { dapur: dapurId, tanggal: tanggal, jenis: jn, fileData: doc.output('datauristring').split(',')[1] });
+      if (!up.ok) gagal++;
+    } catch (e) { gagal++; }
+  }
+  return gagal;
 }
 function KwitansiPage({ session, scope, toast }) {
   const role = session.user.role;

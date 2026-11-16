@@ -262,7 +262,7 @@ async function isiBahanBaku(page, uraian, volume, harga) {
     await page.waitForSelector('header');
     await page.click('nav:visible >> text=LPDH Harian');
     await page.waitForSelector('text=Pernyataan PPK PPK/07/2026 (nomor terakhir)');
-    await page.waitForSelector('text=Kuitansi bertanda tangan belum diunggah');
+    await page.waitForSelector('text=TTD akuntan / PIC belum diunggah di Profil');
     await page.setInputFiles('[aria-label="Unggah kuitansi ttd TI"]', { name: 'ttd.jpg', mimeType: 'image/jpeg', buffer: Buffer.from('ffd8ffe0', 'hex') });
     await page.waitForSelector('text=Kuitansi bertanda tangan tersimpan');
     assert(globalThis.__ttd && globalThis.__ttd.transaksi_id === 'TI' && /^https:\/\/drive\.google\.com\/up/.test(globalThis.__ttd.ttd_url), 'ttd tidak terkirim: ' + JSON.stringify(globalThis.__ttd));
@@ -658,6 +658,33 @@ async function isiBahanBaku(page, uraian, volume, harga) {
     const up = srv.log.posts.filter(x => x.action === 'simpanKwitansiFile');
     assert(up.length === 2 && up.map(x => x.params.jenis).sort().join() === 'KADER,RELAWAN' && up.every(x => (x.params.fileData || '').startsWith('JVBER')), 'PDF per jenis harus disimpan ke Drive: ' + up.map(x => x.params.jenis));
     globalThis.__kw = null;
+  });
+
+  all &= await run('LPDH: unduh membuat dulu kwitansi bertanda tangan yang belum ada, link-nya masuk Excel', { role: 'pic',
+    override: (a, m, p) => a === 'getDataLPDH' ? { ok: true, data: { dapur: { id: 'D1', nama: 'SPPG Satu', kode: 'S1' }, identitas: { id_sppg: '32.04.01.0001' }, tanggal: p.tanggal,
+        periode: { id: 'P2', periode_no: 2, tanggal_mulai: '2026-10-01', tanggal_akhir: '2026-10-31', status: 'AKTIF' }, saldoAwal: 7000000,
+        transaksi: [{ id: 'T6', tanggal: p.tanggal, no_bukti: 'K-6', jenis: 'Operasional', kategori: 'Insentif Kader Posyandu', uraian: 'Insentif kader', sumber: 'VA', riil: 50000, bukti_url: 'https://drive.google.com/bukti-transfer' },
+          { id: 'T8', tanggal: p.tanggal, no_bukti: 'INS-8', jenis: 'Fasilitas SPPG', kategori: 'Sewa Gedung', uraian: 'Sewa gedung', sumber: 'VA', riil: 300000, bukti_url: 'https://drive.google.com/kuitansi-lama', insentif: { ttd_otomatis: true } }],
+        topups: [], komponen: { awal: [5000000, 1500000, 500000], topups: [], geser: [], nama: ['Bahan Baku', 'Operasional', 'Insentif'] },
+        kwitansi: globalThis.__kwf || {}, kwitansiPerlu: globalThis.__kwf ? [] : ['KADER', 'INSENTIF'] } }
+      : a === 'getKwitansiCetak' ? { ok: true, data: { tanggal: p.tanggal, dapur: { id: 'D1', nama: 'SPPG Satu', kode: 'S1' }, logo: null,
+        akuntan: { nama: 'Wanda', ttd: null }, kepala: { nama: 'Debbi', nip: '', ttd: null }, pengawas: { nama: 'Wanda', ttd: null }, pic: { nama: 'Pemilik', ttd: null },
+        rows: [{ penerima_id: 'K1', jenis: 'KADER', nomor: '01/BASTI/SPPG-S1/X/2026', nama: 'Bu Rina', jabatan: '', lembaga: 'Posyandu Mawar', pm: 35, nominal: 50000, keterangan: '', ttd: null }],
+        insentif: [{ id: 'T8', tanggal: p.tanggal, no_bukti: 'INS-8', nominal: 300000, uraian: 'Sewa gedung', kategori: 'Sewa Gedung', penerima: 'Pemilik', bank: 'BRI', no_rek: '1', ref: '' }], perlu: ['KADER', 'INSENTIF'] } }
+      : a === 'simpanKwitansiFile' ? ((globalThis.__kwf = globalThis.__kwf || {})[p.jenis] = 'https://drive.google.com/kw-' + p.jenis, { ok: true, data: { url: globalThis.__kwf[p.jenis] } }) : null }, async (page, srv) => {
+    await login(page, 'siti');
+    await page.waitForSelector('header');
+    await page.click('nav:visible >> text=LPDH Harian');
+    await page.waitForSelector('text=Kuitansi bertanda tangan dibuat otomatis saat LPDH diunduh');
+    const [dl] = await Promise.all([page.waitForEvent('download'), page.click('text=Unduh LPDH')]);
+    const up = srv.log.posts.filter(x => x.action === 'simpanKwitansiFile').map(x => x.params.jenis).sort().join();
+    assert(up === 'INSENTIF,KADER', 'kwitansi yang diminta LPDH harus dibuat & disimpan dulu: ' + up);
+    const ExcelJS = require('exceljs');
+    const wb = new ExcelJS.Workbook(); await wb.xlsx.readFile(await dl.path());
+    const v = (s, a) => wb.getWorksheet(s).getCell(a).value;
+    assert(v('C_Operasional', 'J8') === 'https://drive.google.com/kw-KADER', 'link kader harus kwitansi BASTI bertanda tangan: ' + v('C_Operasional', 'J8'));
+    assert(v('D_Insentif', 'C26') === 'https://drive.google.com/kw-INSENTIF' && v('D_Insentif', 'C25') === 'Ya', 'link insentif harus kuitansi bertanda tangan: ' + v('D_Insentif', 'C26'));
+    globalThis.__kwf = null;
   });
 
   all &= await run('Relawan: daftar kosong bisa diisi (tombol tidak tertutup) & tempel dari Excel', { role: 'akuntan',
