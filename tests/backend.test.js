@@ -819,6 +819,26 @@ const ok = (c, m) => { console.log((c ? 'PASS ' : 'FAIL ') + m); if (!c) fails++
     ok(r.data.kwitansiPerlu.indexOf('INSENTIF') < 0 && /^https:/.test(r.data.kwitansi.INSENTIF), 'link kuitansi insentif bertanda tangan masuk LPDH');
   }
 
+
+  // ── Porsi PM per sekolah & Tugas Harian PIC ──
+  {
+    const tP = tk8('pic');
+    const pm = [{ kode: 'KS-02', target: 228, distribusi: 228, diterima: 225, tidak: 3, alasan: 'PM tidak hadir' }];
+    let r = call(e8, 'POST', { action: 'saveHarianLPDH', token: tP, tanggal: '2026-10-23', data: { sekolah: [{ nama: 'SDN CAGAK', jenjang: '', besar: 235, kecil: 228 }], pm: pm } });
+    ok(!r.ok && /jenjang/.test(r.error), 'sekolah tanpa jenjang ditolak');
+    r = call(e8, 'POST', { action: 'saveHarianLPDH', token: tP, tanggal: '2026-10-23', data: { sekolah: [{ nama: 'SDN CAGAK', jenjang: 'SD', besar: 235, kecil: 228 }], pm: pm, produksi: { total: 473, organoleptik: 10 },
+      syarat: { kontaminasi: 'Tidak', fatal: 'Tidak', suspend: 'Tidak', verifikasi: 'Ya', sipgn: 'Ya' } } });
+    ok(r.ok, 'porsi per sekolah tersimpan: ' + (r.error || ''));
+    r = call(e8, 'POST', { action: 'getHarianLPDH', token: tP, tanggal: '2026-10-26' });
+    ok(r.data.data.sekolah.length === 1 && r.data.data.sekolah[0].jenjang === 'SD' && /disalin/.test(r.data.sumber), 'daftar sekolah disalin ke hari berikutnya');
+    r = call(e8, 'POST', { action: 'getTugasHarian', token: tP, tanggal: '2026-10-23' });
+    ok(r.ok && r.data.porsi.ada && r.data.porsi.sekolah === 1 && r.data.porsi.total === 228 && r.data.porsi.syarat === true && r.data.bisaSetuju === true,
+      'tugas harian: porsi PM per sekolah & syarat insentif terbaca (' + JSON.stringify(r.data && r.data.porsi) + ')');
+    ok(typeof r.data.persetujuan.baris === 'number' && r.data.penerima.aktif.RELAWAN >= 1 && 'kepala' in r.data.ttd && Array.isArray(r.data.lpdh.kwitansiPerlu), 'tugas harian: persetujuan, penerima aktif, TTD, LPDH');
+    r = call(e8, 'POST', { action: 'getTugasHarian', token: tk8('akn'), tanggal: '2026-10-24' });
+    ok(r.ok && r.data.porsi.ada === false && r.data.bisaSetuju === false, 'hari tanpa isian: porsi belum diisi; akuntan tidak menyetujui');
+  }
+
   console.log(fails ? '\n' + fails + ' GAGAL' : '\nSEMUA LULUS');
   process.exit(fails ? 1 : 0);
 })();

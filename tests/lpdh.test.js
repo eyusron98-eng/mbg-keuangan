@@ -6,7 +6,7 @@ const XLSX = require('xlsx');
 const ROOT = path.join(__dirname, '..');
 const src = fs.readFileSync(path.join(ROOT, 'src', 'index.html'), 'utf8');
 const blok = src.slice(src.indexOf('// <LPDH-ISI>'), src.indexOf('// </LPDH-ISI>'));
-const L = new Function(blok + '\nreturn { isiLPDH, lpdhInfoHari, lpdhNomorDefault, lpdhBarisOps, lpdhGabung, lpdhNomorBasti, LPDH_KAP };')();
+const L = new Function(blok + '\nreturn { isiLPDH, lpdhInfoHari, lpdhNomorDefault, lpdhBarisOps, lpdhGabung, lpdhNomorBasti, LPDH_KAP, pmTebakJenjang, pmDariSekolah, bacaTempelSekolah, pmTerapkan, LPDH_KELOMPOK };')();
 const TPL = path.join(ROOT, 'templates', 'LPDH_SPPG.xlsx');
 let fails = 0;
 const ok = (c, m) => { console.log((c ? 'PASS ' : 'FAIL ') + m); if (!c) fails++; };
@@ -114,6 +114,23 @@ function dataUji(nOp) {
   ok(v('E_Saldo', 'E10') === 9060000, 'saldo VA rekening dari isian akuntan');
   ok(v('E_Saldo', 'D19') === 'SP2D-9' && v('E_Saldo', 'I19') === 'KW-TU-9' && v('E_Saldo', 'J19') === 'https://cloud/tu9', 'top up: SP2D, kuitansi, link bukti terima');
   ok(v('D_Insentif', 'C19') === 'PPK/1; PPK/2' && v('D_Insentif', 'C20') === 500000 && v('D_Insentif', 'C24') === 'KW-1; KW-2' && v('D_Insentif', 'C25') === 'Ya' && v('D_Insentif', 'C27') === 'TRX-1; TRX-2', 'insentif: pernyataan PPK, kuitansi, ttd, referensi VA');
+{ // Input PM per sekolah (porsi besar/kecil) → kelompok LPDH
+  const tabel = ['NAMA SEKOLAH\tPORSI BESAR\tPORSI KECIL', 'SMK AL ISLAM PACET\t452\t0', 'SMA PLUS ISLAM PACET\t324\t0', 'SMK AROFAH\t224\t0', 'SDN CAGAK\t235\t228',
+    'SDN PUTRAPANJALU\t96\t82', 'POS PAUD SARIMEKAR\t6\t31', 'KB NURUL AZIZAH\t8\t54', 'TK IT AISYAH\t9\t37', 'TK AS SYAFIQ\t5\t26', 'KB ZAKIYATUL ATFAL\t13\t77',
+    'SDN CIPADAULUN\t180\t162', 'B3 RW 01\t41\t61', 'B3 RW 02\t65\t57', 'B3 RW 05\t27\t50', 'Uji Organoleptik\t5\t5'].join('\n');
+  const t = L.bacaTempelSekolah(tabel);
+  ok(t.sekolah.length === 14 && t.organoleptik === 10, 'tempel tabel POP: 14 sekolah, baris uji organoleptik → produksi (' + t.sekolah.length + '/' + t.organoleptik + ')');
+  const j = Object.fromEntries(t.sekolah.map(x => [x.nama, x.jenjang]));
+  ok(j['SMK AL ISLAM PACET'] === 'SMA' && j['SMA PLUS ISLAM PACET'] === 'SMA' && j['SDN CAGAK'] === 'SD' && j['POS PAUD SARIMEKAR'] === 'PAUD' && j['KB NURUL AZIZAH'] === 'PAUD'
+    && j['TK IT AISYAH'] === 'PAUD' && j['B3 RW 01'] === 'B3_HAMIL', 'jenjang ditebak dari nama (SMK→SMA/SMK, SDN→SD, TK/KB/POS PAUD→PAUD, B3→B3)');
+  const per = L.pmDariSekolah(t.sekolah);
+  ok(per['KS-05'] === 1000 && per['KS-02'] === 472 && per['KS-03'] === 511 && per['KS-01'] === 225 && per['PTK'] === 41 && per['KS-07'] === 133 && per['KS-09'] === 168,
+    'konversi: SMA/SMK 1000; SD kecil 472 (kls 1–3), besar 511 (kls 4–6); PAUD kecil 225, besar 41 → PTK; B3 besar 133 → ibu hamil, kecil 168 → balita (' + JSON.stringify(per) + ')');
+  const d = L.pmTerapkan({ sekolah: t.sekolah, pm: L.LPDH_KELOMPOK.map(k => ({ kode: k[0], tidak: k[0] === 'KS-02' ? 4 : '' })), produksi: { organoleptik: 10, sampel: 2, buffer: 20 } });
+  const k2 = d.pm.find(x => x.kode === 'KS-02');
+  ok(k2.target === 472 && k2.distribusi === 472 && k2.diterima === 468 && k2.tidak === 4 && d.produksi.total === 2550 + 10 + 2 + 20,
+    'kelompok terisi otomatis (diterima = distribusi − tidak diterima); total produksi = distribusi + organoleptik + sampel + buffer (' + d.produksi.total + ')');
+}
   ok(L.lpdhNomorBasti(Array.from({ length: 11 }, (_, i) => String(i + 1).padStart(2, '0') + '/BASTI/SPPG-CPJ02/XI/2026')) === '01–11/BASTI/SPPG-CPJ02/XI/2026'
     && L.lpdhNomorBasti(['09/BASTI/A/X/2026', '10/BASTI/A/X/2026', '01/BASTI/A/XI/2026']) === '09–10/BASTI/A/X/2026; 01/BASTI/A/XI/2026', 'nomor BASTI dipadatkan (rentang & beda bulan)');
   {

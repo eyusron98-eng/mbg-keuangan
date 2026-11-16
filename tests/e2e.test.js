@@ -237,7 +237,7 @@ async function isiBahanBaku(page, uraian, volume, harga) {
     await page.fill('[aria-label="KS-02 BAST"]', 'BAST-30');
     await page.fill('[aria-label="KS-02 link"]', 'https://cloud/bast30');
     await page.click('.sheet >> text=Simpan');
-    await page.waitForSelector('text=Data harian disimpan');
+    await page.waitForSelector('text=Porsi PM disimpan');
     const ks2 = srv.log.harian.pm.find(x => x.kode === 'KS-02');
     assert(ks2.diterima === '645' && ks2.tidak === '5' && ks2.bast === 'BAST-30' && srv.log.harian.pm.length === 10, 'data harian terkirim salah: ' + JSON.stringify(ks2));
     // daftar relawan: total harus sama dengan transaksi
@@ -686,6 +686,43 @@ async function isiBahanBaku(page, uraian, volume, harga) {
     assert(v('C_Operasional', 'I8') === '01/BASTI/SPPG-S1/X/2026', 'No. Bukti kader harus nomor BASTI: ' + v('C_Operasional', 'I8'));
     assert(v('D_Insentif', 'C26') === 'https://drive.google.com/kw-INSENTIF' && v('D_Insentif', 'C25') === 'Ya', 'link insentif harus kuitansi bertanda tangan: ' + v('D_Insentif', 'C26'));
     globalThis.__kwf = null;
+  });
+
+  all &= await run('Tugas Harian PIC: daftar tugas & isi porsi PM per sekolah dari tabel POP', { role: 'pic',
+    override: (a, m, p) => a === 'getTugasHarian' ? { ok: true, data: { tanggal: p.tanggal, bisaSetuju: true,
+        persetujuan: { baris: 3, nominal: 750000, tanggal: ['2026-10-30'] }, porsi: globalThis.__ph ? { ada: true, sekolah: 3, total: 878, syarat: true } : { ada: false, sekolah: 0, total: 0, syarat: false },
+        penerima: { aktif: { RELAWAN: 40, PIC_SEKOLAH: 11, KADER: 3 }, tanpaTtd: { RELAWAN: 2, PIC_SEKOLAH: 0, KADER: 0 } },
+        kwitansi: { terbit: { RELAWAN: 38, PIC_SEKOLAH: 11, KADER: 3 }, nilai: { RELAWAN: 4295000, PIC_SEKOLAH: 280000, KADER: 250000 }, honor: 4295000 },
+        ttd: { kepala: false, pic: true, akuntan: true }, lpdh: { transaksi: 12, kwitansiPerlu: ['RELAWAN'] } } }
+      : a === 'getHarianLPDH' ? { ok: true, data: { data: null, sumber: 'baru' } }
+      : a === 'saveHarianLPDH' ? (globalThis.__ph = p.data, { ok: true }) : null }, async (page, srv) => {
+    await login(page, 'siti');
+    await page.waitForSelector('text=Pastikan porsi PM di POP');   // PIC langsung mendarat di Tugas Harian
+    await page.waitForSelector('text=3 baris menunggu persetujuan');
+    await page.waitForSelector('text=38 dari 40 relawan aktif hadir');
+    await page.waitForSelector('text=Belum ada: Kepala SPPG, 2 penerima aktif');
+    if (process.env.SHOT) { await page.waitForTimeout(600); await page.screenshot({ path: process.env.SHOT + '/tugas.png' }); }
+    await page.click('button:has-text("Isi porsi")');
+    await page.click('.sheet >> button:has-text("Tempel tabel POP")');
+    await page.fill('[aria-label="Tempel tabel POP"]', 'NAMA SEKOLAH\tPORSI BESAR\tPORSI KECIL\nSDN CAGAK\t235\t228\nTK IT AISYAH\t9\t37\nB3 RW 01\t41\t61\nUji Organoleptik\t5\t5');
+    await page.waitForSelector('text=3 sekolah terbaca · organoleptik 10');
+    await page.click('.sheet >> button:has-text("Masukkan")');
+    assert((await page.inputValue('[aria-label="Jenjang 1"]')) === 'SD' && (await page.inputValue('[aria-label="Jenjang 2"]')) === 'PAUD' && (await page.inputValue('[aria-label="Jenjang 3"]')) === 'B3_HAMIL', 'jenjang tidak tertebak');
+    assert((await page.textContent('[aria-label="KS-02 didistribusikan"]')).trim() === '228' && (await page.textContent('[aria-label="KS-03 didistribusikan"]')).trim() === '235'
+      && (await page.textContent('[aria-label="PTK didistribusikan"]')).trim() === '9' && (await page.textContent('[aria-label="KS-09 didistribusikan"]')).trim() === '61', 'konversi ke kelompok salah');
+    assert((await page.textContent('[aria-label="Total diproduksi"]')).trim() === '621', 'total produksi = 611 porsi + 10 organoleptik');
+    if (process.env.SHOT) { await page.waitForTimeout(600); await page.screenshot({ path: process.env.SHOT + '/porsi.png' }); }
+    await page.fill('[aria-label="KS-02 tidak"]', '3');
+    await page.selectOption('[aria-label="KS-02 alasan"]', 'PM tidak hadir');
+    await page.click('.sheet >> button:has-text("Simpan")');
+    await page.waitForSelector('text=Porsi PM disimpan');
+    const h = globalThis.__ph, k2 = h.pm.find(x => x.kode === 'KS-02');
+    assert(h.sekolah.length === 3 && h.sekolah[0].besar === '235' && k2.distribusi === 228 && k2.diterima === 225 && k2.tidak === 3 && h.produksi.total === 621 && String(h.produksi.organoleptik) === '10',
+      'data porsi terkirim salah: ' + JSON.stringify({ k2, total: h.produksi.total }));
+    await page.waitForSelector('text=3 sekolah/penerima · 878 porsi');   // daftar tugas dimuat ulang
+    await page.click('button:has-text("Buka Persetujuan")');
+    await page.waitForSelector('nav:visible >> button:has-text("Persetujuan")');
+    globalThis.__ph = null;
   });
 
   all &= await run('Relawan: daftar kosong bisa diisi (tombol tidak tertutup) & tempel dari Excel', { role: 'akuntan',
