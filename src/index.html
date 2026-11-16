@@ -1802,9 +1802,15 @@ function roMatriks(items, ctx, setelan, hariSet, dariTgl) {
   // baris ringkasan hanya menghitung hari ini s.d. akhir periode (hari yang lewat tidak dihitung)
   const aktif = function(t) { return !dariTgl || t >= dariTgl; };
   const terjadwal = {}; kolom.forEach(function(k) { terjadwal[k] = 0; Object.keys(sel).forEach(function(t) { if (sel[t][k] && aktif(t)) terjadwal[k] += sel[t][k].nominal; }); });
-  roHari(ctx.periode, hariSet).forEach(function(h) { const a = roAdminBB(h, setelan, ctx, dariTgl); if (a) fee[h.tanggal] = (fee[h.tanggal] || 0) + a; });   // + biaya admin bahan baku
+  // biaya admin bahan baku: kolom tersendiri (hanya tampilan; hitungan pagu & LPDH tetap digabung di operasional). perkiraan = cadangan, belum ada pengajuan/transaksi nyata
+  const bb = {}, bbPerkiraan = {}; let bbAktif = 0;
+  roHari(ctx.periode, hariSet).forEach(function(h) {
+    const a = roAdminBB(h, setelan, ctx, dariTgl); if (!a) return;
+    bb[h.tanggal] = a; if (aktif(h.tanggal)) bbAktif += a;
+    if (a > (((ctx && ctx.adminBB) || {})[h.tanggal] || 0)) bbPerkiraan[h.tanggal] = true;
+  });
   const feeAktif = Object.keys(fee).reduce(function(a, t) { return a + (aktif(t) ? fee[t] : 0); }, 0);
-  return { feeAktif: feeAktif, batas: (setelan && setelan.batas) || 95, kolom: kolom, sel: sel, fee: fee, tak: tak, takItems: takItems, terjadwal: terjadwal, ring: roRingkas(items, ctx, setelan, hariSet, dariTgl) };
+  return { feeAktif: feeAktif, bb: bb, bbPerkiraan: bbPerkiraan, bbAktif: bbAktif, batas: (setelan && setelan.batas) || 95, kolom: kolom, sel: sel, fee: fee, tak: tak, takItems: takItems, terjadwal: terjadwal, ring: roRingkas(items, ctx, setelan, hariSet, dariTgl) };
 }
 // Status tiap baris rencana yang sudah diajukan. status[pengajuan_id] = daftar status baris pengajuan (urut seperti saat diajukan);
 // baris rencana dengan pengajuan_id sama dipetakan menurut urutannya di rencana.
@@ -2175,7 +2181,7 @@ function RencanaMatriks({ m, bisaUbah, ajukanTgl, onSel, onAjukan, terkunci, lew
   if (!kol.length) return <Card><div className="text-sm" style={{ color: COLORS.muted }}>Belum ada rencana. Tekan <b>Usulkan otomatis</b> atau <b>Tambah kebutuhan</b>.</div></Card>;
   const totTerjadwal = kol.reduce(function(s, k) { return s + m.terjadwal[k]; }, 0);
   const totTak = kol.reduce(function(s, k) { return s + (m.tak[k] || 0); }, 0);
-  const totFee = m.feeAktif;
+  const totFee = m.feeAktif, totBB = m.bbAktif;
   return <Card pad={false}>
     <div className="px-4 pt-3 pb-2 text-xs" style={{ color: COLORS.muted }}>Geser ke samping untuk melihat semua pos. Ketuk sel untuk mengubah/menambah; ketuk sel merah "Tidak muat" untuk melihat barangnya.
       Usulan otomatis hanya mengisi sampai {m.batas}% pagu (cadangan bila PM turun); sisanya boleh diisi manual. Tanggal yang sudah lewat (abu-abu) tidak bisa diisi atau diajukan — anggarannya diubah lewat menu Riwayat; PM & HPE-nya tetap bisa diubah.
@@ -2189,7 +2195,7 @@ function RencanaMatriks({ m, bisaUbah, ajukanTgl, onSel, onAjukan, terkunci, lew
         <thead><tr>
           <th style={Object.assign({}, th, kiri, { background: COLORS.paper, zIndex: 2 })}>Hari</th>
           {kol.map(function(k) { return <th key={k} style={th} title={k}>{roLabel(k)}</th>; })}
-          <th style={th} title="Biaya admin transfer: operasional + bahan baku">Biaya transfer</th><th style={th}>Total</th><th style={th}>Pagu</th><th style={th}>Sisa pagu</th>{bisaUbah && <th style={th}></th>}
+          <th style={th} title="Biaya admin transfer pengajuan operasional">Transfer ops</th><th style={th} title="Biaya admin transfer bahan baku. Tanda ≈ = perkiraan (cadangan, belum ada transaksi nyata). Tetap dihitung di pagu operasional LPDH.">Transfer bahan baku</th><th style={th}>Total</th><th style={th}>Pagu</th><th style={th}>Sisa pagu</th>{bisaUbah && <th style={th}></th>}
         </tr></thead>
         <tbody>
           {r.hari.map(function(h) {
@@ -2214,6 +2220,7 @@ function RencanaMatriks({ m, bisaUbah, ajukanTgl, onSel, onAjukan, terkunci, lew
                   background: c && c.luar === c.n ? '#E3ECF7' : c && c.aju + c.luar === c.n ? '#DCEFE3' : bg, color: c ? (sudahLewat ? COLORS.muted : COLORS.ink) : COLORS.line })} aria-label={roLabel(k) + ' ' + h.tanggal}>
                   {c ? singkat(c.nominal) + (c.n > 1 ? ' ×' + c.n : '') : (bisaTambah ? '·' : '')}</td>; })}
               <td style={Object.assign({}, td, { background: bg, color: COLORS.muted })}>{m.fee[h.tanggal] ? singkat(m.fee[h.tanggal]) : ''}</td>
+              <td style={Object.assign({}, td, { background: bg, color: COLORS.muted, fontStyle: m.bbPerkiraan[h.tanggal] ? 'italic' : 'normal' })} title={m.bbPerkiraan[h.tanggal] ? 'Perkiraan (cadangan) — belum ada transaksi nyata' : m.bb[h.tanggal] ? 'Nyata (sudah tercatat)' : ''} aria-label={'Transfer bahan baku ' + h.tanggal}>{m.bb[h.tanggal] ? (m.bbPerkiraan[h.tanggal] ? '≈ ' : '') + singkat(m.bb[h.tanggal]) : ''}</td>
               <td style={Object.assign({}, td, { background: bg, fontWeight: 700 })}>{h.pakai ? singkat(h.pakai) : ''}</td>
               <td style={Object.assign({}, td, { background: bg, color: COLORS.muted })}>{h.pagu ? singkat(h.pagu) : '0'}</td>
               <td style={Object.assign({}, td, { background: bg, fontWeight: 700, color: lebih ? COLORS.danger : COLORS.green })}>{h.libur && !h.pakai ? '' : (lebih ? '−' + singkat(-sisa) : singkat(sisa))}</td>
@@ -2229,17 +2236,17 @@ function RencanaMatriks({ m, bisaUbah, ajukanTgl, onSel, onAjukan, terkunci, lew
         <tfoot>
           <tr><td style={Object.assign({}, td, kiri, { background: COLORS.paper, fontWeight: 700 })}>Terjadwal<div style={{ fontSize: 10, fontWeight: 400, color: COLORS.muted }}>hari ini – akhir</div></td>
             {kol.map(function(k) { return <td key={k} style={Object.assign({}, td, { background: COLORS.paper, fontWeight: 700 })}>{singkat(m.terjadwal[k])}</td>; })}
-            <td style={Object.assign({}, td, { background: COLORS.paper })}>{singkat(totFee)}</td><td style={Object.assign({}, td, { background: COLORS.paper, fontWeight: 700 })} title="hari ini s.d. akhir periode">{singkat(r.rencanaAktif)}</td>
+            <td style={Object.assign({}, td, { background: COLORS.paper })}>{singkat(totFee)}</td><td style={Object.assign({}, td, { background: COLORS.paper })} title="termasuk perkiraan">{totBB ? '≈ ' + singkat(totBB) : ''}</td><td style={Object.assign({}, td, { background: COLORS.paper, fontWeight: 700 })} title="hari ini s.d. akhir periode">{singkat(r.rencanaAktif)}</td>
             <td style={Object.assign({}, td, { background: COLORS.paper })} title="pagu hari ini s.d. akhir periode">{singkat(r.paguAktif)}</td>
             <td style={Object.assign({}, td, { background: COLORS.paper, fontWeight: 700, color: r.paguAktif - r.rencanaAktif < 0 ? COLORS.danger : COLORS.green })}>{(r.paguAktif - r.rencanaAktif < 0 ? '−' : '') + singkat(Math.abs(r.paguAktif - r.rencanaAktif))}
               {r.lebih > 0 && <div style={{ fontSize: 10, fontWeight: 600, color: COLORS.danger }}>{r.nLebih} hari lebih −{singkat(r.lebih)}</div>}</td>{bisaUbah && <td style={Object.assign({}, td, { background: COLORS.paper })}/>}</tr>
           <tr><td style={Object.assign({}, td, kiri, { background: '#FBF1EE', fontWeight: 700, color: COLORS.danger })}>Tidak muat</td>
             {kol.map(function(k) { return <td key={k} onClick={function() { const its = m.takItems[k]; if (its) onSel('', k, { items: its, n: its.length, aju: 0 }); }} style={Object.assign({}, td, { background: '#FBF1EE', color: COLORS.danger, fontWeight: 700, cursor: m.takItems[k] ? 'pointer' : 'default' })}>{m.tak[k] ? singkat(m.tak[k]) : ''}</td>; })}
-            <td style={Object.assign({}, td, { background: '#FBF1EE' })}/><td style={Object.assign({}, td, { background: '#FBF1EE', color: COLORS.danger, fontWeight: 700 })}>{totTak ? singkat(totTak) : '0'}</td>
+            <td style={Object.assign({}, td, { background: '#FBF1EE' })}/><td style={Object.assign({}, td, { background: '#FBF1EE' })}/><td style={Object.assign({}, td, { background: '#FBF1EE', color: COLORS.danger, fontWeight: 700 })}>{totTak ? singkat(totTak) : '0'}</td>
             <td style={Object.assign({}, td, { background: '#FBF1EE' })}/><td style={Object.assign({}, td, { background: '#FBF1EE' })}/>{bisaUbah && <td style={Object.assign({}, td, { background: '#FBF1EE' })}/>}</tr>
           <tr><td style={Object.assign({}, td, kiri, { background: COLORS.paper, fontWeight: 700 })}>Kebutuhan</td>
             {kol.map(function(k) { return <td key={k} style={Object.assign({}, td, { background: COLORS.paper, fontWeight: 700 })}>{singkat(m.terjadwal[k] + (m.tak[k] || 0))}</td>; })}
-            <td style={Object.assign({}, td, { background: COLORS.paper })}/><td style={Object.assign({}, td, { background: COLORS.paper, fontWeight: 700 })}>{singkat(totTerjadwal + totTak + totFee)}</td>
+            <td style={Object.assign({}, td, { background: COLORS.paper })}/><td style={Object.assign({}, td, { background: COLORS.paper })}/><td style={Object.assign({}, td, { background: COLORS.paper, fontWeight: 700 })}>{singkat(totTerjadwal + totTak + totFee + totBB)}</td>
             <td style={Object.assign({}, td, { background: COLORS.paper })}/><td style={Object.assign({}, td, { background: COLORS.paper, fontWeight: 700, color: r.kurang ? COLORS.danger : COLORS.green })}>{r.takNilai > 0 || r.paguAktif < r.rencanaAktif ? 'kurang ' + singkat(r.takNilai + Math.max(0, r.rencanaAktif - r.paguAktif)) : r.lebih > 0 ? 'cukup, geser ' + singkat(r.lebih) : 'cukup'}</td>{bisaUbah && <td style={Object.assign({}, td, { background: COLORS.paper })}/>}</tr>
         </tfoot>
       </table>

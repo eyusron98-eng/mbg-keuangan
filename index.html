@@ -3891,15 +3891,24 @@ try {
         if (sel[t][k] && aktif(t)) terjadwal[k] += sel[t][k].nominal;
       });
     });
+    const bb = {},
+      bbPerkiraan = {};
+    let bbAktif = 0;
     roHari(ctx.periode, hariSet).forEach(function (h) {
       const a = roAdminBB(h, setelan, ctx, dariTgl);
-      if (a) fee[h.tanggal] = (fee[h.tanggal] || 0) + a;
+      if (!a) return;
+      bb[h.tanggal] = a;
+      if (aktif(h.tanggal)) bbAktif += a;
+      if (a > ((ctx && ctx.adminBB || {})[h.tanggal] || 0)) bbPerkiraan[h.tanggal] = true;
     });
     const feeAktif = Object.keys(fee).reduce(function (a, t) {
       return a + (aktif(t) ? fee[t] : 0);
     }, 0);
     return {
       feeAktif: feeAktif,
+      bb: bb,
+      bbPerkiraan: bbPerkiraan,
+      bbAktif: bbAktif,
       batas: setelan && setelan.batas || 95,
       kolom: kolom,
       sel: sel,
@@ -5159,7 +5168,8 @@ try {
     const totTak = kol.reduce(function (s, k) {
       return s + (m.tak[k] || 0);
     }, 0);
-    const totFee = m.feeAktif;
+    const totFee = m.feeAktif,
+      totBB = m.bbAktif;
     return React.createElement(Card, {
       pad: false
     }, React.createElement("div", {
@@ -5221,8 +5231,11 @@ try {
       }, roLabel(k));
     }), React.createElement("th", {
       style: th,
-      title: "Biaya admin transfer: operasional + bahan baku"
-    }, "Biaya transfer"), React.createElement("th", {
+      title: "Biaya admin transfer pengajuan operasional"
+    }, "Transfer ops"), React.createElement("th", {
+      style: th,
+      title: "Biaya admin transfer bahan baku. Tanda \u2248 = perkiraan (cadangan, belum ada transaksi nyata). Tetap dihitung di pagu operasional LPDH."
+    }, "Transfer bahan baku"), React.createElement("th", {
       style: th
     }, "Total"), React.createElement("th", {
       style: th
@@ -5327,6 +5340,14 @@ try {
       }, m.fee[h.tanggal] ? singkat(m.fee[h.tanggal]) : ''), React.createElement("td", {
         style: Object.assign({}, td, {
           background: bg,
+          color: COLORS.muted,
+          fontStyle: m.bbPerkiraan[h.tanggal] ? 'italic' : 'normal'
+        }),
+        title: m.bbPerkiraan[h.tanggal] ? 'Perkiraan (cadangan) — belum ada transaksi nyata' : m.bb[h.tanggal] ? 'Nyata (sudah tercatat)' : '',
+        "aria-label": 'Transfer bahan baku ' + h.tanggal
+      }, m.bb[h.tanggal] ? (m.bbPerkiraan[h.tanggal] ? '≈ ' : '') + singkat(m.bb[h.tanggal]) : ''), React.createElement("td", {
+        style: Object.assign({}, td, {
+          background: bg,
           fontWeight: 700
         })
       }, h.pakai ? singkat(h.pakai) : ''), React.createElement("td", {
@@ -5398,6 +5419,11 @@ try {
       })
     }, singkat(totFee)), React.createElement("td", {
       style: Object.assign({}, td, {
+        background: COLORS.paper
+      }),
+      title: "termasuk perkiraan"
+    }, totBB ? '≈ ' + singkat(totBB) : ''), React.createElement("td", {
+      style: Object.assign({}, td, {
         background: COLORS.paper,
         fontWeight: 700
       }),
@@ -5453,6 +5479,10 @@ try {
       })
     }), React.createElement("td", {
       style: Object.assign({}, td, {
+        background: '#FBF1EE'
+      })
+    }), React.createElement("td", {
+      style: Object.assign({}, td, {
         background: '#FBF1EE',
         color: COLORS.danger,
         fontWeight: 700
@@ -5488,10 +5518,14 @@ try {
       })
     }), React.createElement("td", {
       style: Object.assign({}, td, {
+        background: COLORS.paper
+      })
+    }), React.createElement("td", {
+      style: Object.assign({}, td, {
         background: COLORS.paper,
         fontWeight: 700
       })
-    }, singkat(totTerjadwal + totTak + totFee)), React.createElement("td", {
+    }, singkat(totTerjadwal + totTak + totFee + totBB)), React.createElement("td", {
       style: Object.assign({}, td, {
         background: COLORS.paper
       })
