@@ -3790,6 +3790,38 @@ try {
       ring: roRingkas(items, ctx, setelan, hariSet, dariTgl)
     };
   }
+  function roStatusBaris(items, status) {
+    const out = {},
+      urut = {};
+    items.forEach(function (x) {
+      if (!x.pengajuan_id) return;
+      const i = urut[x.pengajuan_id] = urut[x.pengajuan_id] || 0;
+      urut[x.pengajuan_id]++;
+      const a = (status || {})[x.pengajuan_id];
+      out[x.id] = a && a[i] ? a[i] : '';
+    });
+    return out;
+  }
+  function roLepasBatal(items, status) {
+    const st = roStatusBaris(items, status),
+      nomor = [];
+    let lepas = 0;
+    const hasil = items.map(function (x) {
+      if (!x.pengajuan_id || st[x.id] !== 'DITOLAK' && st[x.id] !== 'DIBATALKAN') return x;
+      lepas++;
+      if (nomor.indexOf(x.nomor) < 0) nomor.push(x.nomor);
+      return Object.assign({}, x, {
+        pengajuan_id: '',
+        nomor: '',
+        batal: st[x.id] === 'DITOLAK' ? 'ditolak' : 'dibatalkan'
+      });
+    });
+    return {
+      items: hasil,
+      lepas: lepas,
+      nomor: nomor
+    };
+  }
   function RencanaOpsPage({
     session,
     scope,
@@ -3839,10 +3871,12 @@ try {
       }
       const d = r.data,
         rc = d.rencana || {};
-      const semua = rc.items || [],
-        dipakai = semua.filter(function (x) {
-          return x.pengajuan_id || RO_TANPA.indexOf(x.kategori) < 0;
-        });
+      const semua = rc.items || [];
+      const lepas = roLepasBatal(semua, d.status);
+      const dipakai = lepas.items.filter(function (x) {
+        return x.pengajuan_id || RO_TANPA.indexOf(x.kategori) < 0;
+      });
+      if (lepas.lepas) toast(lepas.lepas + ' baris dari pengajuan ' + lepas.nomor.join(', ') + ' ditolak/dibatalkan — bisa diubah & diajukan lagi. Tekan Simpan.');
       setCtx(d);
       setItems(dipakai);
       setHariSet(rc.hari || {});
@@ -3852,7 +3886,7 @@ try {
       });
       setVersi(rc.versi || 0);
       versiRef.current = rc.versi || 0;
-      setDirty(dipakai.length !== semua.length);
+      setDirty(dipakai.length !== semua.length || lepas.lepas > 0);
       seedRef.current = (rc.versi || 0) * 7;
     }
     useEffect(function () {
@@ -3968,8 +4002,8 @@ try {
       const res = await apiPost('createPengajuan', {
         tanggal: t,
         request_id: 'RO-' + ctx.periode.id + '-' + t + '-' + roHash(baris.map(function (x) {
-          return x.id;
-        }).join(',')).toString(36),
+          return x.id + ':' + x.nominal + ':' + x.penerima_id;
+        }).join(',') + '|' + Math.floor(Date.now() / 60000)).toString(36),
         items: baris.map(function (x) {
           return {
             jenis: 'Operasional',
@@ -3992,7 +4026,8 @@ try {
       const baru = semua.map(function (x) {
         return ids[x.id] ? Object.assign({}, x, {
           pengajuan_id: res.data.id,
-          nomor: res.data.nomor
+          nomor: res.data.nomor,
+          batal: undefined
         }) : x;
       });
       setItems(baru);
@@ -4001,19 +4036,14 @@ try {
       toast('Pengajuan ' + res.data.nomor + ' terkirim untuk persetujuan' + (ok ? '' : ' (rencana belum tersimpan — tekan Simpan)'));
       load();
     }
-    const statusAju = function (pid) {
-      const a = ctx.status[pid] || [];
-      if (!a.length) return 'Diajukan';
-      if (a.every(function (s) {
-        return s === 'TEREALISASI';
-      })) return 'Terealisasi';
-      if (a.every(function (s) {
-        return s === 'DITOLAK' || s === 'DIBATALKAN';
-      })) return 'Ditolak';
-      if (a.some(function (s) {
-        return s === 'DISETUJUI' || s === 'TEREALISASI';
-      })) return 'Disetujui';
-      return 'Menunggu persetujuan';
+    const stBaris = roStatusBaris(items, ctx.status);
+    const statusAju = function (x) {
+      return {
+        DIAJUKAN: 'Menunggu persetujuan',
+        DISETUJUI: 'Disetujui',
+        REVISI: 'Perlu revisi — ubah di menu Pengajuan',
+        TEREALISASI: 'Terealisasi'
+      }[stBaris[x.id]] || 'Diajukan';
     };
     const Baris = function ({
       x
@@ -4044,9 +4074,14 @@ try {
       }, x.kategori, " \xB7 ", pn ? pn.nama + ' (' + roKodeBank(pn.bank) + ')' : 'penerima belum dipilih', fee ? ' · admin ' + fmtNoRp(fee) : ''), x.pengajuan_id && React.createElement("div", {
         className: "text-[11px] font-semibold",
         style: {
-          color: COLORS.green
+          color: stBaris[x.id] === 'REVISI' ? COLORS.amber : COLORS.green
         }
-      }, x.nomor, " \xB7 ", statusAju(x.pengajuan_id))), React.createElement("div", {
+      }, x.nomor, " \xB7 ", statusAju(x)), !x.pengajuan_id && x.batal && React.createElement("div", {
+        className: "text-[11px] font-semibold",
+        style: {
+          color: COLORS.amber
+        }
+      }, "Pengajuan sebelumnya ", x.batal, " \u2014 bisa diubah & diajukan lagi")), React.createElement("div", {
         className: "text-sm font-semibold num shrink-0",
         style: {
           color: COLORS.ink
@@ -4827,7 +4862,13 @@ try {
         background: '#E8F1EC',
         color: COLORS.deep
       }
-    }, "Sudah diajukan (", x.nomor, "). Perubahan dilakukan di menu Pengajuan."), React.createElement(Field, {
+    }, "Sudah diajukan (", x.nomor, "). Perubahan dilakukan di menu Pengajuan."), !x.pengajuan_id && x.batal && React.createElement("div", {
+      className: "rounded-lg p-2 mb-3 text-xs",
+      style: {
+        background: '#FBF3E3',
+        color: '#9A6A0B'
+      }
+    }, "Pengajuan sebelumnya ", x.batal, ". Perbaiki baris ini lalu ajukan lagi."), React.createElement(Field, {
       label: "Tanggal belanja (= tanggal transfer)"
     }, React.createElement("select", {
       value: f.tanggal,
