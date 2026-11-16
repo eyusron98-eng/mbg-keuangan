@@ -135,7 +135,7 @@ function handleRequest(e, method) {
     }
     let result;
     switch (action) {
-      case 'ping':              result = { ok: true, time: new Date().toISOString(), version: 'v6-ba-sec22' }; break;
+      case 'ping':              result = { ok: true, time: new Date().toISOString(), version: 'v6-ba-sec23' }; break;
       case 'login':             result = login(params); break;
       case 'getPeriodeList':    result = getPeriodeList(params); break;
       case 'getActivePeriode':  result = getActivePeriode(params); break;
@@ -183,6 +183,9 @@ function handleRequest(e, method) {
       case 'getTtd':            result = getTtd(params); break;
       case 'saveTtd':           result = saveTtd(params); break;
       case 'hapusTtd':          result = hapusTtd(params); break;
+      case 'getDataPenerima':   result = getDataPenerima(params); break;
+      case 'saveDataPenerima':  result = saveDataPenerima(params); break;
+      case 'hapusDataPenerima': result = hapusDataPenerima(params); break;
       case 'getBeritaAcara':    result = getBeritaAcara(params); break;
       case 'getBADaftar':       result = getBADaftar(params); break;
       case 'getIdentitasLPDH':  result = getIdentitasLPDH(params); break;
@@ -2290,8 +2293,8 @@ function getRelawanBayar(p) {
   const semua = bacaRelawanSemua(tx.dapur);
   if (semua[tx.id]) return { ok: true, data: { rows: semua[tx.id].rows.map(function(r) { return Object.assign({ hadir: true }, r); }), sumber: 'tersimpan', total: tx.riil } };
   // daftar relawan tetap (diatur di Setup) bila ada — centang mengikuti 'biasanya hadir'; selain itu salin dari daftar terakhir (semua dicentang)
-  const tetap = semua[RELAWAN_TETAP + tx.dapur];
-  if (tetap && tetap.rows.length) return { ok: true, data: { rows: tetap.rows.map(function(r) { return Object.assign({}, r, { hadir: r.hadir !== false, hari: r.hari > 0 ? r.hari : 1 }); }),
+  const tetap = { rows: relawanTetapRows(tx.dapur, semua) };
+  if (tetap.rows.length) return { ok: true, data: { rows: tetap.rows.map(function(r) { return Object.assign({}, r, { hadir: r.hadir !== false, hari: r.hari > 0 ? r.hari : 1 }); }),
     sumber: 'disalin dari daftar relawan tetap', total: tx.riil } };
   let akhir = null; Object.keys(semua).forEach(function(k) { if (k.indexOf(RELAWAN_TETAP) === 0) return; if (!akhir || semua[k].seq > akhir.seq) akhir = semua[k]; });
   return { ok: true, data: { rows: akhir ? akhir.rows.map(function(r) { return Object.assign({}, r, { hadir: true, hari: r.hari > 0 ? r.hari : 1 }); }) : [],
@@ -2346,13 +2349,20 @@ function bacaBarisRelawan(a, wajibHadir) {
   }
   return { rows: rows };
 }
+// Daftar relawan tetap = Data Penerima jenis RELAWAN (fitur Data Penerima); data lama (DAFTAR:<dapur>) dipakai bila belum ada
+function relawanTetapRows(dapurId, semua) {
+  const dp = bacaDataPenerima(dapurId).filter(function(x) { return x.jenis === 'RELAWAN'; });
+  if (dp.length) return dp.map(function(x) { return { id: x.id, nama: x.nama, tugas: x.jabatan, hari: 1, upah: x.nominal, metode: x.metode, hadir: x.aktif }; });
+  const lama = (semua || bacaRelawanSemua(dapurId))[RELAWAN_TETAP + dapurId];
+  return lama ? lama.rows : [];
+}
 function getRelawanTetap(p) {
   const me = authUser(p);
   if (!me) return { ok: false, error: SESI_ERR };
   const dapurId = lpdhDapur(me, p.dapur);
   if (!dapurId) return { ok: false, error: 'Pilih dapur' };
-  const semua = bacaRelawanSemua(dapurId), tetap = semua[RELAWAN_TETAP + dapurId];
-  if (tetap) return { ok: true, data: { rows: tetap.rows, sumber: 'tetap' } };
+  const semua = bacaRelawanSemua(dapurId), tetap = relawanTetapRows(dapurId, semua);
+  if (tetap.length) return { ok: true, data: { rows: tetap, sumber: 'tetap' } };
   let akhir = null; Object.keys(semua).forEach(function(k) { if (k.indexOf(RELAWAN_TETAP) === 0) return; if (!akhir || semua[k].seq > akhir.seq) akhir = semua[k]; });
   return { ok: true, data: { rows: akhir ? akhir.rows.map(function(r) { return Object.assign({}, r, { hadir: true }); }) : [], sumber: akhir ? 'dari pembayaran terakhir' : 'baru' } };
 }
@@ -2365,9 +2375,20 @@ function saveRelawanTetap(p) {
   const b = bacaBarisRelawan(p.rows);
   if (b.error) return { ok: false, error: b.error };
   return withLock(function() {
-    const sh = relawanSheet(), kunci = RELAWAN_TETAP + dapurId, ada = bacaRelawanSemua(dapurId)[kunci];
-    const row = [kunci, dapurId, JSON.stringify(b.rows), new Date(), me.id];
-    if (ada) sh.getRange(ada._row, 1, 1, row.length).setValues([row]); else sh.appendRow(row);
+    // disimpan ke Data Penerima (jenis RELAWAN): cocokkan per nama agar tanda tangan tersimpan tetap terhubung
+    const sh = dataPenerimaSheet(), lama = bacaDataPenerima(dapurId).filter(function(x) { return x.jenis === 'RELAWAN'; });
+    const dipakai = {};
+    b.rows.forEach(function(r) {
+      const ada = lama.find(function(x) { return !dipakai[x.id] && x.nama.toLowerCase() === r.nama.toLowerCase(); });
+      const id = ada ? ada.id : idUnik('DP'); dipakai[id] = 1;
+      const baris = [id, dapurId, 'RELAWAN', r.nama, r.tugas, '', 0, r.upah, r.metode, r.hadir ? 'YA' : 'TIDAK', new Date(), me.id];
+      if (ada) sh.getRange(ada._row, 1, 1, baris.length).setValues([baris]); else sh.appendRow(baris);
+    });
+    lama.filter(function(x) { return !dipakai[x.id]; }).sort(function(a, c) { return c._row - a._row; }).forEach(function(x) {
+      sh.deleteRow(x._row);
+      const props = PropertiesService.getScriptProperties(), fid = props.getProperty(ttdKey('P_' + x.id));
+      if (fid) { try { DriveApp.getFileById(fid).setTrashed(true); } catch (e) {} props.deleteProperty(ttdKey('P_' + x.id)); }
+    });
     logActivity(me.id, 'saveRelawanTetap', dapurId + ' (' + b.rows.length + ' orang)');
     return { ok: true, data: { jumlah: b.rows.length, perHari: b.rows.filter(function(r) { return r.hadir; }).reduce(function(a, r) { return a + r.upah * (r.hari || 1); }, 0) } };
   });
@@ -2733,39 +2754,139 @@ function readTtdDataUrl(userId) {
   } catch (e) { return null; }
 }
 
+// Pemilik tanda tangan: diri sendiri (akuntan/PIC), Kepala SPPG (diunggah PIC/admin), atau penerima insentif/relawan
+function ttdSasaran(me, p) {
+  const untuk = String(p.untuk || '');
+  if (!untuk) {
+    if (['akuntan', 'pic', 'admin'].indexOf(me.role) < 0) return { error: 'Peran Anda tidak menyimpan tanda tangan' };
+    return { kunci: me.id };
+  }
+  if (untuk === 'kepala') {
+    if (me.role !== 'pic' && me.role !== 'admin') return { error: 'Tanda tangan Kepala SPPG diunggah oleh PIC' };
+    const d = me.role === 'admin' ? String(p.dapur || '') : me.dapur;
+    if (!d) return { error: 'Pilih dapur' };
+    return { kunci: 'KEPALA_' + d };
+  }
+  if (untuk === 'penerima') {
+    const pn = cariDataPenerima(String(p.id || ''));
+    if (!pn) return { error: 'Data penerima tidak ditemukan' };
+    if (['akuntan', 'pic', 'admin'].indexOf(me.role) < 0 || (me.role !== 'admin' && pn.dapur !== me.dapur)) return { error: 'Bukan dapur Anda' };
+    return { kunci: 'P_' + pn.id };
+  }
+  return { error: 'Sasaran tanda tangan tidak dikenal' };
+}
 function getTtd(p) {
   const me = authUser(p);
   if (!me) return { ok: false, error: SESI_ERR };
-  return { ok: true, data: { ttd: readTtdDataUrl(me.id) } };
+  const s = p.untuk ? ttdSasaran(me, p) : { kunci: me.id };
+  if (s.error) return { ok: false, error: s.error };
+  return { ok: true, data: { ttd: readTtdDataUrl(s.kunci) } };
 }
 
 function saveTtd(p) {
   const me = authUser(p);
   if (!me) return { ok: false, error: SESI_ERR };
-  if (me.role !== 'akuntan') return { ok: false, error: 'Hanya akuntan yang menyimpan tanda tangan Berita Acara' };
+  const sas = ttdSasaran(me, p);
+  if (sas.error) return { ok: false, error: sas.error };
   const raw = String(p.fileData || '').replace(/^data:[^,]*,/, '');
   if (!raw) return { ok: false, error: 'Gambar tanda tangan kosong' };
   const bytes = Utilities.base64Decode(raw);
   if (bytes.length > TTD_MAX_BYTES) return { ok: false, error: 'Gambar tanda tangan terlalu besar (maks 300 KB)' };
   const props = PropertiesService.getScriptProperties();
-  const old = props.getProperty(ttdKey(me.id));
+  const old = props.getProperty(ttdKey(sas.kunci));
   // Disimpan di root Drive pemilik script (BUKAN folder bukti yang dibagikan publik) agar tidak ikut terbuka via link
-  const file = DriveApp.createFile(Utilities.newBlob(bytes, 'image/png', 'TTD_' + me.id + '_' + nowStamp() + '.png'));
+  const file = DriveApp.createFile(Utilities.newBlob(bytes, 'image/png', 'TTD_' + sas.kunci + '_' + nowStamp() + '.png'));
   try { file.setSharing(DriveApp.Access.PRIVATE, DriveApp.Permission.NONE); } catch (e) {}
-  props.setProperty(ttdKey(me.id), file.getId());
+  props.setProperty(ttdKey(sas.kunci), file.getId());
   if (old) { try { DriveApp.getFileById(old).setTrashed(true); } catch (e) {} }
-  logActivity(me.id, 'saveTtd', file.getId());
+  logActivity(me.id, 'saveTtd', sas.kunci + ' ' + file.getId());
   return { ok: true };
 }
 
 function hapusTtd(p) {
   const me = authUser(p);
   if (!me) return { ok: false, error: SESI_ERR };
+  const sas = p.untuk ? ttdSasaran(me, p) : { kunci: me.id };
+  if (sas.error) return { ok: false, error: sas.error };
   const props = PropertiesService.getScriptProperties();
-  const old = props.getProperty(ttdKey(me.id));
-  if (old) { try { DriveApp.getFileById(old).setTrashed(true); } catch (e) {} props.deleteProperty(ttdKey(me.id)); }
+  const old = props.getProperty(ttdKey(sas.kunci));
+  if (old) { try { DriveApp.getFileById(old).setTrashed(true); } catch (e) {} props.deleteProperty(ttdKey(sas.kunci)); }
   logActivity(me.id, 'hapusTtd', old || '');
   return { ok: true };
+}
+
+// ============================================================
+//  DATA PENERIMA (relawan, PIC sekolah, kader posyandu) — dasar kwitansi harian, diisi sekali & dipakai berulang
+//  Sheet DataPenerima: id | dapur_id | jenis | nama | jabatan | lembaga | pm | nominal | metode | aktif | updated_at | updated_by
+//  Tanda tangan tiap penerima disimpan privat (Script Properties ttd_P_<id>), lihat saveTtd untuk:'penerima'
+// ============================================================
+const JENIS_PENERIMA = { RELAWAN: 'Relawan', PIC_SEKOLAH: 'PIC Sekolah', KADER: 'Kader Posyandu' };
+function dataPenerimaSheet() { return sheetOtomatis('DataPenerima', ['id', 'dapur_id', 'jenis', 'nama', 'jabatan', 'lembaga', 'pm', 'nominal', 'metode', 'aktif', 'updated_at', 'updated_by']); }
+function bacaDataPenerima(dapurId) {
+  const d = dataPenerimaSheet().getDataRange().getValues(), out = [];
+  for (let i = 1; i < d.length; i++) {
+    if (!d[i][0] || (dapurId && d[i][1] !== dapurId)) continue;
+    out.push({ _row: i + 1, id: String(d[i][0]), dapur: d[i][1], jenis: String(d[i][2]), nama: String(d[i][3] || ''), jabatan: String(d[i][4] || ''), lembaga: String(d[i][5] || ''),
+      pm: Number(d[i][6]) || 0, nominal: Number(d[i][7]) || 0, metode: String(d[i][8] || 'Transfer'), aktif: String(d[i][9]).toUpperCase() !== 'TIDAK' });
+  }
+  return out;
+}
+function cariDataPenerima(id) { return bacaDataPenerima('').find(function(x) { return x.id === id; }) || null; }
+function adaTtd(kunci) { return !!PropertiesService.getScriptProperties().getProperty(ttdKey(kunci)); }
+function getDataPenerima(p) {
+  const me = authUser(p);
+  if (!me) return { ok: false, error: SESI_ERR };
+  const dapurId = lpdhDapur(me, p.dapur);
+  if (!dapurId) return { ok: false, error: 'Pilih dapur' };
+  const props = PropertiesService.getScriptProperties().getProperties();
+  return { ok: true, data: { rows: bacaDataPenerima(dapurId).map(function(x) { const o = Object.assign({}, x); delete o._row; o.ada_ttd = !!props[ttdKey('P_' + x.id)]; return o; }),
+    bisaUbah: bisaIsiLPDH(me) } };
+}
+function bersihkanPenerima(x) {
+  const jenis = String(x.jenis || '');
+  if (!JENIS_PENERIMA[jenis]) return { error: 'Jenis penerima tidak dikenal' };
+  const r = { jenis: jenis, nama: String(x.nama || '').trim().substring(0, 80), jabatan: String(x.jabatan || '').trim().substring(0, 60), lembaga: String(x.lembaga || '').trim().substring(0, 80),
+    pm: Math.max(0, Math.round(Number(x.pm) || 0)), nominal: Math.round(Number(x.nominal) || 0), metode: x.metode === 'Tunai' ? 'Tunai' : 'Transfer', aktif: x.aktif !== false && x.aktif !== 'false' };
+  if (!r.nama) return { error: 'Nama wajib diisi' };
+  if (!(r.nominal > 0)) return { error: (jenis === 'RELAWAN' ? 'Upah per hari' : 'Nominal insentif') + ' wajib > 0' };
+  if (jenis !== 'RELAWAN' && !r.lembaga) return { error: 'Nama ' + (jenis === 'KADER' ? 'posyandu' : 'sekolah') + ' wajib diisi' };
+  return { row: r };
+}
+function saveDataPenerima(p) {
+  const me = authUser(p);
+  if (!me) return { ok: false, error: SESI_ERR };
+  if (!bisaIsiLPDH(me)) return { ok: false, error: 'Hanya PIC, akuntan, atau admin' };
+  const dapurId = lpdhDapur(me, p.dapur);
+  if (!dapurId) return { ok: false, error: 'Pilih dapur' };
+  const b = bersihkanPenerima(p);
+  if (b.error) return { ok: false, error: b.error };
+  return withLock(function() {
+    const sh = dataPenerimaSheet(), semua = bacaDataPenerima(dapurId);
+    const ada = p.id ? semua.find(function(x) { return x.id === String(p.id); }) : null;
+    if (p.id && !ada) return { ok: false, error: 'Data penerima tidak ditemukan' };
+    if (semua.some(function(x) { return x.jenis === b.row.jenis && x.nama.toLowerCase() === b.row.nama.toLowerCase() && (!ada || x.id !== ada.id); }))
+      return { ok: false, error: 'Nama "' + b.row.nama + '" sudah ada di daftar ' + JENIS_PENERIMA[b.row.jenis] };
+    const id = ada ? ada.id : idUnik('DP'), r = b.row;
+    const baris = [id, dapurId, r.jenis, r.nama, r.jabatan, r.lembaga, r.pm, r.nominal, r.metode, r.aktif ? 'YA' : 'TIDAK', new Date(), me.id];
+    if (ada) sh.getRange(ada._row, 1, 1, baris.length).setValues([baris]); else sh.appendRow(baris);
+    logActivity(me.id, 'saveDataPenerima', id + ' ' + r.jenis + ' ' + r.nama);
+    return { ok: true, data: { id: id } };
+  });
+}
+function hapusDataPenerima(p) {
+  const me = authUser(p);
+  if (!me) return { ok: false, error: SESI_ERR };
+  if (!bisaIsiLPDH(me)) return { ok: false, error: 'Hanya PIC, akuntan, atau admin' };
+  return withLock(function() {
+    const pn = cariDataPenerima(String(p.id || ''));
+    if (!pn) return { ok: false, error: 'Data penerima tidak ditemukan' };
+    if (me.role !== 'admin' && pn.dapur !== me.dapur) return { ok: false, error: 'Bukan dapur Anda' };
+    dataPenerimaSheet().deleteRow(pn._row);
+    const props = PropertiesService.getScriptProperties(), fid = props.getProperty(ttdKey('P_' + pn.id));
+    if (fid) { try { DriveApp.getFileById(fid).setTrashed(true); } catch (e) {} props.deleteProperty(ttdKey('P_' + pn.id)); }
+    logActivity(me.id, 'hapusDataPenerima', pn.id + ' ' + pn.nama);
+    return { ok: true };
+  });
 }
 
 // Logo kop Berita Acara (logo BGN), diunggah admin sekali, dipakai semua SPPG
