@@ -451,6 +451,45 @@ async function isiBahanBaku(page, uraian, volume, harga) {
     globalThis.__ro3 = null;
   });
 
+  all &= await run('Rencana Ops: tambah penerima/bank dari baris, usulan tanpa yang tidak muat, hapus semua tidak muat', { role: 'akuntan',
+    override: (a, m, p) => {
+      const L = globalThis.__ro4 = globalThis.__ro4 || { pn: [] };
+      if (a === 'getRencanaOps') return { ok: true, data: { dapur: 'D1', bisaUbah: true, bankVA: 'BSI', aktual: {}, status: {},
+        periode: { id: 'P19', periode_no: 19, tanggal_mulai: '2026-11-02', tanggal_akhir: '2026-11-06', penerima: 300, status: 'AKTIF' },
+        penerima: [{ id: 'W', nama: 'Wanda', bank: 'BSI', no_rek: '1' }],
+        riwayat: { periode_no: 18, hari: 5, tx: ['2026-10-26', '2026-10-27', '2026-10-28', '2026-10-29', '2026-10-30'].map(t => ({ tanggal: t, kategori: 'Gaji/honor relawan pekerja SPPG', uraian: 'Honor', nominal: 700000, penerima_id: 'W' }))
+          .concat([{ tanggal: '2026-10-28', kategori: 'Gas', uraian: 'Isi gas', nominal: 2400000, penerima_id: 'W' }]) },
+        rencana: { versi: 1, setelan: { indeks: 100, batas: 100 }, hari: {}, items: [{ id: 'T1', tanggal: '', kategori: 'APD', uraian: 'Masker', nominal: 900000, penerima_id: '' }, { id: 'T2', tanggal: '', kategori: 'APD', uraian: 'Sarung tangan', nominal: 800000, penerima_id: '' }] } } };
+      if (a === 'getKategori') return { ok: true, data: { 'Operasional': ['Gaji/honor relawan pekerja SPPG', 'Gas', 'APD'] } };
+      if (a === 'savePenerima') { L.pn.push(p); return { ok: true, data: { id: 'PNB', nama: p.nama, bank: p.bank, no_rek: p.no_rek } }; }
+      if (a === 'saveRencanaOps') return { ok: true, data: { versi: (p.data.versi || 0) + 1 } };
+      return null; } }, async (page, srv) => {
+    await login(page, 'siti');
+    await page.waitForSelector('header');
+    await page.click('nav:visible >> text=Rencana Ops');
+    // hapus semua tidak muat
+    await page.click('text=Hapus semua yang tidak muat (2)');
+    await page.click('.sheet >> button:has-text("Hapus")');
+    await page.waitForSelector('text=Baris tidak muat dihapus');
+    assert(!(await page.isVisible('text=Hapus semua yang tidak muat')), 'baris tidak muat masih ada');
+    // usulan: gas 2,4 jt tidak muat di pagu 900 rb/hari → tidak dimasukkan
+    await page.click('text=Usulkan otomatis');
+    await page.waitForSelector('text=tidak dimasukkan');
+    assert(!(await page.isVisible('text=Hapus semua yang tidak muat')) && !(await page.isVisible('th:has-text("Gas")')), 'usulan masih memasukkan yang tidak muat');
+    // tambah penerima/bank baru dari baris rencana
+    await page.click('[aria-label="Honor relawan 2026-11-02"]');
+    await page.click('[aria-label="Penerima rencana"] >> button[title="Tambah penerima baru"]');
+    await page.fill('input[placeholder="cth. Toko Beras Barokah"]', 'Toko Gas Baru');
+    await page.fill('input[placeholder="Pilih atau ketik nama bank"]', 'BNI');
+    await page.fill('input[placeholder="1234567890"]', '998877');
+    await page.locator('button', { hasText: /^\s*Simpan\s*$/ }).click();
+    await page.waitForSelector('text=Penerima ditambahkan');
+    assert(globalThis.__ro4.pn.length === 1 && globalThis.__ro4.pn[0].bank === 'BNI', 'penerima baru tidak tersimpan');
+    assert((await page.inputValue('[aria-label="Penerima rencana"] >> select')) === 'PNB', 'penerima baru tidak langsung terpilih');
+    await page.waitForSelector('text=Beda bank dengan VA');
+    globalThis.__ro4 = null;
+  });
+
   all &= await run('Relawan: daftar kosong bisa diisi (tombol tidak tertutup) & tempel dari Excel', { role: 'akuntan',
     override: (a, m, p) => a === 'getRelawanBayar' ? { ok: true, data: { rows: [], sumber: 'baru', total: 6240000 } }
       : a === 'getDataLPDH' ? { ok: true, data: { dapur: { id: 'D1', nama: 'SPPG Satu', kode: 'S1' }, identitas: {}, tanggal: p.tanggal, harian: null,
