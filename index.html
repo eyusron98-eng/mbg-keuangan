@@ -3802,6 +3802,16 @@ try {
     });
     return out;
   }
+  function roIdItemPengajuan(items) {
+    const out = {},
+      urut = {};
+    items.forEach(function (x) {
+      if (!x.pengajuan_id) return;
+      urut[x.pengajuan_id] = (urut[x.pengajuan_id] || 0) + 1;
+      out[x.id] = x.pengajuan_id + '-' + urut[x.pengajuan_id];
+    });
+    return out;
+  }
   function roLepasBatal(items, status) {
     const st = roStatusBaris(items, status),
       nomor = [];
@@ -3847,6 +3857,7 @@ try {
     const [tampil, setTampil] = useState('tabel');
     const [pilihSel, setPilihSel] = useState(null);
     const [hapusTak, setHapusTak] = useState(false);
+    const [konfirmAju, setKonfirmAju] = useState(null);
     const seedRef = useRef(0);
     const versiRef = useRef(0);
     const [kategori, setKategori] = useState([]);
@@ -4003,9 +4014,22 @@ try {
         toast('Melebihi pagu harian ' + fmt(roPagu(h, setelan)) + ' (sudah diajukan ' + fmt(sudah) + ') — kurangi atau pindahkan dulu', 'error');
         return;
       }
-      setAjukanTgl(t);
       if (daftar) setItems(daftar);
-      if ((dirty || daftar) && !(await simpan(semua))) {
+      setKonfirmAju({
+        t: t,
+        baris: baris,
+        semua: semua,
+        perluSimpan: !!(dirty || daftar)
+      });
+    }
+    async function kirimAju(k) {
+      setKonfirmAju(null);
+      const t = k.t,
+        baris = k.baris,
+        semua = k.semua,
+        daftar = k.perluSimpan;
+      setAjukanTgl(t);
+      if (daftar && !(await simpan(semua))) {
         setAjukanTgl('');
         return;
       }
@@ -4046,7 +4070,21 @@ try {
       toast('Pengajuan ' + res.data.nomor + ' terkirim untuk persetujuan' + (ok ? '' : ' (rencana belum tersimpan — tekan Simpan)'));
       load();
     }
-    const stBaris = roStatusBaris(items, ctx.status);
+    const stBaris = roStatusBaris(items, ctx.status),
+      idPItem = roIdItemPengajuan(items);
+    async function batalAju(x, alasan) {
+      const r = await apiPost('batalkanItem', {
+        item_id: idPItem[x.id],
+        alasan: alasan || 'Dibatalkan dari Rencana Ops'
+      });
+      if (!r.ok) {
+        toast('Gagal membatalkan: ' + (r.error || ''), 'error');
+        return;
+      }
+      setEdit(null);
+      toast('Pengajuan ' + x.nomor + ' dibatalkan — baris bisa diubah lagi');
+      load();
+    }
     const statusAju = function (x) {
       return {
         DIAJUKAN: 'Menunggu persetujuan',
@@ -4439,7 +4477,49 @@ try {
           baru: true
         });
       }
-    }, I.plus, " Tambah baris ", roLabel(pilihSel.kategori)))), hapusTak && React.createElement(ConfirmModal, {
+    }, I.plus, " Tambah baris ", roLabel(pilihSel.kategori)))), konfirmAju && React.createElement(Modal, {
+      title: 'Ajukan ' + konfirmAju.baris.length + ' baris untuk ' + fmtDateLong(konfirmAju.t) + '?',
+      onClose: function () {
+        setKonfirmAju(null);
+      }
+    }, React.createElement("div", {
+      className: "text-sm mb-2",
+      style: {
+        color: COLORS.ink
+      }
+    }, "Pengajuan akan dikirim ke Yayasan/PIC dengan ", React.createElement("b", null, "hari H ", fmtDateLong(konfirmAju.t)), konfirmAju.t !== hariIni ? ' (bukan hari ini)' : '', "."), konfirmAju.baris.map(function (x) {
+      return React.createElement("div", {
+        key: x.id,
+        className: "flex justify-between gap-2 py-1.5 text-sm",
+        style: {
+          borderTop: '1px solid ' + COLORS.line
+        }
+      }, React.createElement("span", {
+        className: "min-w-0 truncate"
+      }, x.uraian, " \xB7 ", (pmap[x.penerima_id] || {}).nama), React.createElement("b", {
+        className: "num shrink-0"
+      }, fmt(x.nominal)));
+    }), React.createElement("div", {
+      className: "flex justify-between py-1.5 text-sm font-bold",
+      style: {
+        borderTop: '1px solid ' + COLORS.line
+      }
+    }, React.createElement("span", null, "Jumlah"), React.createElement("span", {
+      className: "num"
+    }, fmt(konfirmAju.baris.reduce(function (a, x) {
+      return a + x.nominal;
+    }, 0)))), React.createElement("div", {
+      className: "flex gap-2 justify-end mt-3"
+    }, React.createElement(Btn, {
+      kind: "ghost",
+      onClick: function () {
+        setKonfirmAju(null);
+      }
+    }, "Batal"), React.createElement(Btn, {
+      onClick: function () {
+        kirimAju(konfirmAju);
+      }
+    }, I.file, " Ya, ajukan"))), hapusTak && React.createElement(ConfirmModal, {
       title: "Hapus yang tidak muat?",
       danger: true,
       confirmLabel: "Hapus",
@@ -4476,6 +4556,9 @@ try {
       lewat: lewat,
       busy: !!ajukanTgl,
       toast: toast,
+      statusBaris: stBaris[edit.id],
+      bisaBatal: role === 'akuntan' && ctx.periode.status === 'AKTIF',
+      onBatal: batalAju,
       onPenerima: function (saved) {
         setCtx(function (c) {
           const ada = c.penerima.some(function (p) {
@@ -4888,9 +4971,21 @@ try {
     lewat,
     busy,
     toast,
-    onPenerima
+    onPenerima,
+    statusBaris,
+    bisaBatal,
+    onBatal
   }) {
     const [f, setF] = useState(x);
+    const [alasan, setAlasan] = useState('');
+    const [mauBatal, setMauBatal] = useState(false);
+    const labelSt = {
+      DIAJUKAN: 'menunggu persetujuan',
+      DISETUJUI: 'sudah disetujui, belum direalisasi',
+      REVISI: 'perlu revisi',
+      TEREALISASI: 'sudah direalisasi'
+    }[statusBaris] || 'diajukan';
+    const bolehBatal = bisaBatal && ['DIAJUKAN', 'REVISI', 'DISETUJUI'].indexOf(statusBaris) >= 0;
     const set = function (k, v) {
       setF(Object.assign({}, f, {
         [k]: v
@@ -4907,12 +5002,50 @@ try {
       title: x.baru ? 'Tambah kebutuhan' : bisaUbah ? 'Ubah baris rencana' : 'Baris rencana',
       onClose: onClose
     }, x.pengajuan_id && React.createElement("div", {
-      className: "rounded-lg p-2 mb-3 text-xs",
+      className: "rounded-lg p-2.5 mb-3 text-xs",
       style: {
         background: '#E8F1EC',
         color: COLORS.deep
       }
-    }, "Sudah diajukan (", x.nomor, "). Perubahan dilakukan di menu Pengajuan."), !x.pengajuan_id && x.batal && React.createElement("div", {
+    }, "Sudah diajukan (", x.nomor, ") \u2014 ", React.createElement("b", null, labelSt), ", hari H ", fmtDateLong(x.tanggal), ". Lihat di menu ", React.createElement("b", null, "Pengajuan"), " \u2192 tampilan ", React.createElement("b", null, "Periode aktif"), statusBaris === 'DISETUJUI' ? ', dan di menu Realisasi' : '', ".", bolehBatal && React.createElement("div", {
+      className: "mt-2"
+    }, !mauBatal ? React.createElement(Btn, {
+      size: "sm",
+      kind: "ghost",
+      onClick: function () {
+        setMauBatal(true);
+      }
+    }, I.x, " Batalkan pengajuan baris ini") : React.createElement("div", null, React.createElement("input", {
+      value: alasan,
+      onChange: function (e) {
+        setAlasan(e.target.value);
+      },
+      placeholder: "Alasan pembatalan (cth. salah tanggal)",
+      style: Object.assign({}, inputStyle, {
+        minHeight: 36,
+        fontSize: 13
+      }),
+      "aria-label": "Alasan batal"
+    }), React.createElement("div", {
+      className: "flex gap-2 mt-2"
+    }, React.createElement(Btn, {
+      size: "sm",
+      kind: "ghost",
+      onClick: function () {
+        setMauBatal(false);
+      }
+    }, "Tidak jadi"), React.createElement(Btn, {
+      size: "sm",
+      kind: "danger",
+      onClick: function () {
+        onBatal(x, alasan.trim());
+      }
+    }, "Ya, batalkan"))), React.createElement("div", {
+      className: "mt-1",
+      style: {
+        color: COLORS.muted
+      }
+    }, "Setelah dibatalkan, baris kembali bisa diubah dan diajukan lagi."))), !x.pengajuan_id && x.batal && React.createElement("div", {
       className: "rounded-lg p-2 mb-3 text-xs",
       style: {
         background: '#FBF3E3',

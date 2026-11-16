@@ -369,6 +369,9 @@ async function isiBahanBaku(page, uraian, volume, harga) {
     const L = globalThis.__ro;
     assert(L.save.length === 1 && L.save[0].data.items.length >= 12 && L.save[0].periode_id === 'P19', 'rencana tidak tersimpan: ' + JSON.stringify(L.save[0] && L.save[0].data.items.length));
     await page.click('button:has-text("Ajukan") >> nth=0');
+    await page.waitForSelector('text=Ajukan 1 baris untuk');
+    assert(globalThis.__ro.aju.length === 0, 'pengajuan terkirim sebelum dikonfirmasi');
+    await page.click('text=Ya, ajukan');
     await page.waitForSelector('text=Pengajuan BA-PA/S1/2026/11/009 terkirim');
     const aj = L.aju[0];
     assert(aj && aj.tanggal === '2026-11-09' && aj.items.every(i => i.jenis === 'Operasional' && i.penerima_id) && aj.items.some(i => /honor/i.test(i.kategori)), 'pengajuan salah: ' + JSON.stringify(aj));
@@ -407,12 +410,14 @@ async function isiBahanBaku(page, uraian, volume, harga) {
     await page.click('[aria-label="Tutup"]');
     // 30 Okt: honor siap, gas belum ada penerima → hanya honor yang diajukan
     await page.click('button:has-text("Ajukan 1") >> nth=0');
+    await page.click('text=Ya, ajukan');
     await page.waitForSelector('text=BA-PA/S1/2026/10/001 terkirim');
     const L = globalThis.__ro2;
     assert(L.aju[0].tanggal === '2026-10-30' && L.aju[0].items.length === 1 && /honor/i.test(L.aju[0].items[0].kategori), 'ajukan harian harus melewati baris tanpa penerima: ' + JSON.stringify(L.aju[0]));
     // ajukan satu baris dari selnya (2 Nov)
     await page.click('[aria-label="Honor relawan 2026-11-02"]');
     await page.click('text=Ajukan baris ini');
+    await page.click('text=Ya, ajukan');
     await page.waitForSelector('text=BA-PA/S1/2026/10/002 terkirim');
     assert(L.aju[1].tanggal === '2026-11-02' && L.aju[1].items.length === 1, 'ajukan satu baris salah: ' + JSON.stringify(L.aju[1]));
     assert(!L.saved.items.some(x => x.kategori === 'Sewa Kendaraan'), 'baris Sewa Kendaraan lama tidak dibuang');
@@ -432,6 +437,7 @@ async function isiBahanBaku(page, uraian, volume, harga) {
       if (a === 'getKategori') return { ok: true, data: { 'Operasional': ['Gas'] } };
       if (a === 'saveRencanaOps') { if ((p.data.versi || 0) !== L.versi) return { ok: false, error: 'Rencana sudah diubah di perangkat lain.' }; L.versi++; L.saved = Object.assign({}, p.data, { versi: L.versi }); return { ok: true, data: { versi: L.versi } }; }
       if (a === 'createPengajuan') { L.aju.push(p); return { ok: true, data: { id: 'PA3', nomor: 'BA-PA3' } }; }
+      if (a === 'batalkanItem') { L.batal = p; return { ok: true }; }
       return null; } }, async (page, srv) => {
     await login(page, 'siti');
     await page.waitForSelector('header');
@@ -442,12 +448,20 @@ async function isiBahanBaku(page, uraian, volume, harga) {
     assert(!(await page.isVisible('text=Sudah diajukan (BA-PA1)')) && await page.isEnabled('[aria-label="Nominal rencana"]'), 'baris dibatalkan masih terkunci');
     await page.fill('[aria-label="Nominal rencana"]', '700000');
     await page.click('text=Ajukan baris ini');
+    await page.click('text=Ya, ajukan');
     await page.waitForSelector('text=Pengajuan BA-PA3 terkirim');
     const L = globalThis.__ro3;
     assert(L.aju.length === 1 && L.aju[0].items[0].nominal === 700000 && L.aju[0].tanggal === '2026-11-03', 'pengajuan ulang salah: ' + JSON.stringify(L.aju[0]));
     assert(L.saved.items.find(x => x.id === 'A').pengajuan_id === 'PA3' && L.saved.items.find(x => x.id === 'B').pengajuan_id === 'PA2', 'status baris tidak tersimpan benar');
+    // batalkan pengajuan yang sudah disetujui langsung dari matriks
     await page.click('[aria-label="Gas 2026-11-04"]');
     await page.waitForSelector('text=Sudah diajukan (BA-PA2)');
+    await page.waitForSelector('text=sudah disetujui, belum direalisasi');
+    await page.click('text=Batalkan pengajuan baris ini');
+    await page.fill('[aria-label="Alasan batal"]', 'salah tanggal');
+    await page.click('text=Ya, batalkan');
+    await page.waitForSelector('text=Pengajuan BA-PA2 dibatalkan');
+    assert(globalThis.__ro3.batal && globalThis.__ro3.batal.item_id === 'PA2-1' && globalThis.__ro3.batal.alasan === 'salah tanggal', 'batalkanItem salah: ' + JSON.stringify(globalThis.__ro3.batal));
     globalThis.__ro3 = null;
   });
 
