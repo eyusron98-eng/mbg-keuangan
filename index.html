@@ -3187,7 +3187,8 @@ try {
     });
     const D = S('D_Insentif');
     const C = S('C_Operasional'),
-      perBaris = {};
+      perBaris = {},
+      kwH = data.kwitansi || {};
     grup.op.forEach(function (t) {
       const b = lpdhBarisOps(t.kategori, t.uraian);
       (perBaris[b[0]] = perBaris[b[0]] || []).push(t);
@@ -3205,21 +3206,31 @@ try {
       set(C, 'I' + r, lpdhGabung(a.map(function (t) {
         return t.no_bukti;
       }), '; '));
-      set(C, 'J' + r, a.map(function (t) {
+      const kw = (r === 7 ? kwH.PIC_SEKOLAH : r === 8 ? kwH.KADER : '') || '';
+      set(C, 'J' + r, (kw ? [kw] : a.map(function (t) {
         return t.bukti_url;
-      }).filter(Boolean).join(' | '));
+      })).filter(Boolean).join(' | '));
       const jelas = a.filter(function (t) {
         return t.catatan;
       }).map(function (t) {
         return 'Penjelasan: ' + t.catatan;
       });
-      set(C, 'M' + r, lpdhGabung(jelas.concat(a.map(function (t) {
+      const adm = a.filter(function (t) {
+          return t.kategori === 'Biaya Admin Bank';
+        }),
+        lainnya = a.filter(function (t) {
+          return t.kategori !== 'Biaya Admin Bank';
+        });
+      const ringkasAdm = adm.length ? ['Biaya admin transfer bank: ' + adm.length + ' transaksi = ' + lpdhRp(jml(adm))] : [];
+      set(C, 'M' + r, lpdhGabung(jelas.concat(ringkasAdm, lainnya.map(function (t) {
         return t.kategori === b[1] || b[2].indexOf(t.kategori) >= 0 ? t.uraian : t.kategori + ': ' + t.uraian;
       })), '; '));
       opsRingkas.push({
         baris: b[1],
         jumlah: n,
-        total: jml(a)
+        total: jml(a),
+        admin: adm.length,
+        adminTotal: jml(adm)
       });
     });
     {
@@ -3241,7 +3252,7 @@ try {
           upah: x.upah,
           metode: x.metode,
           nb: t.no_bukti + '/' + (i + 1),
-          link: t.bukti_url
+          link: kwH.RELAWAN || t.bukti_url
         });
       });else barisRL.push({
         nama: t.uraian,
@@ -3250,7 +3261,7 @@ try {
         upah: t.riil,
         metode: t.sumber === 'Petty Cash' ? 'Tunai' : 'Transfer',
         nb: t.no_bukti,
-        link: t.bukti_url
+        link: kwH.RELAWAN || t.bukti_url
       });
     });
     barisRL.slice(0, LPDH_KAP.rl).forEach(function (x, i) {
@@ -3330,10 +3341,10 @@ try {
         return ki[i].no_kuitansi || t.no_bukti;
       }), '; '));
       set(D, 'C25', ki.every(function (x) {
-        return x.ttd_url || x.kuitansi_ttd === 'Ya';
+        return x.ttd_otomatis || x.ttd_url || x.kuitansi_ttd === 'Ya';
       }) ? 'Ya' : 'Tidak');
       set(D, 'C26', ins.map(function (t, i) {
-        return ki[i].ttd_url || t.bukti_url;
+        return t.bukti_url || ki[i].ttd_url;
       }).filter(Boolean).join(' | '));
       set(D, 'C27', lpdhGabung(ins.map(function (t, i) {
         return ki[i].ref_va || t.ref || '';
@@ -3544,6 +3555,11 @@ try {
     });
     return best;
   }
+  function roAdminBB(h, setelan, ctx, dariTgl) {
+    const nyata = (ctx && ctx.adminBB || {})[h.tanggal] || 0;
+    if (h.libur || dariTgl && h.tanggal < dariTgl) return nyata;
+    return Math.max(nyata, Math.max(0, Number(setelan && setelan.bb) || 0) * RO_FEE);
+  }
   function roPakai(items, ctx) {
     const map = {},
       pm = {};
@@ -3642,7 +3658,7 @@ try {
     });
     const sisa = {};
     hari.forEach(function (h) {
-      sisa[h.tanggal] = roBatas(h, setelan);
+      sisa[h.tanggal] = roBatas(h, setelan) - roAdminBB(h, setelan, ctx, dariTgl);
     });
     const kat = {};
     items.concat(tetap).forEach(function (x) {
@@ -3735,7 +3751,8 @@ try {
     const per = hari.map(function (h) {
       const pagu = roPagu(h, setelan),
         batas = roBatas(h, setelan),
-        p = pakai[h.tanggal] || 0;
+        adm = roAdminBB(h, setelan, ctx, dariTgl),
+        p = (pakai[h.tanggal] || 0) + adm;
       const aktif = !dariTgl || h.tanggal >= dariTgl;
       paguTot += pagu;
       rencanaTot += p;
@@ -3761,6 +3778,7 @@ try {
         pagu: pagu,
         batas: batas,
         pakai: p,
+        adminBB: adm,
         lewat: !aktif,
         aktual: (ctx.aktual || {})[h.tanggal] || 0
       });
@@ -3865,6 +3883,10 @@ try {
         if (sel[t][k] && aktif(t)) terjadwal[k] += sel[t][k].nominal;
       });
     });
+    roHari(ctx.periode, hariSet).forEach(function (h) {
+      const a = roAdminBB(h, setelan, ctx, dariTgl);
+      if (a) fee[h.tanggal] = (fee[h.tanggal] || 0) + a;
+    });
     const feeAktif = Object.keys(fee).reduce(function (a, t) {
       return a + (aktif(t) ? fee[t] : 0);
     }, 0);
@@ -3938,7 +3960,7 @@ try {
       pakai = {};
     hari.forEach(function (h) {
       pagu[h.tanggal] = roPagu(h, setelan);
-      pakai[h.tanggal] = 0;
+      pakai[h.tanggal] = roAdminBB(h, setelan, ctx, dariTgl);
     });
     items.concat(luar).forEach(function (x) {
       if (pakai[x.tanggal] !== undefined) pakai[x.tanggal] += x.nominal + fee(x);
@@ -4040,7 +4062,8 @@ try {
     const [hariSet, setHariSet] = useState({});
     const [setelan, setSetelan] = useState({
       indeks: 100,
-      batas: 95
+      batas: 95,
+      bb: 0
     });
     const [versi, setVersi] = useState(0);
     const [dirty, setDirty] = useState(false);
@@ -4089,10 +4112,11 @@ try {
       setCtx(d);
       setItems(dipakai);
       setHariSet(rc.hari || {});
-      setSetelan(rc.setelan || {
+      setSetelan(Object.assign({
         indeks: 100,
-        batas: 95
-      });
+        batas: 95,
+        bb: Number(d.bbDefault) || 0
+      }, rc.setelan || {}));
       setVersi(rc.versi || 0);
       versiRef.current = rc.versi || 0;
       setDirty(dipakai.length !== semua.length || lepas.lepas > 0);
@@ -4445,6 +4469,21 @@ try {
       onChange: function (e) {
         setSetelan(Object.assign({}, setelan, {
           indeks: Number(e.target.value.replace(/\D/g, '')) || 0
+        }));
+        setDirty(true);
+      },
+      style: inputStyle
+    })), React.createElement(Field, {
+      label: "Transfer bahan baku / hari",
+      hint: 'Cadangan biaya admin ' + fmt((Number(setelan.bb) || 0) * RO_FEE) + ' per hari (' + RO_FEE.toLocaleString('id-ID') + ' per transfer) ikut menghabiskan pagu LPDH'
+    }, React.createElement("input", {
+      value: setelan.bb,
+      inputMode: "numeric",
+      disabled: !bisaUbah,
+      "aria-label": "Transfer bahan baku per hari",
+      onChange: function (e) {
+        setSetelan(Object.assign({}, setelan, {
+          bb: Math.min(60, Number(e.target.value.replace(/\D/g, '')) || 0)
         }));
         setDirty(true);
       },
@@ -5173,7 +5212,8 @@ try {
         title: k
       }, roLabel(k));
     }), React.createElement("th", {
-      style: th
+      style: th,
+      title: "Biaya admin transfer: operasional + bahan baku"
     }, "Biaya transfer"), React.createElement("th", {
       style: th
     }, "Total"), React.createElement("th", {
@@ -10426,7 +10466,7 @@ try {
         penerima_id: r.penerima_id
       }, pnMap, pagu ? pagu.bankVA : '') : 0);
     }, 0);
-    const opsTot = pagu ? pagu.terpakai + pagu.diajukan + opsIni : 0;
+    const opsTot = pagu ? pagu.terpakai + pagu.diajukan + (pagu.cadanganBB || 0) + opsIni : 0;
     const lebihPagu = pagu && opsIni > 0 && opsTot > pagu.pagu ? opsTot - pagu.pagu : 0;
     const [catatanPagu, setCatatanPagu] = useState('');
     const catatanKirim = lebihPagu ? 'Melebihi pagu harian ' + fmt(lebihPagu) + ' (pagu ' + fmt(pagu.pagu) + ', PM ' + fmtNoRp(pagu.pm) + '). Alasan: ' + catatanPagu.trim() : '';
@@ -10619,7 +10659,11 @@ try {
       className: "flex justify-between"
     }, React.createElement("span", null, "Sudah diajukan, belum direalisasi (", pagu.nDiajukan, " baris)"), React.createElement("span", {
       className: "num"
-    }, fmt(pagu.diajukan))), React.createElement("div", {
+    }, fmt(pagu.diajukan))), pagu.cadanganBB > 0 && React.createElement("div", {
+      className: "flex justify-between"
+    }, React.createElement("span", null, "Cadangan biaya admin transfer bahan baku"), React.createElement("span", {
+      className: "num"
+    }, fmt(pagu.cadanganBB))), React.createElement("div", {
       className: "flex justify-between"
     }, React.createElement("span", null, "Pengajuan ini (termasuk biaya transfer)"), React.createElement("span", {
       className: "num"
@@ -12674,11 +12718,33 @@ try {
         }
         const doc = await buildKwitansiPdf(r.data);
         doc.save('Kwitansi_' + String(r.data.dapur.kode || r.data.dapur.nama).replace(/[^A-Za-z0-9]+/g, '_') + '_' + tanggal + '.pdf');
+        let gagalSimpan = 0;
+        for (const jn of JENIS_DP) {
+          const bag = r.data.rows.filter(function (x) {
+            return x.jenis === jn[0];
+          });
+          if (!bag.length) continue;
+          try {
+            const d2 = await buildKwitansiPdf(Object.assign({}, r.data, {
+              rows: bag
+            }));
+            const up = await apiUpload('simpanKwitansiFile', {
+              dapur: dapurId,
+              tanggal: tanggal,
+              jenis: jn[0],
+              fileData: d2.output('datauristring').split(',')[1]
+            });
+            if (!up.ok) gagalSimpan++;
+          } catch (e) {
+            gagalSimpan++;
+          }
+        }
+        if (gagalSimpan) toast('PDF terunduh, tetapi ' + gagalSimpan + ' berkas gagal disimpan ke Drive — tautan LPDH belum terbarui. Coba terbitkan lagi.', 'error');
         const kurang = [];
         if (!r.data.akuntan.ttd) kurang.push('akuntan');
         if (!r.data.kepala.ttd) kurang.push('Kepala SPPG');
         if (!r.data.kepala.nama) kurang.push('nama Kepala SPPG (Identitas LPDH)');
-        toast(r.data.rows.length + ' kwitansi diunduh' + (kurang.length ? ' — belum ada: ' + kurang.join(', ') : ''), kurang.length ? 'error' : undefined);
+        if (!gagalSimpan) toast(r.data.rows.length + ' kwitansi diunduh & tertaut ke LPDH' + (kurang.length ? ' — belum ada: ' + kurang.join(', ') : ''), kurang.length ? 'error' : undefined);
         load();
       } catch (e) {
         toast('Gagal membuat PDF: ' + e.message, 'error');
@@ -12736,8 +12802,27 @@ try {
         key: j[0],
         pad: false,
         className: "mb-3"
-      }, React.createElement("div", {
-        className: "px-4 pt-3 pb-1 flex justify-between items-center"
+      }, function () {
+        const tot = g.filter(function (x) {
+            return x.pilih;
+          }).reduce(function (a, x) {
+            return a + (Number(x.nominal) || 0);
+          }, 0),
+          cat = (data.tercatat || {})[j[0]] || 0,
+          beda = (cat > 0 || tot > 0) && cat !== tot;
+        return React.createElement("div", {
+          className: "px-4 pt-3 text-[11px]",
+          style: {
+            color: beda ? COLORS.amber : COLORS.muted
+          }
+        }, "Kwitansi ", fmt(tot), " \xB7 tercatat di transaksi hari ini ", fmt(cat), beda ? ' — selisih ' + fmt(tot - cat) + '. Samakan agar LPDH & kwitansi sinkron.' : ' ✓ sinkron', data.file && data.file[j[0]] ? React.createElement(React.Fragment, null, " \xB7 ", React.createElement("a", {
+          href: data.file[j[0]],
+          target: "_blank",
+          rel: "noopener",
+          className: "underline"
+        }, "PDF tertaut di LPDH")) : '');
+      }(), React.createElement("div", {
+        className: "px-4 pt-1 pb-1 flex justify-between items-center"
       }, React.createElement(Eyebrow, null, j[1]), React.createElement("span", {
         className: "text-xs flex gap-3"
       }, React.createElement("button", {
