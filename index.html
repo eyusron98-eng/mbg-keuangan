@@ -3407,7 +3407,8 @@ try {
         nama: RO_NAMA_HARI[dow],
         libur: libur,
         pm: h.pm > 0 ? h.pm : Number(periode.penerima) || 0,
-        pmUbah: h.pm > 0
+        pmUbah: h.pm > 0,
+        pmIsian: h.pm !== undefined ? h.pm > 0 ? String(h.pm) : '' : String(Number(periode.penerima) || '')
       };
     });
   }
@@ -4215,6 +4216,12 @@ try {
       bisaUbah: bisaUbah,
       ajukanTgl: ajukanTgl,
       lewat: lewat,
+      onPm: function (t, pm) {
+        ubahHari(t, {
+          pm: pm
+        });
+      },
+      pmSetup: ctx.periode.penerima,
       onSel: function (t, k, c) {
         if (c && c.items.length === 1) setEdit(Object.assign({}, c.items[0]));else if (c && c.items.length > 1) setPilihSel({
           tanggal: t,
@@ -4443,7 +4450,9 @@ try {
     onSel,
     onAjukan,
     terkunci,
-    lewat
+    lewat,
+    onPm,
+    pmSetup
   }) {
     const r = m.ring,
       kol = m.kolom;
@@ -4496,7 +4505,7 @@ try {
       style: {
         color: COLORS.muted
       }
-    }, "Geser ke samping untuk melihat semua pos. Ketuk sel untuk mengubah/menambah; ketuk sel merah \"Tidak muat\" untuk melihat barangnya. Usulan otomatis hanya mengisi sampai ", m.batas, "% pagu (cadangan bila PM turun); sisanya boleh diisi manual. Tanggal yang sudah lewat (abu-abu) tidak bisa diisi atau diajukan. Tombol Ajukan mengirim baris yang penerimanya sudah dipilih; satu baris bisa diajukan sendiri dari selnya.", React.createElement("span", {
+    }, "Geser ke samping untuk melihat semua pos. Ketuk sel untuk mengubah/menambah; ketuk sel merah \"Tidak muat\" untuk melihat barangnya. Usulan otomatis hanya mengisi sampai ", m.batas, "% pagu (cadangan bila PM turun); sisanya boleh diisi manual. Tanggal yang sudah lewat (abu-abu) tidak bisa diisi atau diajukan. Tombol Ajukan mengirim baris yang penerimanya sudah dipilih; satu baris bisa diajukan sendiri dari selnya. PM tiap hari bisa diubah langsung di kolom Hari (bingkai kuning = berbeda dari PM setup ", fmtNoRp(pmSetup), "); pagu hari itu ikut berubah \u2014 jangan lupa Simpan.", React.createElement("span", {
       className: "inline-flex items-center gap-1 ml-2"
     }, React.createElement("span", {
       style: {
@@ -4567,7 +4576,35 @@ try {
           fontWeight: 600,
           color: COLORS.ink
         })
-      }, h.nama, " ", h.tanggal.slice(8), "/", h.tanggal.slice(5, 7), React.createElement("div", {
+      }, h.nama, " ", h.tanggal.slice(8), "/", h.tanggal.slice(5, 7), bisaUbah && !sudahLewat && !h.libur ? React.createElement("div", {
+        className: "flex items-center gap-1 mt-0.5",
+        style: {
+          fontSize: 10,
+          fontWeight: 400,
+          color: COLORS.muted
+        }
+      }, "PM", React.createElement("input", {
+        value: h.pmIsian,
+        inputMode: "numeric",
+        "aria-label": 'PM ' + h.tanggal,
+        onClick: function (e) {
+          e.stopPropagation();
+        },
+        onChange: function (e) {
+          onPm(h.tanggal, Number(e.target.value.replace(/\D/g, '')) || 0);
+        },
+        style: {
+          width: 56,
+          padding: '2px 4px',
+          fontSize: 11,
+          border: '1px solid ' + (h.pmUbah && h.pm !== pmSetup ? COLORS.amber : COLORS.line),
+          borderRadius: 6,
+          fontWeight: h.pmUbah && h.pm !== pmSetup ? 700 : 400,
+          color: COLORS.ink,
+          background: '#fff',
+          textAlign: 'right'
+        }
+      })) : React.createElement("div", {
         style: {
           fontSize: 10,
           fontWeight: 400,
