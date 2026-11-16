@@ -531,6 +531,14 @@ async function isiBahanBaku(page, uraian, volume, harga) {
     await page.waitForSelector('[aria-label="Matriks rencana operasional"]');
     assert(await page.isVisible('th:has-text("Gas")') && await page.isVisible('th:has-text("Listrik")'), 'pos di luar rencana tidak tampil di matriks');
     await page.waitForSelector('text=termasuk di luar rencana');
+    // tombol WA per hari: pengajuan hari itu (termasuk yang sudah disetujui) bisa disalin, penanda hilang setelah disalin
+    assert(/● WA/.test(await page.innerText('[aria-label="WA 2026-11-03"]')), 'penanda belum disalin di matriks tidak tampil');
+    await page.click('[aria-label="WA 2026-11-03"]');
+    const tw = await page.inputValue('.sheet textarea');
+    assert(/BA-X/.test(tw) && /sudah disetujui/.test(tw) && /Gas dari menu Pengajuan/.test(tw), 'teks WA per hari salah: ' + tw);
+    await page.click('.sheet button:has-text("Salin pesan")');
+    await page.click('.sheet button:text-is("Tutup")');
+    assert(!/●/.test(await page.innerText('[aria-label="WA 2026-11-03"]')), 'penanda tidak hilang setelah disalin');
     // 3 Nov: 2,5 jt + 0,3 jt di luar rencana + APD 0,4 jt = 3,2 jt > pagu 3 jt → boleh diajukan, tapi alasan wajib
     await page.click('button:has-text("Ajukan 1") >> nth=0');
     await page.waitForSelector('text=Melebihi pagu harian Rp 200.000');
@@ -811,6 +819,35 @@ async function isiBahanBaku(page, uraian, volume, harga) {
     await page.waitForSelector('[aria-label="Alasan melebihi pagu"]');
     assert(globalThis.__pg && globalThis.__pg.tanggal, 'getPaguOps tidak dipanggil');
     globalThis.__pg = null;
+  });
+
+  all &= await run('Pengajuan: salin WA untuk pengajuan disetujui + penanda belum disalin', { role: 'akuntan', existing: true, tanggal: '2026-10-15',
+    override: (a, m, p) => {
+      if (a !== 'getPengajuan' || p.periode_id === 'P1') return null;
+      const it = (id, st, ur, cat) => ({ id, urut: 1, jenis: 'Operasional', kategori: 'Gas', uraian: ur, nominal: 600000, penerima_nama: 'Toko A', bank: 'BCA', no_rek: '123', status: st, catatan: cat || '', putaran: 1 });
+      return { ok: true, data: { pengajuan: [
+        { id: 'gs', nomor: 'BA-PA/S1/2026/10/005', dapur: 'D1', tanggal: '2026-10-30', status: 'SELESAI', created_at: '2026-10-30T08:00:00', created_by_nama: 'Siti', total_diajukan: 600000, total_disetujui: 600000,
+          items: [it('s1', 'DISETUJUI', 'Gas 12 kg', 'Catatan akuntan: Melebihi pagu harian Rp 100.000. Alasan: stok habis')] },
+        { id: 'gm', nomor: 'BA-PA/S1/2026/10/006', dapur: 'D1', tanggal: '2026-10-30', status: 'MENUNGGU', created_at: '2026-10-30T09:00:00', created_by_nama: 'Siti', total_diajukan: 600000, total_disetujui: 0,
+          items: [it('m1', 'DIAJUKAN', 'Galon 10')] }],
+        va: { D1: { sisaVA: 7000000, komitmen: 0, tersedia: 7000000 } }, periodeAktif: { D1: 'P2' }, periodeRange: { D1: { mulai: '2026-10-01', akhir: '2026-10-31' } } } };
+    } }, async (page, srv) => {
+    await login(page, 'siti');
+    await page.waitForSelector('header');
+    await page.click('nav:visible >> text=Pengajuan');
+    await page.waitForSelector('text=2 pengajuan');
+    await page.waitForSelector('text=Belum disalin ke WA');
+    assert((await page.locator('text=Belum disalin ke WA').count()) === 2, 'penanda belum disalin harus ada di kedua pengajuan');
+    // pengajuan yang sudah disetujui juga bisa disalin
+    await page.click('button:has-text("Salin pesan WA") >> nth=0');
+    const t = await page.inputValue('.sheet textarea');
+    assert(/yang \*sudah disetujui\*/.test(t) && /Mohon transfernya/.test(t) && /Catatan:\* Melebihi pagu harian Rp 100\.000/.test(t), 'teks WA disetujui salah: ' + t);
+    await page.click('.sheet button:has-text("Salin pesan")');
+    await page.click('.sheet button:text-is("Tutup")');
+    await page.waitForSelector('text=1 pengajuan');
+    assert((await page.locator('text=Belum disalin ke WA').count()) === 1, 'penanda tidak hilang setelah disalin');
+    await page.click('button:has-text("Salin semua (1)")');
+    assert(/BA-PA\/S1\/2026\/10\/006/.test(await page.inputValue('.sheet textarea')), 'salin semua tidak memuat pengajuan yang belum disalin');
   });
 
   all &= await run('Pengajuan: daftar memakai Berita Acara periode aktif saja', { role: 'akuntan', existing: true, tanggal: '2026-10-15' }, async (page, srv) => {

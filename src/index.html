@@ -1877,6 +1877,7 @@ function RencanaOpsPage({ session, scope, toast }) {
   const [hapusTak, setHapusTak] = useState(false);
   const [konfirmAju, setKonfirmAju] = useState(null);
   const [waText, setWaText] = useState(null);
+  const [waVer, setWaVer] = useState(0);   // render ulang setelah teks WA disalin
   const seedRef = useRef(0);
   const versiRef = useRef(0);   // versi terbaru (dipakai simpan berturut-turut dalam satu aksi)
   const [kategori, setKategori] = useState([]);
@@ -1962,17 +1963,28 @@ function RencanaOpsPage({ session, scope, toast }) {
     const ok = await simpan(baru);
     setAjukanTgl('');
     toast('Pengajuan ' + res.data.nomor + ' terkirim untuk persetujuan' + (ok ? '' : ' (rencana belum tersimpan — tekan Simpan)'));
-    setWaText(teksWaRencana(res.data.nomor, t, baris, catatan));   // langsung siap disalin ke grup WA
+    setWaText({ text: teksWaRencana(res.data.nomor, t, baris, catatan), ids: [res.data.id] });   // langsung siap disalin ke grup WA
     load();
   }
   const stBaris = roStatusBaris(items, ctx.status), idPItem = roIdItemPengajuan(items);
   // teks WA pengajuan (format sama dengan menu Pengajuan)
-  function teksWaRencana(nomor, t, baris, catatan) {
-    return buildWAPesan({ nomor: nomor, tanggal: t, dapurNama: ctx.dapurNama || '', oleh: session.user.nama, catatan: catatan, items: baris.map(function(x) {
+  function teksWaRencana(nomor, t, baris, catatan, disetujui) {
+    return buildWAPesan({ nomor: nomor, tanggal: t, dapurNama: ctx.dapurNama || '', oleh: session.user.nama, catatan: catatan, disetujui: disetujui, items: baris.map(function(x) {
       const pn = pmap[x.penerima_id] || {};
       return { uraian: x.uraian + (x.bagian ? ' (bagian ' + x.bagian + ')' : ''), jenis: 'Operasional', nominal: x.nominal, penerima_nama: pn.nama || '', bank: pn.bank || '', no_rek: pn.no_rek || '' }; }) });
   }
-  function waBaris(x) { setEdit(null); setWaText(teksWaRencana(x.nomor, x.tanggal, items.concat(luarItems).filter(function(y) { return y.pengajuan_id && y.pengajuan_id === x.pengajuan_id; }))); }
+  // pengajuan aktif (menunggu / revisi / disetujui) per hari, dari rencana maupun di luar rencana
+  const stAju = function(x) { return x.luar ? x.status : stBaris[x.id]; };
+  function grupAju(t) {
+    const g = {};
+    items.concat(luarItems).forEach(function(x) { if (!x.pengajuan_id || (t && x.tanggal !== t) || ['DIAJUKAN', 'REVISI', 'DISETUJUI'].indexOf(stAju(x)) < 0) return; (g[x.pengajuan_id] = g[x.pengajuan_id] || []).push(x); });
+    return g;
+  }
+  function waGrup(g) {
+    const ids = Object.keys(g);
+    return { ids: ids, text: ids.map(function(pid) { const a = g[pid]; return teksWaRencana(a[0].nomor, a[0].tanggal, a, '', a.every(function(x) { return stAju(x) === 'DISETUJUI'; })); }).join('\n\n— — —\n\n') };
+  }
+  function waBaris(x) { setEdit(null); const g = {}; g[x.pengajuan_id] = grupAju(x.tanggal)[x.pengajuan_id] || [x]; setWaText(waGrup(g)); }
   async function batalAju(x, alasan) {
     const r = await apiPost('batalkanItem', { item_id: x.pitem_id || idPItem[x.id], alasan: alasan || 'Dibatalkan dari Rencana Ops' });
     if (!r.ok) { toast('Gagal membatalkan: ' + (r.error || ''), 'error'); return; }
@@ -2039,6 +2051,8 @@ function RencanaOpsPage({ session, scope, toast }) {
 
     {tampil === 'tabel' && <RencanaMatriks m={roMatriks(hitung, ctx, setelan, hariSet, hariIni)} bisaUbah={bisaUbah} ajukanTgl={ajukanTgl} lewat={lewat}
       onPm={function(t, pm) { ubahHari(t, { pm: pm }); }} pmSetup={ctx.periode.penerima}
+      waHari={function(t) { const ids = Object.keys(grupAju(t)); return ids.length ? { n: ids.length, belum: ids.some(function(id) { return !waSudah(id); }) } : null; }}
+      onWaHari={function(t) { setWaText(waGrup(grupAju(t))); }}
       onSel={function(t, k, c) {
         if (c && c.items.length === 1) setEdit(Object.assign({}, c.items[0]));
         else if (c && c.items.length > 1) setPilihSel({ tanggal: t, kategori: k, items: c.items });
@@ -2086,7 +2100,7 @@ function RencanaOpsPage({ session, scope, toast }) {
       {bisaUbah && <div className="mt-3"><Btn size="sm" kind="ghost" onClick={function() { const p = pilihSel; setPilihSel(null);
         setEdit({ id: 'RO' + Date.now().toString(36), tanggal: p.tanggal, kategori: p.kategori, uraian: roLabel(p.kategori), nominal: 0, penerima_id: '', baru: true }); }}>{I.plus} Tambah baris {roLabel(pilihSel.kategori)}</Btn></div>}
     </Modal>}
-    {waText && <WAModal text={waText} toast={toast} onClose={function() { setWaText(null); }}/>}
+    {waText && <WAModal text={waText.text} ids={waText.ids} toast={toast} onDisalin={function() { setWaVer(function(v) { return v + 1; }); }} onClose={function() { setWaText(null); }}/>}
     {konfirmAju && <Modal title={'Ajukan ' + konfirmAju.baris.length + ' baris untuk ' + fmtDateLong(konfirmAju.t) + '?'} onClose={function() { setKonfirmAju(null); }}>
       <div className="text-sm mb-2" style={{ color: COLORS.ink }}>Pengajuan akan dikirim ke Yayasan/PIC dengan <b>hari H {fmtDateLong(konfirmAju.t)}</b>{konfirmAju.t !== hariIni ? ' (bukan hari ini)' : ''}.</div>
       {konfirmAju.baris.map(function(x) { return <div key={x.id} className="flex justify-between gap-2 py-1.5 text-sm" style={{ borderTop: '1px solid ' + COLORS.line }}>
@@ -2117,7 +2131,7 @@ function RencanaOpsPage({ session, scope, toast }) {
       onDelete={function() { ubah(function(a) { return a.filter(function(x) { return x.id !== edit.id; }); }); setEdit(null); }}/>}
   </div>;
 }
-function RencanaMatriks({ m, bisaUbah, ajukanTgl, onSel, onAjukan, terkunci, lewat, onPm, pmSetup }) {
+function RencanaMatriks({ m, bisaUbah, ajukanTgl, onSel, onAjukan, terkunci, lewat, onPm, pmSetup, waHari, onWaHari }) {
   const r = m.ring, kol = m.kolom;
   const th = { padding: '6px 8px', fontSize: 11, fontWeight: 700, color: COLORS.muted, textAlign: 'right', whiteSpace: 'nowrap', background: COLORS.paper, borderBottom: '1px solid ' + COLORS.line };
   const td = { padding: '6px 8px', fontSize: 12, textAlign: 'right', whiteSpace: 'nowrap', borderBottom: '1px solid ' + COLORS.line, fontVariantNumeric: 'tabular-nums' };
@@ -2166,7 +2180,10 @@ function RencanaMatriks({ m, bisaUbah, ajukanTgl, onSel, onAjukan, terkunci, lew
               <td style={Object.assign({}, td, { background: bg, fontWeight: 700 })}>{h.pakai ? singkat(h.pakai) : ''}</td>
               <td style={Object.assign({}, td, { background: bg, color: COLORS.muted })}>{h.pagu ? singkat(h.pagu) : '0'}</td>
               <td style={Object.assign({}, td, { background: bg, fontWeight: 700, color: lebih ? COLORS.danger : COLORS.green })}>{h.libur && !h.pakai ? '' : (lebih ? '−' + singkat(-sisa) : singkat(sisa))}</td>
-              {bisaUbah && <td style={Object.assign({}, td, { background: bg })}>{belum > 0 && !sudahLewat && <button type="button" disabled={!!ajukanTgl} onClick={function() { onAjukan(h.tanggal); }}
+              {bisaUbah && <td style={Object.assign({}, td, { background: bg })}>{(function() { const w = waHari(h.tanggal); return w && <button type="button" onClick={function() { onWaHari(h.tanggal); }}
+                className="rounded-md px-2 py-1 text-[11px] font-semibold mr-1" aria-label={'WA ' + h.tanggal} title={w.belum ? 'Ada pengajuan yang belum disalin ke WA' : 'Salin lagi teks WA'}
+                style={{ background: w.belum ? '#FBF3E3' : 'transparent', color: w.belum ? '#9A6A0B' : COLORS.green, border: '1px solid ' + (w.belum ? '#E8C77A' : COLORS.line) }}>{w.belum ? '● ' : ''}WA</button>; })()}
+                {belum > 0 && !sudahLewat && <button type="button" disabled={!!ajukanTgl} onClick={function() { onAjukan(h.tanggal); }}
                 className="rounded-md px-2 py-1 text-[11px] font-semibold" style={{ background: COLORS.green, color: '#fff' }}
                 title={'Ajukan ' + belum + ' baris yang penerimanya sudah dipilih'}>{ajukanTgl === h.tanggal ? '…' : 'Ajukan ' + belum}</button>}</td>}
             </tr>;
@@ -4105,7 +4122,7 @@ function PengajuanForm({ kategoriMap, penerima, upsertPenerima, toast, onCreated
       if (res.ok) {
         toast('Pengajuan ' + res.data.nomor + ' terkirim untuk persetujuan');
         const pmap = {}; (penerima || []).forEach(function(x){ pmap[x.id] = x; });
-        onCreated({ nomor: res.data.nomor, tanggal: tanggal, dapur: dapur, catatan: catatanKirim, items: items.map(function(it){
+        onCreated({ id: res.data.id, nomor: res.data.nomor, tanggal: tanggal, dapur: dapur, catatan: catatanKirim, items: items.map(function(it){
           const pn = pmap[it.penerima_id] || {};
           return Object.assign({}, it, { penerima_nama: pn.nama || '', bank: pn.bank || '', no_rek: pn.no_rek || '' }); }) });
       }
@@ -4355,6 +4372,7 @@ function PengajuanPage({ session, scope, dapurList, toast }) {
   const [batalItem, setBatalItem] = useState(null);
   const [penerima, upsertPenerima] = usePenerimaList();
   const [baList, setBaList] = useState([]);
+  const [waVer, setWaVer] = useState(0);   // render ulang setelah teks WA disalin
   const [waText, setWaText] = useState(null);
   const dapurMap = useMemo(function(){ const m = {}; (dapurList || []).forEach(function(d){ m[d.id] = d.nama; }); return m; }, [dapurList]);
 
@@ -4398,6 +4416,7 @@ function PengajuanPage({ session, scope, dapurList, toast }) {
     : mode === 'aktif' ? data.pengajuan
     : (!per ? [] : dataLalu ? dataLalu.pengajuan : null);
   const perluTindakan = data.pengajuan.filter(function(h){ return h.tanggal !== hariIni && (h.status === 'MENUNGGU' || h.status === 'REVISI'); });
+  const belumWA = canCreate ? data.pengajuan.filter(function(h){ return !waSudah(h.id) && (h.items || []).some(function(i){ return ['DIAJUKAN', 'REVISI', 'DISETUJUI'].indexOf(i.status) >= 0; }); }) : [];
   const kosong = mode === 'hari' ? 'Belum ada pengajuan dengan hari H ' + fmtDDMMYYYY(hariIni) + '.'
     : mode === 'aktif' ? 'Belum ada pengajuan di periode aktif.'
     : !per ? 'Pilih periode yang sudah ditutup untuk melihat pengajuannya.' : 'Tidak ada pengajuan di periode ini.';
@@ -4421,7 +4440,7 @@ function PengajuanPage({ session, scope, dapurList, toast }) {
       <PengajuanForm key={formKey} kategoriMap={kategoriMap} penerima={penerima} upsertPenerima={upsertPenerima} toast={toast} dapurOptions={dapurOptions}
         periodeRange={data.periodeRange || {}} ownDapur={session.user.dapur}
         onCreated={function(d){ setFormKey(function(k){ return k + 1; }); setTab('daftar'); setBaru(d ? d.nomor : null); load();
-          if (d) setWaText(buildWAPesan({ nomor: d.nomor, tanggal: d.tanggal, dapurNama: dapurMap[d.dapur || session.user.dapur] || '', oleh: session.user.nama, items: d.items, catatan: d.catatan })); }}
+          if (d) setWaText({ text: buildWAPesan({ nomor: d.nomor, tanggal: d.tanggal, dapurNama: dapurMap[d.dapur || session.user.dapur] || '', oleh: session.user.nama, items: d.items, catatan: d.catatan }), ids: [d.id] }); }}
         onCancel={function(){ setFormKey(function(k){ return k + 1; }); setTab('daftar'); }}/>
     </div>}
 
@@ -4435,6 +4454,10 @@ function PengajuanPage({ session, scope, dapurList, toast }) {
       <ModePeriodeBar modes={MODE_PERIODE} mode={mode} setMode={setMode} periodes={periodesTutup} per={per} setPer={setPer} multi={multiDapur} dapurMap={dapurMap}
         counts={{ hari: data.pengajuan.filter(function(h){ return h.tanggal === hariIni; }).length, aktif: data.pengajuan.length }}/>
     </Card>
+    {tab === 'daftar' && belumWA.length > 0 && <Card className="mb-3"><div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+      <div className="text-sm" style={{ color: '#9A6A0B' }}>📲 <b>{belumWA.length} pengajuan</b> di periode aktif belum disalin ke grup WA: {belumWA.slice(0, 4).map(function(h){ return h.nomor.split('/').pop() + ' (' + fmtDDMMYYYY(h.tanggal) + ')'; }).join(', ')}{belumWA.length > 4 ? ', …' : ''}</div>
+      <Btn size="sm" kind="ghost" onClick={function(){ setWaText({ text: belumWA.map(function(h){ return waPengajuan(h, dapurMap[h.dapur]); }).join('\n\n— — —\n\n'), ids: belumWA.map(function(h){ return h.id; }) }); }}>Salin semua ({belumWA.length})</Btn>
+    </div></Card>}
     {mode === 'hari' && perluTindakan.length > 0 && <Card className="mb-3"><div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
       <div className="text-sm" style={{ color: COLORS.ink }}><b style={{ color: COLORS.amber }}>{perluTindakan.length} pengajuan</b> dari hari lain di periode aktif masih menunggu keputusan / perlu revisi.</div>
       <Btn size="sm" kind="ghost" onClick={function(){ setMode('aktif'); }}>Lihat di Periode aktif</Btn>
@@ -4467,10 +4490,10 @@ function PengajuanPage({ session, scope, dapurList, toast }) {
           <div className="sm:text-right shrink-0">
             <StatusBadge status={h.status}/>
             <div className="text-xs mt-1 num" style={{ color: COLORS.muted }}>Diajukan {fmt(h.total_diajukan)} · <span style={{ color: COLORS.green }}>Disetujui {fmt(h.total_disetujui)}</span></div>
-            {canCreate && mode !== 'lalu' && h.items.some(function(i){ return i.status === 'DIAJUKAN'; }) && <div className="mt-1.5">
-              <button onClick={function(){ setWaText(buildWAPesan({ nomor: h.nomor, tanggal: h.tanggal, dapurNama: dapurMap[h.dapur] || '', oleh: h.created_by_nama,
-                items: h.items.filter(function(i){ return i.status === 'DIAJUKAN'; }) })); }}
-                className="text-[11px] font-semibold rounded px-2 py-1" style={{ color: COLORS.green, border: '1px solid ' + COLORS.line }}>Salin pesan WA</button></div>}
+            {canCreate && mode !== 'lalu' && h.items.some(function(i){ return ['DIAJUKAN', 'REVISI', 'DISETUJUI'].indexOf(i.status) >= 0; }) && <div className="mt-1.5 flex sm:justify-end items-center gap-1.5 flex-wrap">
+              {!waSudah(h.id) && <MiniBadge bg="#FBF3E3" fg="#9A6A0B">Belum disalin ke WA</MiniBadge>}
+              <button onClick={function(){ setWaText({ text: waPengajuan(h, dapurMap[h.dapur]), ids: [h.id] }); }}
+                className="text-[11px] font-semibold rounded px-2 py-1" style={{ color: COLORS.green, border: '1px solid ' + COLORS.line }}>{waSudah(h.id) ? 'Salin lagi pesan WA' : 'Salin pesan WA'}</button></div>}
           </div>
         </div>
         {h.items.map(function(it){
@@ -4496,7 +4519,7 @@ function PengajuanPage({ session, scope, dapurList, toast }) {
     {editItem && <ItemEditModal item={editItem} kategoriMap={kategoriMap} penerima={penerima} upsertPenerima={upsertPenerima}
       toast={toast} onClose={function(){ setEditItem(null); }} onSaved={load}/>}
     {batalItem && <BatalModal item={batalItem} toast={toast} onClose={function(){ setBatalItem(null); }} onSaved={load}/>}
-    {waText && <WAModal text={waText} toast={toast} onClose={function(){ setWaText(null); }}/>}
+    {waText && <WAModal text={waText.text} ids={waText.ids} toast={toast} onDisalin={function(){ setWaVer(function(v){ return v + 1; }); }} onClose={function(){ setWaText(null); }}/>}
   </div>;
 }
 
@@ -4602,6 +4625,16 @@ function LogoKopCard({ toast }) {
 }
 
 // ---------- Pesan WhatsApp untuk Yayasan ----------
+// Penanda "teks WA sudah disalin" per pengajuan (disimpan di perangkat ini)
+function waSudah(id) { try { return !!localStorage.getItem('waDisalin:' + id); } catch (e) { return false; } }
+function waTandai(ids) { (ids || []).forEach(function(id) { try { if (id) localStorage.setItem('waDisalin:' + id, String(Date.now())); } catch (e) {} }); }
+// Teks WA satu pengajuan dari daftar baris (menunggu / revisi / disetujui; yang batal & sudah direalisasi tidak ikut)
+function waPengajuan(h, dapurNama) {
+  const aktif = (h.items || []).filter(function(i) { return ['DIAJUKAN', 'REVISI', 'DISETUJUI'].indexOf(i.status) >= 0; });
+  const cat = aktif.map(function(i) { const c = String(i.catatan || ''), k = c.indexOf('Catatan akuntan: '); return k < 0 ? '' : c.substring(k + 17); }).filter(Boolean)[0] || '';
+  return buildWAPesan({ nomor: h.nomor, tanggal: h.tanggal, dapurNama: dapurNama || '', oleh: h.created_by_nama, items: aktif, catatan: cat,
+    disetujui: aktif.length > 0 && aktif.every(function(i) { return i.status === 'DISETUJUI'; }) });
+}
 function buildWAPesan(d) {
   const tg = tglPanjang(d.tanggal);
   const sppg = d.dapurNama ? (/^SPPG\b/i.test(d.dapurNama) ? d.dapurNama : 'SPPG ' + d.dapurNama) : 'SPPG';
@@ -4609,12 +4642,12 @@ function buildWAPesan(d) {
   const total = items.reduce(function(s, i){ return s + Number(i.nominal || 0); }, 0);
   const lines = [
     'Assalamu\'alaikum, Yayasan.',
-    'Berikut pengajuan anggaran *' + sppg + '* untuk hari *' + tg.hari + ', ' + tg.tgl + '*:',
+    'Berikut pengajuan anggaran *' + sppg + '*' + (d.disetujui ? ' yang *sudah disetujui*' : '') + ' untuk hari *' + tg.hari + ', ' + tg.tgl + '*:',
     'No: ' + d.nomor,
     '',
   ];
   items.forEach(function(it, k) {
-    lines.push((k + 1) + '. ' + it.uraian + ' (' + it.jenis + (it.susulan ? ', susulan' : '') + ')');
+    lines.push((k + 1) + '. ' + it.uraian + ' (' + it.jenis + (it.susulan ? ', susulan' : '') + ')' + (!d.disetujui && it.status === 'DISETUJUI' ? ' ✅ disetujui' : ''));
     lines.push('   Nominal: ' + fmt(it.nominal));
     lines.push('   Transfer ke: ' + it.penerima_nama + ' - ' + it.bank + ' ' + it.no_rek);
   });
@@ -4622,7 +4655,7 @@ function buildWAPesan(d) {
   lines.push('*Total: ' + fmt(total) + '* (' + items.length + ' baris)');
   if (d.catatan) { lines.push(''); lines.push('⚠️ *Catatan:* ' + d.catatan); }
   lines.push('');
-  lines.push('Mohon persetujuan dan transfernya melalui aplikasi Keuangan MBG. Terima kasih.');
+  lines.push(d.disetujui ? 'Mohon transfernya sesuai rincian di atas. Terima kasih.' : 'Mohon persetujuan dan transfernya melalui aplikasi Keuangan MBG. Terima kasih.');
   if (d.oleh) lines.push('- ' + d.oleh);
   return lines.join('\n');
 }
@@ -4633,16 +4666,17 @@ async function copyText(text) {
       document.body.appendChild(ta); ta.select(); const ok = document.execCommand('copy'); ta.remove(); return ok; } catch (e2) { return false; }
   }
 }
-function WAModal({ text, toast, onClose }) {
+function WAModal({ text, toast, onClose, ids, onDisalin }) {
   const [copied, setCopied] = useState(false);
-  async function salin() { const ok = await copyText(text); if (ok) { setCopied(true); toast('Pesan disalin'); } else toast('Gagal menyalin, salin manual dari kotak', 'error'); }
+  const tandai = function() { if (ids && ids.length) { waTandai(ids); onDisalin && onDisalin(); } };
+  async function salin() { const ok = await copyText(text); if (ok) { setCopied(true); tandai(); toast('Pesan disalin'); } else toast('Gagal menyalin, salin manual dari kotak', 'error'); }
   return <Modal title="Kabari Yayasan lewat WhatsApp" onClose={onClose}>
     <div className="text-xs mb-2" style={{ color: COLORS.muted }}>Salin pesan ini lalu kirim ke Yayasan, atau buka WhatsApp langsung.</div>
     <textarea readOnly value={text} rows={12} onFocus={function(e){ e.target.select(); }}
       style={Object.assign({}, inputStyle, { fontSize: 12.5, fontFamily: 'ui-monospace, monospace', lineHeight: 1.45, resize: 'vertical' })}/>
     <div className="flex flex-wrap gap-2 mt-3">
       <Btn onClick={salin}>{I.check} {copied ? 'Tersalin' : 'Salin pesan'}</Btn>
-      <a href={'https://wa.me/?text=' + encodeURIComponent(text)} target="_blank" rel="noopener"
+      <a href={'https://wa.me/?text=' + encodeURIComponent(text)} target="_blank" rel="noopener" onClick={tandai}
         className="inline-flex items-center justify-center gap-1.5 rounded-lg font-semibold px-4 py-2.5 text-sm"
         style={{ color: COLORS.green, border: '1px solid ' + COLORS.line }}>Buka WhatsApp</a>
       <Btn kind="ghost" onClick={onClose}>Tutup</Btn>
