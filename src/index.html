@@ -445,17 +445,23 @@ function PeriodeBadge(p) {
 }
 
 // ---------- Sinkron saldo antar periode ----------
-// Saldo akhir aktual (riil = uang yang benar-benar keluar) periode lalu dihitung ulang dari transaksinya,
-// jadi perubahan di periode tertutup yang disetujui admin otomatis terbaca sebagai selisih terhadap saldo awal periode berikutnya.
+// Saldo akhir periode lalu dihitung ulang dari transaksinya, jadi perubahan di periode tertutup yang disetujui admin
+// otomatis terbaca sebagai selisih terhadap saldo awal periode berikutnya.
+// Ada DUA hitungan: Realisasi Aktual (riil) dan menurut LPDH (Realisasi Anggaran bila diisi). Mana yang sama dengan
+// rekening koran tergantung kebiasaan SPPG (ada yang mentransfer nilai anggaran, ada yang nilai aktual) — bila keduanya
+// berbeda, saldo awal TIDAK diisi otomatis; akuntan memilih/mengisi sesuai rekening koran.
 function hitungSaldoAkhir(p, vaTopups, pettyTopups, tx) {
   const sum = function(a, f){ return a.reduce(function(s, x){ return s + (Number(f(x)) || 0); }, 0); };
   const va = vaTopups.filter(function(t){ return t.periode_id === p.id; });
   const pc = pettyTopups.filter(function(t){ return t.periode_id === p.id; });
   const keluarPetty = sum(tx.filter(function(t){ return t.sumber === 'Petty Cash'; }), function(t){ return t.riil; });
   const keluarVA = sum(tx.filter(function(t){ return t.sumber !== 'Petty Cash'; }), function(t){ return t.riil; });
+  const keluarLpdh = sum(tx.filter(function(t){ return t.sumber !== 'Petty Cash'; }), function(t){ return Number(t.unriil) > 0 ? t.unriil : t.riil; });
   const topupPetty = sum(pc, function(t){ return t.jumlah; });
+  const masukVA = Number(p.saldoVA || 0) + sum(va, function(t){ return t.jumlah; }) - topupPetty;
   return {
-    va: Number(p.saldoVA || 0) + sum(va, function(t){ return t.jumlah; }) - topupPetty - keluarVA,
+    va: masukVA - keluarVA,
+    vaLpdh: masukVA - keluarLpdh,
     petty: Number(p.saldoPettyAwal || 0) + topupPetty - keluarPetty,
   };
 }
@@ -475,8 +481,10 @@ async function fetchSaldoSync(session) {
   if (!tx.ok) return null;
   const akhir = hitungSaldoAkhir(prev, va.data, pc.data, tx.data);
   const awal = aktif ? { va: Number(aktif.saldoVA || 0), petty: Number(aktif.saldoPettyAwal || 0) } : null;
-  return { aktif: aktif, prev: prev, akhir: akhir, awal: awal,
-    selisihVA: awal ? awal.va - akhir.va : 0, selisihPetty: awal ? awal.petty - akhir.petty : 0 };
+  const beda = Math.abs(akhir.va - akhir.vaLpdh) >= 1;
+  const acuanVA = awal && beda && Math.abs(awal.va - akhir.vaLpdh) < Math.abs(awal.va - akhir.va) ? akhir.vaLpdh : akhir.va;
+  return { aktif: aktif, prev: prev, akhir: akhir, awal: awal, beda: beda,
+    selisihVA: awal ? awal.va - acuanVA : 0, selisihPetty: awal ? awal.petty - akhir.petty : 0 };
 }
 function syncKey(s) { return 'mbg_sync_ack:' + s.aktif.id + ':' + s.selisihVA + ':' + s.selisihPetty; }
 
@@ -489,16 +497,19 @@ function SaldoSyncCard({ sync, onSamakan }) {
     <div className="overflow-x-auto"><table className="w-full text-sm mt-1">
       <thead><tr className="text-xs text-right" style={{ color: COLORS.muted }}><th></th><th className="px-2 py-1 font-semibold">VA</th><th className="px-2 py-1 font-semibold">Petty Cash</th></tr></thead>
       <tbody>
-        <tr><td className="px-2 py-1.5" style={{ color: COLORS.muted }}>Saldo akhir Periode {sync.prev.periode_no}</td>{cell(sync.akhir.va)}{cell(sync.akhir.petty)}</tr>
+        <tr><td className="px-2 py-1.5" style={{ color: COLORS.muted }}>Saldo akhir Periode {sync.prev.periode_no}{sync.beda ? ' (Realisasi Aktual)' : ''}</td>{cell(sync.akhir.va)}{cell(sync.akhir.petty)}</tr>
+        {sync.beda && <tr><td className="px-2 py-1.5" style={{ color: COLORS.muted }}>Saldo akhir Periode {sync.prev.periode_no} (menurut LPDH)</td>{cell(sync.akhir.vaLpdh)}<td></td></tr>}
         <tr style={{ borderTop: '1px solid ' + COLORS.line }}><td className="px-2 py-1.5" style={{ color: COLORS.muted }}>Saldo awal Periode {sync.aktif.periode_no}</td>{cell(sync.awal.va)}{cell(sync.awal.petty)}</tr>
         <tr style={{ borderTop: '1px solid ' + COLORS.line }}><td className="px-2 py-1.5 font-semibold" style={{ color: COLORS.ink }}>Selisih</td>{cell(sync.selisihVA, sync.selisihVA !== 0)}{cell(sync.selisihPetty, sync.selisihPetty !== 0)}</tr>
       </tbody>
     </table></div>
+    {sync.beda && <div className="text-xs mt-2 rounded-lg p-2.5" style={{ background: '#FBF3E2', color: '#9A6A0B' }} aria-label="Dua saldo akhir">
+      Saldo akhir menurut <b>Realisasi Aktual</b> dan menurut <b>LPDH</b> (Realisasi Anggaran) berbeda {fmt(Math.abs(sync.akhir.va - sync.akhir.vaLpdh))}. Hanya satu yang sama dengan uang di rekening — <b>saldo awal harus sama dengan saldo rekening koran (mutasi) per {fmtDDMMYYYY(sync.prev.tanggal_akhir)}</b>, bukan dipilih dari hitungan aplikasi.</div>}
     {sama
-      ? <div className="text-xs mt-2 rounded-lg p-2.5" style={{ background: '#E8F1EC', color: COLORS.green }}>✓ Saldo awal periode ini nyambung dengan saldo akhir periode sebelumnya.</div>
+      ? <div className="text-xs mt-2 rounded-lg p-2.5" style={{ background: '#E8F1EC', color: COLORS.green }}>✓ Saldo awal periode ini nyambung dengan saldo akhir {sync.beda ? (sync.awal.va === sync.akhir.vaLpdh ? 'menurut LPDH' : 'Realisasi Aktual') + ' ' : ''}periode sebelumnya.</div>
       : <div className="text-xs mt-2 rounded-lg p-2.5" style={{ background: '#FBF3E2', color: '#9A6A0B' }}>
           Saldo awal tidak sama dengan saldo akhir periode lalu. Ini wajar bila ada <b>penambahan kas di pergantian periode</b>. Bila penyebabnya perubahan transaksi periode lalu (mis. edit yang baru disetujui admin), samakan saldo awal. Perubahan saldo awal wajib disertai alasan dan tercatat di log.
-          <div className="mt-2"><Btn size="sm" kind="amber" onClick={onSamakan}>Samakan dengan saldo akhir Periode {sync.prev.periode_no}</Btn></div>
+          <div className="mt-2"><Btn size="sm" kind="amber" onClick={onSamakan}>{sync.beda ? 'Ubah saldo awal' : 'Samakan dengan saldo akhir Periode ' + sync.prev.periode_no}</Btn></div>
         </div>}
   </Card>;
 }
@@ -530,7 +541,7 @@ function SaldoSyncBanner({ session, onGoSetup }) {
 function PeriodeForm({ initial, carry, prefill, onClose, onSaved, session, toast }) {
   const [f, setF] = useState(function() {
     const base = Object.assign({ alasan: '' }, initial || { tanggal_mulai: '', tanggal_akhir: '', penerima: '',
-      saldoVA: carry ? String(Math.max(0, carry.va)) : '', saldoPettyAwal: carry ? String(Math.max(0, carry.petty)) : '' }, prefill || {});
+      saldoVA: carry && !carry.beda ? String(Math.max(0, carry.va)) : '', saldoPettyAwal: carry ? String(Math.max(0, carry.petty)) : '' }, prefill || {});
     base.saldoVA = base.saldoVA === '' || base.saldoVA == null ? '' : String(Math.max(0, Number(base.saldoVA) || 0));
     base.saldoPettyAwal = base.saldoPettyAwal === '' || base.saldoPettyAwal == null ? '' : String(Math.max(0, Number(base.saldoPettyAwal) || 0));
     return base;
@@ -538,12 +549,14 @@ function PeriodeForm({ initial, carry, prefill, onClose, onSaved, session, toast
   const [saving, setSaving] = useState(false);
   const isEdit = !!initial && !!initial.id;
   const saldoBerubah = isEdit && (Number(f.saldoVA || 0) !== Number(initial.saldoVA || 0) || Number(f.saldoPettyAwal || 0) !== Number(initial.saldoPettyAwal || 0));
-  const bedaCarry = !isEdit && !!carry && (Number(f.saldoVA || 0) !== carry.va || Number(f.saldoPettyAwal || 0) !== carry.petty);
+  const vaCarry = function(v) { return v === carry.va || (carry.beda && v === carry.vaLpdh); };
+  const bedaCarry = !isEdit && !!carry && f.saldoVA !== '' && (!vaCarry(Number(f.saldoVA || 0)) || Number(f.saldoPettyAwal || 0) !== carry.petty);
   const perluAlasan = saldoBerubah || bedaCarry;
   function set(k, v) { setF(function(p){ const n = Object.assign({}, p); n[k] = v; return n; }); }
   async function submit() {
     if (!f.tanggal_mulai || !f.tanggal_akhir) { toast('Isi tanggal mulai & akhir', 'error'); return; }
     if (f.tanggal_mulai >= f.tanggal_akhir) { toast('Tanggal mulai harus sebelum tanggal akhir', 'error'); return; }
+    if (f.saldoVA === '' || f.saldoVA == null) { toast('Isi Saldo VA awal sesuai rekening koran', 'error'); return; }
     if (perluAlasan && !String(f.alasan || '').trim()) { toast('Isi alasan saldo awal', 'error'); return; }
     setSaving(true);
     const action = isEdit ? 'updatePeriode' : 'addPeriode';
@@ -561,7 +574,15 @@ function PeriodeForm({ initial, carry, prefill, onClose, onSaved, session, toast
       <Field label="Tanggal mulai"><input type="date" value={f.tanggal_mulai} onChange={function(e){set('tanggal_mulai', e.target.value);}} style={inputStyle}/></Field>
       <Field label="Tanggal akhir"><input type="date" value={f.tanggal_akhir} onChange={function(e){set('tanggal_akhir', e.target.value);}} style={inputStyle}/></Field>
       <Field label="Jumlah penerima manfaat" hint="porsi/hari"><input type="number" value={f.penerima} onChange={function(e){set('penerima', e.target.value);}} style={inputStyle} placeholder="0"/></Field>
-      {carry && <div className="mb-3 rounded-lg p-3 text-xs" style={{ background: COLORS.paper, color: COLORS.muted }}>
+      {carry && carry.beda && <div className="mb-3 rounded-lg p-3 text-xs" style={{ background: '#FBF3E2', color: '#7A5408' }} aria-label="Saldo akhir dua hitungan">
+        <b>Isi Saldo VA awal = saldo rekening koran (mutasi) per {fmtDDMMYYYY(carry.akhir)}.</b> Hitungan aplikasi untuk Periode {carry.no} ada dua karena sebagian transaksi nilai Realisasi Aktual-nya ≠ Realisasi Anggaran:
+        <div className="mt-1.5 space-y-1">
+          <div>• Realisasi Aktual: <b className="num" style={{ color: COLORS.ink }}>{fmt(carry.va)}</b> <button type="button" className="font-semibold ml-1" style={{ color: COLORS.blue }} onClick={function(){ set('saldoVA', String(Math.max(0, carry.va))); }}>Pakai</button></div>
+          <div>• Menurut LPDH (Anggaran): <b className="num" style={{ color: COLORS.ink }}>{fmt(carry.vaLpdh)}</b> <button type="button" className="font-semibold ml-1" style={{ color: COLORS.blue }} onClick={function(){ set('saldoVA', String(Math.max(0, carry.vaLpdh))); }}>Pakai</button></div>
+        </div>
+        <div className="mt-1.5">Pilih yang sama dengan rekening koran. Bila keduanya tidak sama dengan rekening koran, ketik saldo rekening koran dan isi alasannya.</div>
+      </div>}
+      {carry && !carry.beda && <div className="mb-3 rounded-lg p-3 text-xs" style={{ background: COLORS.paper, color: COLORS.muted }}>
         Saldo akhir Periode {carry.no}: VA <b className="num" style={{ color: COLORS.ink }}>{fmt(carry.va)}</b> · Petty <b className="num" style={{ color: COLORS.ink }}>{fmt(carry.petty)}</b>
         {isEdit
           ? <div className="mt-1.5"><button type="button" className="font-semibold" style={{ color: COLORS.blue }} onClick={function(){ set('saldoVA', String(Math.max(0, carry.va))); set('saldoPettyAwal', String(Math.max(0, carry.petty))); }}>Pakai saldo akhir ini</button></div>
@@ -571,7 +592,7 @@ function PeriodeForm({ initial, carry, prefill, onClose, onSaved, session, toast
       <Field label="Saldo Petty Cash awal" hint="Boleh 0. Petty Cash akan diisi via Top-up (diambil dari saldo VA)."><RupiahInput value={f.saldoPettyAwal} onChange={function(v){set('saldoPettyAwal', v);}}/></Field>
       {perluAlasan && <Field label={isEdit ? 'Alasan perubahan saldo awal *' : 'Alasan saldo awal berbeda dari saldo akhir periode lalu *'}
         hint={isEdit ? 'VA: ' + fmt(initial.saldoVA) + ' → ' + fmt(Number(f.saldoVA || 0)) + ' · Petty: ' + fmt(initial.saldoPettyAwal) + ' → ' + fmt(Number(f.saldoPettyAwal || 0))
-          : carry ? 'Selisih VA ' + fmt(Number(f.saldoVA || 0) - carry.va) + ' · Petty ' + fmt(Number(f.saldoPettyAwal || 0) - carry.petty) : null}>
+          : carry ? 'Selisih VA ' + fmt(Number(f.saldoVA || 0) - (carry.beda && Math.abs(Number(f.saldoVA || 0) - carry.vaLpdh) < Math.abs(Number(f.saldoVA || 0) - carry.va) ? carry.vaLpdh : carry.va)) + ' · Petty ' + fmt(Number(f.saldoPettyAwal || 0) - carry.petty) : null}>
         <input value={f.alasan} onChange={function(e){set('alasan', e.target.value);}} style={inputStyle} placeholder="cth. penambahan kas dari yayasan 1 Nov, sesuai rekening koran"/></Field>}
       <div className="flex gap-2"><Btn kind="ghost" onClick={onClose}>Batal</Btn><Btn onClick={submit} disabled={saving}>{saving ? I.spinner : I.check} Simpan</Btn></div>
     </Modal>
@@ -742,7 +763,7 @@ function SetupPeriode({ session, toast }) {
   const closed = list.filter(p => p.status !== 'AKTIF').sort((a,b)=>b.periode_no-a.periode_no);
   const aktifVATopups = periode ? vaTopups.filter(t => t.periode_id === periode.id) : [];
   const aktifPettyTopups = periode ? pettyTopups.filter(t => t.periode_id === periode.id) : [];
-  const carry = sync ? { va: sync.akhir.va, petty: sync.akhir.petty, no: sync.prev.periode_no } : null;
+  const carry = sync ? { va: sync.akhir.va, vaLpdh: sync.akhir.vaLpdh, beda: sync.beda, petty: sync.akhir.petty, no: sync.prev.periode_no, akhir: sync.prev.tanggal_akhir } : null;
   function openEdit(pre) {
     setEditPeriode({ id: periode.id, periode_no: periode.periode_no,
       tanggal_mulai: periode.tanggal_mulai, tanggal_akhir: periode.tanggal_akhir,
@@ -807,7 +828,7 @@ function SetupPeriode({ session, toast }) {
       )}
 
       {periode && session.user.role === 'akuntan' && <SaldoSyncCard sync={sync} onSamakan={function(){
-        openEdit({ saldoVA: Math.max(0, sync.akhir.va), saldoPettyAwal: Math.max(0, sync.akhir.petty) }); }}/>}
+        openEdit(sync.beda ? { saldoPettyAwal: Math.max(0, sync.akhir.petty) } : { saldoVA: Math.max(0, sync.akhir.va), saldoPettyAwal: Math.max(0, sync.akhir.petty) }); }}/>}
 
       {closed.length > 0 && (
         <Card className="mb-3">

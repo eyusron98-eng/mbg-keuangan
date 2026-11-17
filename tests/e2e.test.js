@@ -1031,6 +1031,56 @@ async function isiBahanBaku(page, uraian, volume, harga) {
     await page.waitForSelector('text=Alasan saldo awal berbeda dari saldo akhir periode lalu *');
   });
 
+  all &= await run('Periode baru: Realisasi Aktual ≠ LPDH → saldo awal tidak diisi otomatis, pilih sesuai rekening koran', { role: 'akuntan',
+    override: (a, m, p) => a === 'getActivePeriode' ? { ok: true, data: null } : a === 'getPeriodeList' ? { ok: true, data: [P1, Object.assign({}, P2, { status: 'DITUTUP' })] }
+      : a === 'getTransaksi' && p.periode_id === 'P2' ? { ok: true, data: [{ id: 'tA', sumber: 'VA', riil: 1000000, unriil: 1300000, tanggal: '2026-10-05', jenis: 'Operasional', kategori: 'ATK', uraian: 'ATK', no_bukti: 'A1' },
+          { id: 'tB', sumber: 'VA', riil: 500000, unriil: 500000, tanggal: '2026-10-06', jenis: 'Bahan Baku', kategori: 'Beras', uraian: 'Beras', no_bukti: 'B1' }] }
+      : a === 'addPeriode' ? (globalThis.__addP = p, { ok: true, data: { id: 'P3', periode_no: 3 } }) : null }, async (page, srv) => {
+    await login(page, 'siti');
+    await page.waitForSelector('header');
+    await page.click('nav:visible >> text=Setup');
+    await page.waitForSelector('text=Belum ada periode aktif');
+    await page.waitForTimeout(800);
+    await page.click('text=Buat Periode Baru');
+    await page.waitForSelector('[aria-label="Saldo akhir dua hitungan"]');
+    const box = await page.innerText('[aria-label="Saldo akhir dua hitungan"]');
+    assert(/rekening koran \(mutasi\) per 31-10-2026/.test(box) && box.includes('Rp 5.500.000') && box.includes('Rp 5.200.000'), 'dua hitungan salah: ' + box);
+    let vals = await page.$$eval('.sheet input[inputmode=numeric]', els => els.map(e => e.value));
+    assert(vals[0] === '', 'saldo VA awal tidak boleh terisi otomatis bila dua hitungan berbeda, dapat: ' + vals.join(','));
+    await page.fill('.sheet input[type=date] >> nth=0', '2026-11-02');
+    await page.fill('.sheet input[type=date] >> nth=1', '2026-11-13');
+    await page.click('.sheet button:has-text("Simpan")');
+    await page.waitForSelector('text=Isi Saldo VA awal sesuai rekening koran');
+    assert(!globalThis.__addP, 'tidak boleh tersimpan tanpa saldo awal');
+    await page.click('[aria-label="Saldo akhir dua hitungan"] button >> nth=1');   // Pakai: menurut LPDH
+    vals = await page.$$eval('.sheet input[inputmode=numeric]', els => els.map(e => e.value));
+    assert(vals[0] === '5.200.000', 'Pakai LPDH harus mengisi 5.200.000, dapat: ' + vals.join(','));
+    assert(!(await page.innerText('.sheet')).includes('Alasan saldo awal berbeda'), 'memilih salah satu hitungan tidak perlu alasan');
+    await page.fill('.sheet input[inputmode=numeric] >> nth=0', '5250000');
+    await page.waitForSelector('text=Alasan saldo awal berbeda dari saldo akhir periode lalu *');
+    await page.waitForSelector('text=Selisih VA Rp 50.000');
+    await page.fill('.sheet input[placeholder^="cth. penambahan kas"]', 'Sesuai rekening koran 31 Okt');
+    await page.click('.sheet button:has-text("Simpan")');
+    await page.waitForSelector('text=Periode dibuat');
+    assert(globalThis.__addP && Number(globalThis.__addP.saldoVA) === 5250000, 'saldo awal terkirim salah: ' + JSON.stringify(globalThis.__addP));
+    globalThis.__addP = null;
+  });
+
+  all &= await run('Setup: kartu sinkron menampilkan saldo akhir Aktual & LPDH bila berbeda', { role: 'akuntan',
+    override: (a, m, p) => a === 'getTransaksi' && p.periode_id === 'P1' ? { ok: true, data: [{ id: 't1', sumber: 'VA', riil: 3000000, unriil: 3500000, tanggal: '2026-09-12', jenis: 'Operasional', kategori: 'ATK', uraian: 'x', no_bukti: 'N1' }] } : null }, async (page) => {
+    await login(page, 'siti');
+    await page.waitForSelector('header');
+    await page.click('nav:visible >> text=Setup');
+    await page.waitForSelector('[aria-label="Dua saldo akhir"]');
+    const txt = await page.innerText('body');
+    assert(txt.includes('Saldo akhir Periode 1 (Realisasi Aktual)') && txt.includes('Rp 8.000.000') && txt.includes('Saldo akhir Periode 1 (menurut LPDH)') && txt.includes('Rp 7.500.000'), 'dua baris saldo akhir tidak tampil');
+    assert(/Selisih[\s\S]*Rp -500.000/.test(txt), 'selisih harus terhadap hitungan terdekat (LPDH 7,5 jt): ' + txt.slice(txt.indexOf('Selisih'), txt.indexOf('Selisih') + 60));
+    await page.click('button:has-text("Ubah saldo awal")');
+    await page.waitForSelector('[aria-label="Saldo akhir dua hitungan"]');
+    const vals = await page.$$eval('.sheet input[inputmode=numeric]', els => els.map(e => e.value));
+    assert(vals[0] === '7.000.000', 'edit tetap memakai saldo awal sekarang (tidak menebak), dapat: ' + vals.join(','));
+  });
+
   for (const role of ['pic', 'admin', 'yayasan']) {
     all &= await run('Persetujuan: ' + role + ' melihat menu & bisa memutuskan', { role, existing: true, tanggal: '2026-10-15',
       override: (a) => a === 'decidePengajuan' ? { ok: true, data: { totalSetuju: 600000 } } : null }, async (page, srv) => {
