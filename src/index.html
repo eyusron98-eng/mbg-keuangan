@@ -34,6 +34,15 @@
     margin: 14px -16px -16px; padding: 12px 16px; border-top: 1px solid #E3E0D6; border-radius: 0 0 16px 16px; box-shadow: 0 -8px 14px rgba(23,42,31,0.07); }
   @media (min-width: 640px) { .sticky-bar { margin: 14px -20px -20px; padding: 12px 20px; } }
   @media (min-width: 768px) { .sticky-bar { bottom: 0; } }
+  /* iOS: setelah keyboard ditutup (atau toolbar browser berubah) area layar yang terlihat kadang tertinggal bergeser dari
+     viewport tata letak → navigasi bawah "naik" ke tengah & header hilang ke atas. Skrip vvKoreksi mengukur selisihnya
+     dan memasang kelas vv-geser + variabel --vv-atas/--vv-bawah; tanpa kelas itu aturan di bawah tidak berlaku. */
+  .vv-geser header.vv-atas { top: var(--vv-atas, 0px) !important; }
+  .vv-geser .vv-bawah { bottom: calc(0px - var(--vv-bawah, 0px)) !important; }
+  .vv-geser .vv-layar { top: var(--vv-atas, 0px) !important; bottom: calc(0px - var(--vv-bawah, 0px)) !important; }
+  .vv-geser .vv-toast { margin-top: var(--vv-atas, 0px); }
+  .vv-geser .sticky-bar { bottom: calc(env(safe-area-inset-bottom, 0px) + 66px - var(--vv-bawah, 0px)); }
+  @media (min-width: 768px) { .vv-geser .sticky-bar { bottom: calc(0px - var(--vv-bawah, 0px)); } }
   /* 16px mencegah iOS memperbesar layar sendiri saat mengetik */
   @media (max-width: 640px) {
     input:not([type=checkbox]):not([type=file]), select, textarea { font-size: 16px !important; }
@@ -358,13 +367,13 @@ const inputStyle = { width: '100%', minHeight: 44, border: '1px solid ' + COLORS
 function Toast(p) {
   // timer dimulai ulang tiap pesan baru; pesan panjang diberi waktu baca lebih lama
   useEffect(function() { const t = setTimeout(p.onClose, Math.max(3500, String(p.msg || '').length * 60)); return function() { clearTimeout(t); }; }, [p.msg]);
-  return <div className="sheet fixed left-1/2 -translate-x-1/2 z-[60] rounded-xl px-4 py-3 text-sm font-medium shadow-lg"
+  return <div className="sheet vv-toast fixed left-1/2 -translate-x-1/2 z-[60] rounded-xl px-4 py-3 text-sm font-medium shadow-lg"
     style={{ top: 'calc(env(safe-area-inset-top, 0px) + 16px)', background: p.type === 'error' ? COLORS.danger : COLORS.deep, color: '#fff', maxWidth: 'min(92vw, 420px)', lineHeight: 1.45 }}>{p.msg}</div>;
 }
 function Modal(p) {
   const maxW = p.size === 'lg' ? 'sm:max-w-2xl' : 'sm:max-w-md';
   // HP: muncul sebagai lembar dari bawah (mudah dijangkau jempol); layar lebar: di tengah
-  return <div className="fixed inset-0 z-40 flex items-end sm:items-center justify-center sm:p-4 no-print" style={{ background: 'rgba(0,0,0,0.5)' }} onClick={p.onClose}>
+  return <div className="vv-layar fixed inset-0 z-40 flex items-end sm:items-center justify-center sm:p-4 no-print" style={{ background: 'rgba(0,0,0,0.5)' }} onClick={p.onClose}>
     <div className={'sheet w-full ' + maxW + ' max-h-[92vh] overflow-y-auto rounded-t-2xl sm:rounded-2xl'}
       style={{ background: COLORS.surface, border: '1px solid ' + COLORS.line, padding: 20, paddingBottom: 'calc(env(safe-area-inset-bottom, 0px) + 20px)' }}
       onClick={function(e){e.stopPropagation();}}>
@@ -6540,7 +6549,7 @@ function App() {
 
   return (
     <div className="min-h-screen flex flex-col" style={{ background: COLORS.paper, color: COLORS.ink }}>
-      <header className="sticky top-0 z-30 flex items-center justify-between gap-2 px-3 sm:px-6 py-3 no-print"
+      <header className="vv-atas sticky top-0 z-30 flex items-center justify-between gap-2 px-3 sm:px-6 py-3 no-print"
         style={{ background: COLORS.surface, borderBottom: '1px solid ' + COLORS.line, paddingTop: 'calc(env(safe-area-inset-top, 0px) + 12px)' }}>
         <div className="flex items-center gap-2 min-w-0">
           <div className="rounded-lg flex items-center justify-center shrink-0" style={{ width: 32, height: 32, background: COLORS.green, color: '#fff' }}>{I.wallet}</div>
@@ -6611,7 +6620,7 @@ function App() {
         </main>
       </div>
 
-      <nav className="md:hidden fixed bottom-0 left-0 right-0 flex no-print"
+      <nav id="nav-bawah" className="vv-bawah md:hidden fixed bottom-0 left-0 right-0 z-30 flex no-print"
         style={{ background: COLORS.surface, borderTop: '1px solid ' + COLORS.line, paddingBottom: 'env(safe-area-inset-bottom, 0px)', overflowX: 'auto', overflowY: 'hidden', WebkitOverflowScrolling: 'touch' }}>
         <div className="flex" style={{ width: navItems.length > 5 ? 'max-content' : '100%', minWidth: '100%' }}>
           {navItems.map(function(item){
@@ -6632,6 +6641,45 @@ function App() {
     </div>
   );
 }
+
+// Koreksi geser viewport iOS (lihat CSS .vv-geser). Hanya pada zoom 1× dan saat tidak sedang mengetik (keyboard tertutup).
+function vvHitung(vv, navRect, geserNav, mengetik) {
+  if (!vv || mengetik || Math.abs((vv.scale || 1) - 1) > 0.01) return { atas: 0, bawah: 0 };
+  const atas = Math.max(0, Math.round(vv.offsetTop || 0));
+  // bawah = jarak antara tepi bawah area terlihat dan tepi bawah navigasi (tanpa koreksi yang sedang terpasang)
+  const bawah = navRect && navRect.height > 0 ? Math.max(0, Math.round((vv.offsetTop || 0) + vv.height - (navRect.bottom - geserNav))) : 0;
+  return { atas: atas > 1 ? atas : 0, bawah: bawah > 1 ? bawah : 0 };
+}
+(function vvKoreksi() {
+  let jadwal = 0, nilai = { atas: 0, bawah: 0 };
+  const el = document.documentElement;
+  function mengetik() {
+    const a = document.activeElement;
+    if (!a) return false;
+    if (a.isContentEditable || a.tagName === 'TEXTAREA' || a.tagName === 'SELECT') return true;
+    return a.tagName === 'INPUT' && !/^(checkbox|radio|button|submit|reset|file|range|color)$/i.test(a.type || '');
+  }
+  function atur() {
+    jadwal = 0;
+    const nav = document.getElementById('nav-bawah');
+    const n = vvHitung(window.visualViewport, nav ? nav.getBoundingClientRect() : null, nilai.bawah, mengetik());
+    if (n.atas === nilai.atas && n.bawah === nilai.bawah) return;
+    nilai = n;
+    el.style.setProperty('--vv-atas', n.atas + 'px');
+    el.style.setProperty('--vv-bawah', n.bawah + 'px');
+    el.classList.toggle('vv-geser', n.atas > 0 || n.bawah > 0);
+  }
+  function minta() { if (!jadwal) jadwal = requestAnimationFrame(atur); }
+  function nanti() { minta(); setTimeout(minta, 120); setTimeout(minta, 400); setTimeout(minta, 900); }   // tunggu animasi keyboard selesai
+  if (window.visualViewport) { window.visualViewport.addEventListener('resize', minta); window.visualViewport.addEventListener('scroll', minta); }
+  window.addEventListener('scroll', minta, { passive: true });
+  window.addEventListener('resize', minta);
+  window.addEventListener('orientationchange', nanti);
+  document.addEventListener('focusout', nanti);
+  document.addEventListener('focusin', minta);
+  document.addEventListener('visibilitychange', nanti);
+  window.__vvAtur = minta;
+})();
 
 ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
 setTimeout(function() {
