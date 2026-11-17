@@ -812,6 +812,43 @@ async function isiBahanBaku(page, uraian, volume, harga) {
     await page.waitForSelector('text=belum ada TTD: Perwakilan Mitra/Yayasan');
   });
 
+  all &= await run('HP (iOS): navigasi bawah & header menempel ke area terlihat saat viewport bergeser', { role: 'admin' }, async (page) => {
+    await login(page, 'siti');
+    await page.waitForSelector('header');
+    const ukur = () => page.evaluate(() => ({ geser: document.documentElement.classList.contains('vv-geser'),
+      navBawah: Math.round(document.getElementById('nav-bawah').getBoundingClientRect().bottom), headAtas: Math.round(document.querySelector('header').getBoundingClientRect().top) }));
+    const pasang = (vv) => page.evaluate(async (vv) => { window.visualViewport = Object.assign({ scale: 1, addEventListener() {} }, vv); window.__vvAtur();
+      await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r))); }, vv);
+    let u = await ukur();
+    assert(!u.geser && u.navBawah === 900 && u.headAtas === 0, 'kondisi normal salah: ' + JSON.stringify(u));
+    // bug iOS: area terlihat tertinggal 165px di bawah viewport tata letak (keyboard sudah tertutup)
+    await pasang({ offsetTop: 165, height: 900 });
+    u = await ukur();
+    assert(u.geser && u.navBawah === 1065 && u.headAtas === 165, 'koreksi geser salah: ' + JSON.stringify(u));
+    await page.evaluate(() => window.__vvAtur());   // ukur ulang saat koreksi terpasang → tetap stabil
+    await page.waitForTimeout(50);
+    u = await ukur();
+    assert(u.navBawah === 1065, 'koreksi tidak stabil: ' + JSON.stringify(u));
+    // toolbar browser mengecil tapi posisi fixed tertinggal: hanya navigasi bawah yang turun
+    await pasang({ offsetTop: 0, height: 1000 });
+    u = await ukur();
+    assert(u.geser && u.navBawah === 1000 && u.headAtas === 0, 'koreksi toolbar salah: ' + JSON.stringify(u));
+    // kembali normal → kelas dilepas
+    await pasang({ offsetTop: 0, height: 900 });
+    u = await ukur();
+    assert(!u.geser && u.navBawah === 900, 'koreksi tidak dilepas: ' + JSON.stringify(u));
+    // sedang mengetik (keyboard terbuka) → jangan geser apa pun
+    await page.evaluate(() => { const i = document.createElement('input'); i.id = 'uji-ketik'; document.querySelector('main').prepend(i); i.focus(); });
+    await pasang({ offsetTop: 165, height: 600 });
+    u = await ukur();
+    assert(!u.geser, 'saat mengetik tidak boleh digeser: ' + JSON.stringify(u));
+    // zoom (cubit) → jangan geser
+    await page.evaluate(() => { document.getElementById('uji-ketik').remove(); document.activeElement && document.activeElement.blur && document.activeElement.blur(); });
+    await pasang({ offsetTop: 165, height: 450, scale: 2 });
+    u = await ukur();
+    assert(!u.geser, 'saat zoom tidak boleh digeser: ' + JSON.stringify(u));
+  });
+
   all &= await run('Realisasi Massal (admin): unggah mutasi, simulasi, konfirmasi jumlah, eksekusi', { role: 'admin',
     override: (a, m, p) => a === 'realisasiMassal' ? (p.eksekusi ? (globalThis.__rm = p, { ok: true, data: { simulasi: false, dibuat: 204, ditautkanUlang: 0, nominal: 399884755, perPeriode: [], saldo: [{ periode_no: 9, saldo_sekarang: 563283290, saldo_sesudah: 261035035 }] } })
         : (globalThis.__rmSim = p, { ok: true, data: { simulasi: true, jumlah: 204, nominal: 399884755, sudahTertaut: 0, dilewati: 0, alasanLewat: [], bankVA: 'BNI', admin: 546000, nAdmin: 84,
