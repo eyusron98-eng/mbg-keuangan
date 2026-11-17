@@ -4259,7 +4259,7 @@ async function unggahNota(file, tanggal, uraian) {
   if (!up.ok) throw new Error('Gagal unggah nota: ' + up.error);
   return up.data.url;
 }
-function ItemFields({ row, onChange, kategoriMap, penerima, upsertPenerima, toast }) {
+function ItemFields({ row, onChange, kategoriMap, penerima, upsertPenerima, toast, bankVA }) {
   const isBB = row.jenis === 'Bahan Baku';
   function set(k, v) {
     const n = Object.assign({}, row, { [k]: v });
@@ -4293,6 +4293,8 @@ function ItemFields({ row, onChange, kategoriMap, penerima, upsertPenerima, toas
       <Field label="Ditransfer ke *" hint="Bank & nomor rekening terisi otomatis dari daftar penerima">
         <PenerimaSelect list={penerima} value={row.penerima_id} onChange={function(v){ set('penerima_id', v); }} onListChange={upsertPenerima} toast={toast}/>
       </Field>
+      {row.penerima_id && bankVA !== undefined && bankVA !== null && (function() { const pn = (penerima || []).find(function(x) { return x.id === row.penerima_id; }); const rk = rekomAdmin(pn && pn.bank, bankVA);
+        return rk.teks ? <div className="text-xs -mt-3 mb-3" style={{ color: rk.fee ? '#9A6A0B' : COLORS.green }} aria-label="Biaya admin baris">{rk.teks}{rk.fee ? ' (dicatat saat realisasi)' : ''}</div> : null; })()}
     </div>
     <label className="sm:col-span-2 flex items-start gap-2 text-sm mb-2 cursor-pointer" style={{ color: COLORS.ink }}>
       <input type="checkbox" checked={!!row.susulan} onChange={function(e){ set('susulan', e.target.checked); }} style={{ marginTop: 3 }}/>
@@ -4330,6 +4332,8 @@ function PengajuanForm({ kategoriMap, penerima, upsertPenerima, toast, onCreated
   const lockRef = useRef(false);   // kunci sinkron: klik ganda / ketuk ulang tidak bisa lolos sebelum render ulang
   const reqId = useRef('rq-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 10));   // satu ID per form; dikirim agar backend bisa menolak kiriman ulang
   const total = rows.reduce(function(s, r){ return s + (Number(r.nominal) || 0); }, 0);
+  const bankVA = useBankVA(needDapur ? dapur : '');   // bank VA dapur → rekomendasi biaya admin per baris
+  const adminRekom = bankVA ? rows.reduce(function(s, r) { const pn = (penerima || []).find(function(x) { return x.id === r.penerima_id; }); const k = pn ? rekomAdmin(pn.bank, bankVA) : null; return s + (k && k.fee ? k.fee : 0); }, 0) : 0;
   const firstErr = rows.map(rowError).findIndex(function(e){ return !!e; });
   // Pagu operasional harian (LPDH: Rp 3.000 × PM × indeks): peringatan sebelum mengirim
   const adaOps = rows.some(function(r) { return r.jenis === 'Operasional'; });
@@ -4405,7 +4409,7 @@ function PengajuanForm({ kategoriMap, penerima, upsertPenerima, toast, onCreated
           {rows.length > 1 && <button onClick={function(){ setRows(rows.filter(function(_, j){ return j !== i; })); }}
             className="text-xs inline-flex items-center gap-1" style={{ color: COLORS.danger }}>{I.trash} Hapus baris</button>}
         </div>
-        <ItemFields row={r} onChange={function(n){ update(i, n); }} kategoriMap={kategoriMap} penerima={penerima} upsertPenerima={upsertPenerima} toast={toast}/>
+        <ItemFields row={r} onChange={function(n){ update(i, n); }} kategoriMap={kategoriMap} penerima={penerima} upsertPenerima={upsertPenerima} toast={toast} bankVA={bankVA}/>
       </div>;
     })}
     <div>
@@ -4429,6 +4433,7 @@ function PengajuanForm({ kategoriMap, penerima, upsertPenerima, toast, onCreated
         <div>
           <div className="text-xs" style={{ color: COLORS.muted }}>Total {rows.length} baris</div>
           <div className="text-lg font-bold num leading-tight" style={{ color: COLORS.ink }}>{fmt(total)}</div>
+          {adminRekom > 0 && <div className="text-[11px]" style={{ color: '#9A6A0B' }} aria-label="Perkiraan biaya admin">+ biaya admin antarbank {fmt(adminRekom)} (VA {roKodeBank(bankVA)})</div>}
         </div>
         <div className="text-[11px] text-right" style={{ color: COLORS.amber }}>Belum terkirim sebelum<br/>tombol Kirim ditekan</div>
       </div>
@@ -5720,6 +5725,173 @@ function DataPenerimaForm({ awal, dapur, toast, onClose, onSaved, onHapus }) {
   </Modal>;
 }
 
+// <MUTASI> — pembaca mutasi rekening BNI (PDF "Mutasi Transaksi SPPG" Dashboard BGN). JS biasa agar bisa diuji di Node.
+const MUTASI_BULAN = { Jan: 1, Feb: 2, Mar: 3, Apr: 4, Mei: 5, May: 5, Jun: 6, Jul: 7, Agu: 8, Agt: 8, Aug: 8, Sep: 9, Okt: 10, Oct: 10, Nov: 11, Des: 12, Dec: 12 };
+// teks satu halaman PDF (item pdf.js: str, x, y, w, miring) → baris teks; celah lebar jadi spasi ganda (pemisah kolom)
+function mutasiBarisHalaman(items) {
+  const lurus = items.filter(function(it) { return !it.miring && String(it.str).trim() !== ''; });
+  const grup = [];
+  lurus.slice().sort(function(a, b) { return b.y - a.y || a.x - b.x; }).forEach(function(it) {
+    const g = grup.find(function(x) { return Math.abs(x.y - it.y) <= 2; });
+    if (g) g.isi.push(it); else grup.push({ y: it.y, isi: [it] });
+  });
+  return grup.sort(function(a, b) { return b.y - a.y; }).map(function(g) {
+    let s = '', ujung = null;
+    g.isi.sort(function(a, b) { return a.x - b.x; }).forEach(function(it) {
+      if (ujung !== null) { const cel = it.x - ujung; s += cel > 6 ? '    ' : cel > 0.8 ? ' ' : ''; }
+      s += it.str; ujung = it.x + (it.w || 0);
+    });
+    return s;
+  });
+}
+// kop & kaki halaman (diabaikan agar keterangan yang terpotong pindah halaman tetap tersambung)
+const MUTASI_KOP = /^NO\s+TANGGAL|Halaman \d+ dari \d+|Sudah Divalidasi|Dashboard Badan Gizi|MUTASI TRANSAKSI SPPG|Pada PT Bank|^Periode\s*:|^Nama Yayasan|^Nomor Rekening VA/i;
+const MUTASI_ROW = /^\s*(\d+)\s+(\d{2})-([A-Za-z]{3})-(\d{4})\s+(\d{2}:\d{2}:\d{2})\s+(\d+)\s+(.*?)\s{2,}([DCK])\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)(?:\s+(.*))?$/;
+function bacaMutasiBNI(lines) {
+  const rows = []; let cur = null;
+  const angka = function(s) { return Number(String(s).replace(/\./g, '')) || 0; };
+  lines.forEach(function(l) {
+    const m = String(l).match(MUTASI_ROW);
+    if (m && MUTASI_BULAN[m[3]]) {
+      cur = { no: Number(m[1]), tgl: m[4] + '-' + String(MUTASI_BULAN[m[3]]).padStart(2, '0') + '-' + m[2], jam: m[5], jurnal: m[6], desk: m[7].trim(), tipe: m[8] === 'D' ? 'D' : 'K',
+        awal: angka(m[9]), debet: angka(m[10]), kredit: angka(m[11]), akhir: angka(m[12]), lain: [] };
+      rows.push(cur); return;
+    }
+    const t = String(l).trim();
+    if (cur && t && (t.length > 12 || /\d{6,}/.test(t)) && !MUTASI_KOP.test(t)) cur.lain.push(t);
+  });
+  return rows;
+}
+// Ringkas: transfer keluar (dengan rekening tujuan & biaya admin dari nomor jurnal yang sama), dana masuk, saldo awal/akhir & kesinambungan
+function ringkasMutasi(rows) {
+  const fee = {}, debit = [], kredit = [];
+  rows.forEach(function(x) { if (x.tipe === 'D' && /^BY TRX/i.test(x.desk)) fee[x.tgl + '|' + x.jurnal] = (fee[x.tgl + '|' + x.jurnal] || 0) + x.debet; });
+  rows.forEach(function(x) {
+    if (x.tipe === 'K') { kredit.push({ tgl: x.tgl, nom: x.kredit, ket: x.desk }); return; }
+    if (/^BY TRX/i.test(x.desk)) return;
+    const t = [x.desk].concat(x.lain).join(' ');
+    const m = t.match(/PEMINDAHAN KE\s+(\d{6,})/) || t.match(/\|\s*0*(\d{6,})\s*\|/);
+    const ket = t.replace(/\s+/g, ' ').replace(/^TRANSFER KE\s*\|?\s*\|?/, '').slice(0, 120);
+    debit.push({ tgl: x.tgl, nom: x.debet, rek: m ? m[1].replace(/^0+/, '') : '', fee: fee[x.tgl + '|' + x.jurnal] || 0, ref: x.jurnal, ket: ket });
+  });
+    const urut = rows.slice().sort(function(a, b) { return b.no - a.no; });   // laporan BNI: nomor besar = paling lama
+  let putus = 0; for (let i = 1; i < urut.length; i++) if (urut[i - 1].akhir !== urut[i].awal) putus++;
+  return { debit: debit, kredit: kredit, saldoAwal: urut.length ? urut[0].awal : 0, saldoAkhir: urut.length ? urut[urut.length - 1].akhir : 0,
+    dari: urut.length ? urut[0].tgl : '', sampai: urut.length ? urut[urut.length - 1].tgl : '', baris: rows.length, putus: putus };
+}
+// beberapa file mutasi digabung menurut tanggal; saldo antarfile harus bersambung
+function gabungMutasi(list) {
+  const a = list.slice().sort(function(x, y) { return x.dari.localeCompare(y.dari); });
+  let putus = a.reduce(function(n, x) { return n + x.putus; }, 0);
+  for (let i = 1; i < a.length; i++) if (a[i - 1].saldoAkhir !== a[i].saldoAwal) putus++;
+  return { debit: [].concat.apply([], a.map(function(x) { return x.debit; })), kredit: [].concat.apply([], a.map(function(x) { return x.kredit; })),
+    saldoAwal: a.length ? a[0].saldoAwal : 0, saldoAkhir: a.length ? a[a.length - 1].saldoAkhir : 0, dari: a.length ? a[0].dari : '', sampai: a.length ? a[a.length - 1].sampai : '',
+    baris: a.reduce(function(n, x) { return n + x.baris; }, 0), putus: putus };
+}
+// </MUTASI>
+
+const PDFJS_URL = 'https://unpkg.com/pdfjs-dist@3.11.174/legacy/build/pdf.min.js', PDFJS_WORKER = 'https://unpkg.com/pdfjs-dist@3.11.174/legacy/build/pdf.worker.min.js';
+// PDF mutasi → baris teks per halaman (pdf.js dimuat saat dibutuhkan)
+async function bacaPdfMutasi(file) {
+  await loadScriptOnce(PDFJS_URL);
+  const lib = window.pdfjsLib; lib.GlobalWorkerOptions.workerSrc = PDFJS_WORKER;
+  const doc = await lib.getDocument({ data: new Uint8Array(await file.arrayBuffer()) }).promise;
+  let lines = [];
+  for (let p = 1; p <= doc.numPages; p++) {
+    const tc = await (await doc.getPage(p)).getTextContent();
+    lines = lines.concat(mutasiBarisHalaman(tc.items.map(function(it) { return { str: it.str, x: it.transform[4], y: it.transform[5], w: it.width, miring: Math.abs(it.transform[1]) > 0.01 || Math.abs(it.transform[2]) > 0.01 }; })));
+  }
+  const rows = bacaMutasiBNI(lines);
+  if (!rows.length) throw new Error(file.name + ': tidak ada baris mutasi yang terbaca (format bukan Mutasi Transaksi SPPG BNI?)');
+  return ringkasMutasi(rows);
+}
+
+// ---------- Realisasi Massal (admin): baris DISETUJUI belum terealisasi → transaksi (tanggal & nominal sesuai pengajuan) ----------
+function MutasiDaftar({ judul, n, nilai, isi }) {
+  const [buka, setBuka] = useState(false);
+  if (!n) return null;
+  return <div className="text-xs mt-2 rounded-lg p-2" style={{ background: '#FBF3E2', color: '#7A5408' }}>
+    <button type="button" onClick={function() { setBuka(!buka); }} className="font-semibold text-left w-full">{buka ? '▾' : '▸'} {judul}: {n}{nilai ? ' · ' + fmt(nilai) : ''}</button>
+    {buka && <ul className="mt-1 space-y-0.5">{isi.map(function(t, i) { return <li key={i}>• {t}</li>; })}{n > isi.length && <li>… dan {n - isi.length} lainnya</li>}</ul>}
+  </div>;
+}
+function RealisasiMassalPage({ session, dapurList, toast }) {
+  const [dapur, setDapur] = useState('');
+  const [tutup, setTutup] = useState(false);
+  const [sim, setSim] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [konfirm, setKonfirm] = useState('');
+  const [hasil, setHasil] = useState(null);
+  const [mutasi, setMutasi] = useState(null);
+  const [baca, setBaca] = useState(false);
+  function reset() { setSim(null); setHasil(null); setKonfirm(''); }
+  async function unggahMutasi(e) {
+    const files = Array.from(e.target.files || []); e.target.value = '';
+    if (!files.length) return;
+    setBaca(true); reset();
+    try { const list = []; for (const f of files) list.push(await bacaPdfMutasi(f)); setMutasi(gabungMutasi(list)); }
+    catch (err) { setMutasi(null); toast('Gagal membaca mutasi: ' + err.message, 'error'); }
+    setBaca(false);
+  }
+  const kirimMutasi = mutasi ? { debit: mutasi.debit, saldoAwal: mutasi.saldoAwal, saldoAkhir: mutasi.saldoAkhir, dari: mutasi.dari, sampai: mutasi.sampai } : null;
+  async function simulasi() {
+    setBusy(true); setHasil(null); setKonfirm('');
+    const r = await apiPost('realisasiMassal', { dapur: dapur, sertakan_tutup: tutup, mutasi: kirimMutasi });
+    setBusy(false);
+    if (r.ok) setSim(r.data); else { setSim(null); toast(r.error, 'error'); }
+  }
+  async function jalankan() {
+    setBusy(true);
+    const r = await apiPost('realisasiMassal', { dapur: dapur, sertakan_tutup: tutup, eksekusi: true, jumlah_konfirmasi: Number(konfirm), mutasi: kirimMutasi });
+    setBusy(false);
+    if (r.ok) { setHasil(r.data); setSim(null); setKonfirm(''); toast(r.data.dibuat + ' transaksi dibuat'); } else toast(r.error, 'error');
+  }
+  const namaDapur = (dapurList.find(function(d) { return d.id === dapur; }) || {}).nama || '';
+  return <div>
+    <div className="mb-3"><Eyebrow>Realisasi Massal</Eyebrow>
+      <div className="text-xs" style={{ color: COLORS.muted }}>Hanya pengajuan DISETUJUI yang transfernya <b>ada di mutasi rekening</b> yang direalisasi (nominal sama, rekening tujuan sama, tanggal bank paling dekat). Tanggal transaksi = tanggal pengajuan, biaya admin = potongan nyata di mutasi, bukti dikosongkan (kecuali nota bahan baku). Selalu simulasi dulu.</div></div>
+    <Card className="mb-3">
+      <Field label="Dapur"><select value={dapur} onChange={function(e) { setDapur(e.target.value); reset(); }} style={inputStyle} aria-label="Dapur realisasi massal">
+        <option value="">Pilih dapur…</option>{dapurList.map(function(d) { return <option key={d.id} value={d.id}>{d.nama}</option>; })}</select></Field>
+      <Field label="Mutasi rekening VA (PDF Mutasi Transaksi SPPG — BNI, boleh beberapa file)" hint="Unduh dari Dashboard BGN untuk rentang tanggal pengajuan yang akan direalisasi.">
+        <input type="file" accept="application/pdf" multiple onChange={unggahMutasi} aria-label="File mutasi" className="text-sm"/>
+      </Field>
+      {baca && <div className="text-sm mb-3 flex items-center gap-2" style={{ color: COLORS.muted }}>{I.spinner} Membaca mutasi…</div>}
+      {mutasi && <div className="text-xs rounded-lg p-2.5 mb-3" style={{ background: mutasi.putus ? '#FBF3E2' : '#E8F1EC', color: mutasi.putus ? '#7A5408' : COLORS.deep }} aria-label="Ringkasan mutasi">
+        {mutasi.baris} baris mutasi · {fmtDDMMYYYY(mutasi.dari)} s.d. {fmtDDMMYYYY(mutasi.sampai)} · {mutasi.debit.length} transfer keluar · {mutasi.kredit.length} dana masuk ({fmt(mutasi.kredit.reduce(function(a, k) { return a + k.nom; }, 0))})<br/>
+        Saldo {fmt(mutasi.saldoAwal)} → {fmt(mutasi.saldoAkhir)}{mutasi.putus ? ' · ⚠️ saldo tidak bersambung di ' + mutasi.putus + ' tempat (ada halaman/file yang hilang?)' : ' · saldo bersambung ✓'}</div>}
+      <label className="flex items-center gap-2 mb-3 text-sm" style={{ color: COLORS.ink }}><input type="checkbox" checked={tutup} onChange={function(e) { setTutup(e.target.checked); reset(); }} style={{ width: 20, height: 20 }} aria-label="Sertakan periode ditutup"/> Sertakan periode yang sudah ditutup</label>
+      <Btn full disabled={!dapur || !mutasi || busy} onClick={simulasi}>{busy && !sim ? I.spinner : I.check} Simulasi (tidak mengubah data)</Btn>
+    </Card>
+    {sim && <Card className="mb-3">
+      <div className="text-sm font-semibold mb-1" style={{ color: COLORS.ink }}>Hasil simulasi · {namaDapur}</div>
+      <div className="text-sm mb-2" style={{ color: COLORS.ink }}><b aria-label="Jumlah baris akan dibuat">{sim.jumlah}</b> baris akan direalisasi · <b>{fmt(sim.nominal)}</b>{sim.sudahTertaut ? ' · ' + sim.sudahTertaut + ' sudah punya transaksi (hanya ditautkan)' : ''}
+        <div className="text-xs" style={{ color: sim.mutasi || sim.bankVA ? '#9A6A0B' : COLORS.danger }}>{sim.mutasi ? '+ biaya admin ' + fmt(sim.admin) + ' (potongan nyata di mutasi, ' + sim.nAdmin + ' transfer)' : sim.bankVA ? '+ biaya admin ' + fmt(sim.admin) + ' (' + sim.nAdmin + ' transfer antarbank × ' + fmt(RO_FEE) + '; sesama ' + roKodeBank(sim.bankVA) + ' gratis)' : 'Bank VA dapur belum diisi di Identitas LPDH — biaya admin TIDAK dicatat'}</div></div>
+      {sim.perPeriode.map(function(x) { return <div key={x.periode_no} className="text-xs rounded-lg p-2 mb-1.5" style={{ border: '1px solid ' + COLORS.line, color: COLORS.ink }}>
+        <b>Periode {x.periode_no}</b> ({x.status === 'AKTIF' ? 'aktif' : 'ditutup'}) · {x.baris} baris · {fmt(x.nominal)} · {fmtDDMMYYYY(x.dari)} s.d. {fmtDDMMYYYY(x.sampai)}
+        <div style={{ color: COLORS.muted }}>{Object.keys(x.jenis).map(function(j) { return j + ' ' + fmt(x.jenis[j]); }).join(' · ')}</div></div>; })}
+      {sim.saldo.length > 0 && <div className="text-xs mt-2" style={{ color: COLORS.ink }}>{sim.saldo.map(function(x) { return <div key={x.periode_no} style={{ color: x.saldo_sesudah < 0 ? COLORS.danger : COLORS.ink }}>Saldo VA periode {x.periode_no} menurut aplikasi: {fmt(x.saldo_sekarang)} → <b>{fmt(x.saldo_sesudah)}</b>{x.saldo_sesudah < 0 ? ' (NEGATIF — periksa)' : ''}</div>; })}
+        <div className="mt-1" style={{ color: COLORS.muted }}>Cocokkan dengan mutasi rekening sebelum melanjutkan.</div></div>}
+      {sim.contoh.length > 0 && <div className="text-[11px] mt-2" style={{ color: COLORS.muted }}>Contoh: {sim.contoh.map(function(c) { return fmtDDMMYYYY(c.tanggal) + ' · ' + c.no_bukti + ' · ' + c.uraian.slice(0, 28) + ' ' + fmt(c.nominal); }).join(' | ')}</div>}
+      {sim.cekSaldo && <div className="text-xs mt-2 rounded-lg p-2" style={{ background: Math.abs(sim.cekSaldo.selisih) < 1 ? '#E8F1EC' : '#F8E9E5', color: Math.abs(sim.cekSaldo.selisih) < 1 ? COLORS.deep : COLORS.danger }} aria-label="Cek saldo mutasi">
+        Saldo {fmtDDMMYYYY(sim.cekSaldo.tanggal)} (periode {sim.cekSaldo.periode_no}) setelah realisasi — aplikasi {fmt(sim.cekSaldo.aplikasi)} · mutasi {fmt(sim.cekSaldo.bank)}{Math.abs(sim.cekSaldo.selisih) < 1 ? ' ✓ sama' : ' · selisih ' + fmt(sim.cekSaldo.selisih) + ' (cek top up/saldo awal periode & daftar di bawah)'}</div>}
+      {sim.mutasi && <MutasiDaftar judul="Pengajuan tanpa transfer di mutasi (tidak direalisasi)" n={sim.mutasi.nTanpaMutasi} nilai={sim.mutasi.nilaiTanpaMutasi} isi={sim.mutasi.tanpaMutasi.map(function(x) { return fmtDDMMYYYY(x.tanggal) + ' · ' + x.uraian + ' · ' + fmt(x.nominal) + ' · ' + x.penerima + ' (' + x.bank + ')'; })}/>}
+      {sim.mutasi && <MutasiDaftar judul="Nominal cocok tetapi rekening tujuan berbeda (tidak direalisasi — periksa)" n={sim.mutasi.nRekBeda} isi={sim.mutasi.rekBeda.map(function(x) { return fmtDDMMYYYY(x.tanggal) + ' · ' + x.uraian + ' · ' + fmt(x.nominal) + ' · rek pengajuan ' + x.rek + ' ≠ mutasi ' + x.rekMutasi; })}/>}
+      {sim.mutasi && <MutasiDaftar judul="Transfer di mutasi tanpa pengajuan/transaksi di aplikasi" n={sim.mutasi.nSisaDebit} nilai={sim.mutasi.sisaNominal} isi={sim.mutasi.sisaDebit.map(function(x) { return fmtDDMMYYYY(x.tgl) + ' · ' + fmt(x.nom) + (x.fee ? ' + admin ' + fmt(x.fee) : '') + ' · ' + x.ket; })}/>}
+      {sim.mutasi && sim.mutasi.diluarMutasi > 0 && <div className="text-xs mt-2" style={{ color: '#7A5408' }}>{sim.mutasi.diluarMutasi} pengajuan ({fmt(sim.mutasi.nilaiDiluar)}) di luar rentang tanggal mutasi — unggah mutasi tanggal tersebut untuk merealisasinya.</div>}
+      {sim.dilewati > 0 && <div className="text-xs mt-2 rounded-lg p-2" style={{ background: '#FBF3E2', color: '#7A5408' }}><b>{sim.dilewati} baris dilewati:</b> {sim.alasanLewat.slice(0, 8).map(function(a) { return a.alasan; }).filter(function(v, i, arr) { return arr.indexOf(v) === i; }).join('; ')}</div>}
+      {sim.jumlah + sim.sudahTertaut > 0 ? <div className="mt-3 pt-3" style={{ borderTop: '1px solid ' + COLORS.line }}>
+        <div className="text-xs mb-1.5" style={{ color: COLORS.danger }}>Tindakan ini menulis {sim.jumlah} transaksi ke Sheet dan tidak bisa dibatalkan sekali klik. Ketik <b>{sim.jumlah}</b> (jumlah baris) untuk memastikan:</div>
+        <div className="flex gap-2"><input value={konfirm} inputMode="numeric" onChange={function(e) { setKonfirm(e.target.value.replace(/\D/g, '')); }} style={Object.assign({}, inputStyle, { width: 110 })} aria-label="Ketik jumlah baris untuk konfirmasi"/>
+          <Btn kind="danger" disabled={busy || konfirm !== String(sim.jumlah)} onClick={jalankan}>{busy ? I.spinner : I.check} Realisasikan sekarang</Btn></div>
+      </div> : <div className="text-sm mt-3" style={{ color: COLORS.muted }}>Tidak ada baris yang perlu direalisasi.</div>}
+    </Card>}
+    {hasil && <Card><div className="text-sm font-semibold" style={{ color: COLORS.green }} aria-label="Hasil eksekusi">Selesai: {hasil.dibuat} transaksi dibuat ({fmt(hasil.nominal)}){hasil.nAdmin ? ' + ' + hasil.nAdmin + ' biaya admin (' + fmt(hasil.admin) + ')' : ''}{hasil.ditautkanUlang ? ' · ' + hasil.ditautkanUlang + ' ditautkan ulang' : ''}.</div>
+      {hasil.saldo.map(function(x) { return <div key={x.periode_no} className="text-xs" style={{ color: COLORS.muted }}>Saldo VA periode {x.periode_no}: {fmt(x.saldo_sesudah)}</div>; })}
+      <div className="text-xs mt-2" style={{ color: COLORS.muted }}>Bukti transfer masih kosong untuk sebagian besar baris — lengkapi lewat menu Riwayat (edit transaksi) bila diperlukan.</div></Card>}
+  </div>;
+}
+
 // ---------- Persetujuan (Yayasan, PIC Dapur untuk dapurnya, Admin) ----------
 function DecisionButtons({ value, onChange }) {
   const opts = [['DISETUJUI','Setuju',COLORS.green],['REVISI','Revisi',COLORS.blue],['DITOLAK','Tolak',COLORS.danger]];
@@ -5853,6 +6025,18 @@ function PersetujuanPage({ session, scope, dapurList, toast }) {
 // Kategori yang bukti pembayarannya (kuitansi) dibuat otomatis oleh server saat realisasi
 const KATEGORI_KUITANSI = ['Insentif Guru/PIC Sekolah', 'Insentif Kader Posyandu', 'Sewa Kendaraan'];
 function pakaiKuitansi(it) { return it.jenis === 'Fasilitas SPPG' || (it.jenis === 'Operasional' && KATEGORI_KUITANSI.indexOf(it.kategori) >= 0); }
+// Rekomendasi biaya admin transfer menurut bank VA dapur: sesama bank gratis, antarbank Rp 6.500
+function rekomAdmin(bankPenerima, bankVA) {
+  const a = roKodeBank(bankPenerima), b = roKodeBank(bankVA);
+  if (!b) return { fee: null, teks: 'Bank VA dapur belum diisi di Identitas LPDH — biaya admin belum bisa direkomendasikan' };
+  if (!a) return { fee: null, teks: '' };
+  return a === b ? { fee: 0, teks: 'Sesama ' + b + ': tanpa biaya admin' } : { fee: RO_FEE, teks: 'Antarbank ' + a + ' → VA ' + b + ': biaya admin ' + fmt(RO_FEE) };
+}
+function useBankVA(dapur) {
+  const [b, setB] = useState(null);
+  useEffect(function() { let hidup = true; api('getBankVA', { dapur: dapur || '' }).then(function(r) { if (hidup) setB(r.ok && r.data ? r.data.bank : ''); }); return function() { hidup = false; }; }, [dapur || '']);
+  return b;
+}
 function RealisasiForm({ item, periode, toast, onClose, onSaved }) {
   const isOps = item.jenis === 'Operasional';
   const viaNota = item.jenis === 'Bahan Baku' && !!item.nota_url;
@@ -5860,10 +6044,15 @@ function RealisasiForm({ item, periode, toast, onClose, onSaved }) {
   const otomatis = viaNota || viaKuitansi;
   const today = todayISO();
   const perluSub = item.kategori === 'Barang Habis Pakai';
-  const [f, setF] = useState({ tanggal: periode && today >= periode.tanggal_mulai && today <= periode.tanggal_akhir ? today : (periode ? periode.tanggal_mulai : today), no_bukti: '', riil: isOps && !viaKuitansi ? '' : String(item.nominal), adaAdmin: false, biaya: String(BIAYA_ADMIN_DEFAULT),
+  const tglAju = /^\d{4}-\d{2}-\d{2}$/.test(String(item.tanggal_pengajuan || '')) ? item.tanggal_pengajuan : '';   // realisasi hanya pada tanggal pengajuan
+  const [f, setF] = useState({ tanggal: tglAju || (periode && today >= periode.tanggal_mulai && today <= periode.tanggal_akhir ? today : (periode ? periode.tanggal_mulai : today)), no_bukti: '', riil: isOps && !viaKuitansi ? '' : String(item.nominal), adaAdmin: false, biaya: String(BIAYA_ADMIN_DEFAULT),
     sub: '' });
   const [bukti, setBukti] = useState(null);
   const [saving, setSaving] = useState(false);
+  const bankVA = useBankVA('');
+  const rek = bankVA === null ? null : rekomAdmin(item.bank, bankVA);
+  const [adminDiatur, setAdminDiatur] = useState(false);
+  useEffect(function() { if (rek && rek.fee !== null && !adminDiatur) setF(function(o) { return Object.assign({}, o, { adaAdmin: rek.fee > 0, biaya: String(rek.fee > 0 ? rek.fee : BIAYA_ADMIN_DEFAULT) }); }); }, [bankVA]);
   const outRange = periode && (f.tanggal < periode.tanggal_mulai || f.tanggal > periode.tanggal_akhir);
   const err = !f.tanggal ? 'Tanggal wajib' : outRange ? 'Tanggal di luar periode' : /^[\s\-\u2013\u2014_.\/]+$/.test(f.no_bukti) ? 'No bukti tidak boleh "' + f.no_bukti.trim() + '" — kosongkan bila nota tidak bernomor' :
     (isOps && !(Number(f.riil) > 0)) ? 'Realisasi aktual wajib' : (f.adaAdmin && !(Number(f.biaya) > 0 && Number(f.biaya) <= 50000)) ? 'Biaya admin Rp 1 – Rp 50.000' :
@@ -5900,9 +6089,9 @@ function RealisasiForm({ item, periode, toast, onClose, onSaved }) {
       <div className="mt-1">Nominal disetujui: <b className="num">{fmt(item.nominal)}</b></div>
     </div>
     <div className="grid sm:grid-cols-2 gap-x-4">
-      <Field label="Tanggal transfer *" hint={outRange ? '⚠️ Di luar periode' : null} hintColor={COLORS.danger}>
-        <input type="date" value={f.tanggal} min={periode && periode.tanggal_mulai} max={periode && periode.tanggal_akhir}
-          onChange={function(e){ setF(Object.assign({}, f, { tanggal: e.target.value })); }} style={inputStyle}/>
+      <Field label="Tanggal transfer *" hint={tglAju ? 'Mengikuti tanggal pengajuan — realisasi tidak boleh di luar tanggal pengajuan' : outRange ? '⚠️ Di luar periode' : null} hintColor={tglAju ? COLORS.muted : COLORS.danger}>
+        <input type="date" value={f.tanggal} min={periode && periode.tanggal_mulai} max={periode && periode.tanggal_akhir} disabled={!!tglAju} aria-label="Tanggal transfer"
+          onChange={function(e){ setF(Object.assign({}, f, { tanggal: e.target.value })); }} style={Object.assign({}, inputStyle, tglAju ? { background: COLORS.paper } : {})}/>
       </Field>
       {otomatis ? <Field label="No Bukti"><div className="text-sm py-2.5" style={{ color: COLORS.ink }}>{viaNota ? (item.nota_no || 'dibuat otomatis (nota tak bernomor)') : 'dibuat otomatis (nomor kuitansi)'}</div></Field>
       : <Field label="No Bukti / Nota" hint='Wajib unik (syarat LPDH). Kosongkan bila nota tidak bernomor → nomor dibuat otomatis. Nomor sama dari toko lain? tambahkan kode toko, cth. 001/2026-TMB'>
@@ -5914,7 +6103,8 @@ function RealisasiForm({ item, periode, toast, onClose, onSaved }) {
       </> : <Field label="Nominal" hint="Terkunci = nominal disetujui"><RupiahInput value={String(item.nominal)} onChange={function(){}} disabled/></Field>}
     </div>
     {perluSub && <SubBHPField value={f.sub} uraian={item.uraian} onChange={function(v){ setF(Object.assign({}, f, { sub: v })); }}/>}
-    <BiayaAdminField ada={f.adaAdmin} biaya={f.biaya} onChange={function(patch){ setF(Object.assign({}, f, patch)); }}/>
+    {rek && rek.teks && <div className="text-xs mb-1" style={{ color: rek.fee ? '#9A6A0B' : COLORS.green }} aria-label="Rekomendasi biaya admin">Rekomendasi: {rek.teks}</div>}
+    <BiayaAdminField ada={f.adaAdmin} biaya={f.biaya} onChange={function(patch){ setAdminDiatur(true); setF(Object.assign({}, f, patch)); }}/>
     {otomatis ? <div className="rounded-lg p-3 mb-3 text-sm" style={{ background: '#E8F1EC', color: COLORS.deep }}>
       {viaNota ? <>{I.check} Bukti memakai <a href={item.nota_url} target="_blank" rel="noopener" className="underline font-semibold">nota dari pengajuan</a> — tidak perlu unggah.</>
         : <>{I.check} <b>Kuitansi / bukti pembayaran dibuat otomatis</b> (PDF, berisi penerima, nominal, terbilang, kolom tanda tangan). Cetak & mintakan tanda tangan penerima.</>}
@@ -6330,6 +6520,7 @@ function App() {
       ['penerima','Data Penerima',I.users],
       ['darurat','Input Darurat',I.warn],
       ['perubahan','Persetujuan Edit',I.edit],
+      ['realmassal','Realisasi Massal',I.download],
       ['periode','Periode',I.settings],
       ['users','Pengguna',I.users],
       ['dapur','Dapur',I.building],
@@ -6410,6 +6601,7 @@ function App() {
           {view === 'riwayat' && <Riwayat session={session} scope={effScope} toast={toast} refreshKey={refreshKey}/>}
           {view === 'bukubesar' && <BukuBesar session={session} scope={effScope} toast={toast}/>}
           {view === 'periode' && <PeriodeAdmin session={session} toast={toast}/>}
+          {view === 'realmassal' && <RealisasiMassalPage session={session} dapurList={dapurList} toast={toast}/>}
           {view === 'tugas' && <TugasHarianPage session={session} scope={effScope} toast={toast} onBuka={setView}/>}
           {view === 'kwitansi' && <KwitansiPage session={session} scope={effScope} toast={toast}/>}
           {view === 'penerima' && <DataPenerimaPage session={session} scope={effScope} toast={toast}/>}

@@ -93,7 +93,7 @@ const ok = (c, m) => { console.log((c ? 'PASS ' : 'FAIL ') + m); if (!c) fails++
     ['U3', 'off', 'xxxxxxx', 'Nonaktif', 'pic', 'D001', 'TIDAK'],
   ]);
   const B = env.__book;
-  ok(call(env, 'GET', { action: 'ping' }).version === 'v6-ba-sec30', 'ping menampilkan versi baru');
+  ok(call(env, 'GET', { action: 'ping' }).version === 'v6-ba-sec32', 'ping menampilkan versi baru');
 
   // 1. login lama (teks biasa) berhasil via POST dan password otomatis di-hash
   let r = call(env, 'POST', { action: 'login', username: 'AKUN1', password: 'RahasiaKu9' });
@@ -598,12 +598,14 @@ const ok = (c, m) => { console.log((c ? 'PASS ' : 'FAIL ') + m); if (!c) fails++
   B8.VATopup.push(['V9', 'D001', 'P1', '2026-10-19', 100000000, 'tambah saldo uji', '', 'U2', '', '', '']);   // saldo uji sudah terpakai uji sebelumnya
   call(e8, 'POST', { action: 'decidePengajuan', token: tk8('adm'), pengajuan_id: itNN[1], keputusan: [{ item_id: itNN[0], status: 'DISETUJUI' }] });
   r = call(e8, 'POST', { action: 'realisasiItem', token: tkA, item_id: itNN[0], tanggal: '2026-10-19' });
+  ok(!r.ok && /sama dengan tanggal pengajuan \(15-10-2026\)/.test(r.error), 'realisasi di luar tanggal pengajuan ditolak: ' + (r.error || ''));
+  r = call(e8, 'POST', { action: 'realisasiItem', token: tkA, item_id: itNN[0], tanggal: '2026-10-15' });
   ok(r.ok && r.data.no_bukti === 'NT-TELUR' && r.data.bukti === 'nota', 'realisasi sekali klik: nomor bukti = nomor nota pengajuan: ' + (r.error || r.data.no_bukti));
   r = pa([bb({ uraian: 'tanpa nomor', rincian: rincNN })]); ok(r.ok, 'nota tanpa nomor boleh (kosong)');
   const itTN = B8.PengajuanItem[B8.PengajuanItem.length - 1];
   call(e8, 'POST', { action: 'decidePengajuan', token: tk8('adm'), pengajuan_id: itTN[1], keputusan: [{ item_id: itTN[0], status: 'DISETUJUI' }] });
-  r = call(e8, 'POST', { action: 'realisasiItem', token: tkA, item_id: itTN[0], tanggal: '2026-10-19' });
-  ok(r.ok && /^S1-20261019-\d{3}$/.test(r.data.no_bukti), 'nota tak bernomor → nomor otomatis saat realisasi: ' + (r.data && r.data.no_bukti));
+  r = call(e8, 'POST', { action: 'realisasiItem', token: tkA, item_id: itTN[0], tanggal: '2026-10-15' });
+  ok(r.ok && /^S1-20261015-\d{3}$/.test(r.data.no_bukti), 'nota tak bernomor → nomor otomatis saat realisasi: ' + (r.data && r.data.no_bukti));
   // edit baris: nomor nota ikut diperiksa
   r = pa([bb({ uraian: 'edit', nota_no: 'NT-EDIT', rincian: rincNN })]);
   const itED = B8.PengajuanItem[B8.PengajuanItem.length - 1][0];
@@ -894,6 +896,79 @@ const ok = (c, m) => { console.log((c ? 'PASS ' : 'FAIL ') + m); if (!c) fails++
     ok(r.ok && /^data:image/.test(r.data.wakil) && /^data:image/.test(r.data.kepala) && 'pengawas' in r.data, 'bahan TTD pengesahan: pengawas, kepala, perwakilan');
     r = call(e8, 'POST', { action: 'getTtdPengesahan', token: tk8('yay'), dapur: 'D002' });
     ok(r.ok && r.data.wakil === null, 'dapur lain tidak memakai TTD perwakilan D001');
+  }
+
+
+  // ── Realisasi massal (admin): simulasi → eksekusi, tanggal & nominal mengikuti pengajuan ──
+  {
+    const tAd = tk8('adm'), tA = tk8('akn');
+    B8.Dapur.push(['D009', 'SPPG Sembilan', '', 'S9']);
+    B8.Setup.push(['P0', 'D009', 1, '2026-09-01', '2026-09-30', 100, 50000000, 0, 'DITUTUP'], ['P9', 'D009', 2, '2026-10-01', '2026-10-31', 100, 20000000, 0, 'AKTIF']);
+    const hd = (id, tgl, per) => B8.Pengajuan.push([id, 'BA-' + id, 'D009', per, tgl, 'SELESAI', '', 'U2', '', 'U3']);
+    hd('PZ1', '2026-09-10', 'P0'); hd('PZ2', '2026-10-05', 'P9'); hd('PZ3', '2026-09-40', 'P0');
+    const it = (id, pa, urut, per, jenis, kat, nom, extra) => B8.PengajuanItem.push([id, pa, 'D009', per, urut, jenis, kat, 'Uraian ' + id, nom, 'pn1', 'Toko A', 'BCA', '123', 'TIDAK', 'DISETUJUI', '', 1, '', 'U3', '', '', '', '', (extra || {}).nota_url || '', (extra || {}).nota_no || '']);
+    it('PZ1-1', 'PZ1', 1, 'P0', 'Bahan Baku', 'Semua Kategori', 1500000, { nota_no: 'NOTA-7', nota_url: 'https://nota/7' });
+    it('PZ1-2', 'PZ1', 2, 'P0', 'Operasional', 'Gas', 300000);
+    it('PZ2-1', 'PZ2', 1, 'P9', 'Operasional', 'Listrik', 700000);
+    it('PZ2-2', 'PZ2', 2, 'P9', 'Bahan Baku', 'Semua Kategori', 400000, { nota_no: 'NOTA-7' });   // nomor nota kembar → nomor otomatis
+    it('PZ3-1', 'PZ3', 1, 'P0', 'Operasional', 'Gas', 100000);                                       // tanggal pengajuan tidak valid
+    const M1 = { saldoAwal: 0, saldoAkhir: 0, debit: [{ tgl: '2026-09-10', nom: 1500000, rek: '000123', fee: 0, ref: 'J1', ket: 'Toko A' }, { tgl: '2026-09-11', nom: 300000, rek: '123', fee: 6500, ref: 'J2', ket: 'gas' },
+      { tgl: '2026-10-05', nom: 700000, rek: '123', fee: 0, ref: 'J3', ket: 'listrik' }, { tgl: '2026-10-05', nom: 400000, rek: '123', fee: 6500, ref: 'J4', ket: 'bahan' }, { tgl: '2026-10-05', nom: 999000, rek: '555', fee: 0, ref: 'J5', ket: 'gaji tanpa pengajuan' }] };
+    let r = call(e8, 'POST', { action: 'realisasiMassal', token: tAd, dapur: 'D009' });
+    ok(!r.ok && /mutasi/i.test(r.error), 'tanpa mutasi rekening: realisasi massal ditolak');
+    r = call(e8, 'POST', { action: 'realisasiMassal', token: tA, dapur: 'D009', mutasi: M1 });
+    ok(!r.ok && /admin/i.test(r.error), 'hanya admin yang boleh realisasi massal');
+    r = call(e8, 'POST', { action: 'realisasiMassal', token: tAd, dapur: 'D009', mutasi: M1 });
+    ok(r.ok && r.data.simulasi && r.data.jumlah === 2 && r.data.nominal === 1100000, 'simulasi: hanya periode aktif (2 baris, Rp 1.100.000) — periode ditutup & tanggal rusak dilewati (' + JSON.stringify(r.data && [r.data.jumlah, r.data.nominal]) + ')');
+    ok(r.data.mutasi.nSisaDebit === 3 && r.data.mutasi.sisaDebit.some(d => d.nom === 999000), 'transfer bank tanpa pengajuan dilaporkan (' + (r.data.mutasi && r.data.mutasi.nSisaDebit) + ')');
+    ok(r.data.dilewati === 3 && r.data.alasanLewat.some(x => /ditutup/.test(x.alasan)) && r.data.alasanLewat.some(x => /tanggal pengajuan/.test(x.alasan)), 'alasan dilewati dicantumkan');
+    ok(!B8.Transaksi.some(x => x[1] === 'D009'), 'simulasi tidak menulis apa pun');
+    r = call(e8, 'POST', { action: 'realisasiMassal', token: tAd, dapur: 'D009', sertakan_tutup: true, mutasi: M1 });
+    ok(r.data.jumlah === 4 && r.data.nominal === 2900000 && r.data.perPeriode.length === 2 && r.data.saldo.every(x => typeof x.saldo_sesudah === 'number'), 'simulasi dengan periode ditutup: 4 baris Rp 2.900.000, saldo per periode dihitung');
+    r = call(e8, 'POST', { action: 'realisasiMassal', token: tAd, dapur: 'D009', sertakan_tutup: true, eksekusi: true, jumlah_konfirmasi: 3, mutasi: M1 });
+    ok(!r.ok && /Jumlah konfirmasi/.test(r.error) && !B8.Transaksi.some(x => x[1] === 'D009'), 'eksekusi ditolak bila jumlah konfirmasi tidak sama dengan simulasi');
+    r = call(e8, 'POST', { action: 'realisasiMassal', token: tAd, dapur: 'D009', sertakan_tutup: true, eksekusi: true, jumlah_konfirmasi: 4, mutasi: M1 });
+    ok(r.ok && r.data.dibuat === 4 && r.data.nominal === 2900000, 'eksekusi: 4 transaksi dibuat (' + (r.error || '') + ')');
+    const tx9 = B8.Transaksi.filter(x => x[1] === 'D009');
+    const byItem = Object.fromEntries(tx9.map(x => [x[14], x]));
+    ok(byItem['PZ1-1'][2] === '2026-09-10' && byItem['PZ1-1'][8] === 1500000 && byItem['PZ1-1'][9] === 1500000 && byItem['PZ1-1'][13] === 'P0' && byItem['PZ2-1'][2] === '2026-10-05',
+      'tanggal transaksi = tanggal pengajuan; riil & anggaran = nominal pengajuan; periode sesuai');
+    ok(String(byItem['PZ1-1'][3]) === 'NOTA-7' && byItem['PZ1-1'][10] === 'https://nota/7', 'bahan baku memakai nomor & foto nota pengajuan');
+    ok(byItem['PZ2-1'][3] === 'S9-20261005-001' && byItem['PZ2-2'][3] === 'S9-20261005-002' && byItem['PZ2-2'][10] === '', 'nomor nota kembar → nomor otomatis; bukti dikosongkan (' + JSON.stringify([byItem['PZ2-2'][3], byItem['PZ2-2'][10], byItem['PZ2-1'][3]]) + ')');
+    ok(byItem['PZ1-2'][3] === 'S9-20260910-001' && byItem['PZ1-2'][10] === '' && byItem['PZ1-2'][4] === 'Operasional', 'operasional: nomor otomatis per tanggal, bukti kosong');
+    const st = Object.fromEntries(B8.PengajuanItem.filter(x => x[2] === 'D009').map(x => [x[0], [x[14], x[19]]]));
+    ok(st['PZ1-1'][0] === 'TEREALISASI' && st['PZ1-1'][1] === byItem['PZ1-1'][0] && st['PZ3-1'][0] === 'DISETUJUI' && st['PZ3-1'][1] === '', 'baris yang direalisasi ditautkan; baris yang dilewati tetap DISETUJUI');
+    r = call(e8, 'POST', { action: 'realisasiMassal', token: tAd, dapur: 'D009', sertakan_tutup: true, mutasi: M1 });
+    ok(r.data.jumlah === 0, 'diulang: tidak ada yang tersisa (tidak dobel)');
+    // pemulihan: transaksi sudah ada tapi baris pengajuan belum bertanda (mis. proses terputus) → hanya ditautkan, tidak dibuat dua kali
+    const pz = B8.PengajuanItem.find(x => x[0] === 'PZ2-1'); pz[14] = 'DISETUJUI'; pz[19] = '';
+    r = call(e8, 'POST', { action: 'realisasiMassal', token: tAd, dapur: 'D009', sertakan_tutup: true, mutasi: M1 });
+    ok(r.data.jumlah === 0 && r.data.sudahTertaut === 1, 'transaksi yang sudah ada dikenali (ditautkan ulang, bukan digandakan)');
+    r = call(e8, 'POST', { action: 'realisasiMassal', token: tAd, dapur: 'D009', sertakan_tutup: true, eksekusi: true, jumlah_konfirmasi: 0, mutasi: M1 });
+    ok(r.ok && r.data.dibuat === 0 && r.data.ditautkanUlang === 1 && pz[14] === 'TEREALISASI' && B8.Transaksi.filter(x => x[1] === 'D009').length === 6, 'pemulihan menautkan tanpa menambah transaksi (' + JSON.stringify([r.error, r.data && r.data.dibuat, B8.Transaksi.filter(x => x[1] === 'D009').length]) + ')');
+  }
+
+
+  // ── Realisasi massal: biaya admin antarbank sesuai bank VA dapur; rekomendasi bank VA ──
+  {
+    const tAd = tk8('adm');
+    lpdhSheetIsi: { const row = ['D009', '', '', '', '', '', '', '', 'BNI']; B8.IdentitasLPDH = B8.IdentitasLPDH || [['dapur_id']]; B8.IdentitasLPDH.push(row); }
+    B8.Pengajuan.push(['PZ5', 'BA-PZ5', 'D009', 'P9', '2026-10-06', 'SELESAI', '', 'U2', '', 'U3']);
+    const it5 = (id, bank, nom) => B8.PengajuanItem.push([id, 'PZ5', 'D009', 'P9', 1, 'Operasional', 'Gas', 'Gas ' + id, nom, 'pn1', 'Toko', bank, '1', 'TIDAK', 'DISETUJUI', '', 1, '', 'U3', '', '', '', '', '', '']);
+    it5('PZ5-1', 'BRI', 200000); it5('PZ5-2', 'Bank Negara Indonesia (BNI)', 300000);
+    it5('PZ5-3', 'BNI', 450000); it5('PZ5-4', 'BRI', 120000);
+    const M2 = { saldoAwal: 25000000, saldoAkhir: 0, debit: [{ tgl: '2026-10-06', nom: 200000, rek: '1', fee: 6500 }, { tgl: '2026-10-07', nom: 300000, rek: '1', fee: 0 }, { tgl: '2026-10-06', nom: 120000, rek: '777', fee: 6500 }] };
+    let r = call(e8, 'POST', { action: 'realisasiMassal', token: tAd, dapur: 'D009', mutasi: M2 });
+    ok(r.data.jumlah === 2 && r.data.admin === 6500 && r.data.nAdmin === 1, 'simulasi: biaya admin = potongan nyata di mutasi (bukan tebakan bank)');
+    ok(r.data.mutasi.nTanpaMutasi === 1 && r.data.mutasi.tanpaMutasi[0].id === 'PZ5-3' && r.data.mutasi.nRekBeda === 1 && r.data.mutasi.rekBeda[0].id === 'PZ5-4',
+      'pengajuan tanpa transfer di mutasi & rekening tujuan berbeda TIDAK direalisasi, dilaporkan terpisah');
+    ok(r.data.cekSaldo && typeof r.data.cekSaldo.selisih === 'number', 'cek saldo aplikasi vs mutasi pada tanggal terakhir mutasi');
+    r = call(e8, 'POST', { action: 'realisasiMassal', token: tAd, dapur: 'D009', eksekusi: true, jumlah_konfirmasi: 2, mutasi: M2 });
+    const fee = B8.Transaksi.filter(x => x[14] === 'ADMIN:PZ5-1'), fee2 = B8.Transaksi.filter(x => x[14] === 'ADMIN:PZ5-2');
+    ok(r.ok && r.data.admin === 6500 && fee.length === 1 && fee[0][5] === 'Biaya Admin Bank' && fee[0][8] === 6500 && fee[0][2] === '2026-10-06' && fee2.length === 0,
+      'eksekusi: transaksi biaya admin terpisah bertanggal sama, hanya untuk antarbank');
+    r = call(e8, 'POST', { action: 'getBankVA', token: tk8('akn') });
+    ok(r.ok && r.data.fee === 6500 && 'bank' in r.data, 'rekomendasi biaya admin: bank VA dapur tersedia untuk form');
   }
 
   console.log(fails ? '\n' + fails + ' GAGAL' : '\nSEMUA LULUS');
