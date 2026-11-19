@@ -1218,101 +1218,7 @@ function buktiFileName(file, tanggal, noBukti) {
   return tanggal + '_' + safeBukti + '.' + ext;
 }
 
-function InputTransaksi({ session, toast, onSaved, goToSetup, dapurId, alasan }) {
-  const dId = dapurId || session.user.dapur;
-  const [periode, setPeriode] = useState(null);
-  const [loadingPeriode, setLoadingPeriode] = useState(true);
-  const [kategoriMap, setKategoriMap] = useState({});
-  const [step, setStep] = useState(1);
-  const [jenis, setJenis] = useState(null);
-  const [submitting, setSubmitting] = useState(false);
-
-  useEffect(function() {
-    Promise.all([api('getActivePeriode', { dapur: dId }), api('getKategori')]).then(function(arr){
-      setLoadingPeriode(false);
-      if (arr[0].ok) setPeriode(arr[0].data);
-      if (arr[1].ok) setKategoriMap(arr[1].data);
-    });
-  }, []);
-
-  async function doSubmit(form) {
-    setSubmitting(true);
-    let bukti_url = '';
-    if (form.bukti) {
-      const b64 = await fileToBase64(form.bukti);
-      const up = await apiUpload('uploadBukti', { fileData: b64, fileName: buktiFileName(form.bukti, form.tanggal, form.no_bukti), mimeType: form.bukti.type });
-      if (up.ok) bukti_url = up.data.url;
-      else { toast('Gagal upload bukti: ' + up.error, 'error'); setSubmitting(false); return; }
-    }
-    const res = await api('addTransaksi', {
-      role: session.user.role, user_id: session.user.id, dapur: dId, alasan: alasan || '',
-      tanggal: form.tanggal, no_bukti: form.no_bukti, jenis: form.jenis, kategori: form.kategori, uraian: form.uraian,
-      sumber: form.sumber, riil: form.riil, unriil: form.unriil, bukti_url: bukti_url,
-    });
-    setSubmitting(false);
-    if (res.ok) {
-      toast('Transaksi tersimpan');
-      setStep(1); setJenis(null);
-      onSaved && onSaved();
-    } else toast(res.error || 'Gagal menyimpan', 'error');
-  }
-
-  if (loadingPeriode) return <Card>{I.spinner}</Card>;
-  if (!periode) {
-    return (
-      <Card>
-        <div className="text-center py-6">
-          <div className="mb-3 flex justify-center" style={{ color: COLORS.danger }}>{I.warn}</div>
-          <div className="text-base font-bold mb-1" style={{ color: COLORS.ink }}>Belum ada periode aktif</div>
-          <div className="text-sm mb-4" style={{ color: COLORS.muted }}>Setup periode dulu sebelum input transaksi.</div>
-          {goToSetup && <Btn onClick={goToSetup}>{I.settings} Ke Setup Periode</Btn>}
-        </div>
-      </Card>
-    );
-  }
-
-  if (step === 1) {
-    return (
-      <div>
-        <Card className="mb-3">
-          <Eyebrow>Periode aktif</Eyebrow>
-          <div className="text-base font-bold" style={{ color: COLORS.ink }}>Periode {periode.periode_no}</div>
-          <div className="text-sm" style={{ color: COLORS.muted }}>{fmtDateRange(periode.tanggal_mulai, periode.tanggal_akhir)}</div>
-        </Card>
-        <Card>
-          <Eyebrow>Langkah 1 dari 2</Eyebrow>
-          <h2 className="text-lg font-bold mb-1" style={{ color: COLORS.ink }}>Pilih jenis transaksi</h2>
-          <p className="text-sm mb-4" style={{ color: COLORS.muted }}>Menentukan daftar kategori di langkah berikutnya.</p>
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
-            {Object.keys(kategoriMap).map(function(j){
-              return <button key={j} onClick={function(){ setJenis(j); setStep(2); }}
-                className="rounded-lg p-4 text-left transition hover:bg-gray-50"
-                style={{ border: '1px solid ' + COLORS.line, background: '#fff' }}>
-                <div className="font-semibold text-sm" style={{ color: COLORS.ink }}>{j}</div>
-                <div className="text-xs mt-0.5" style={{ color: COLORS.muted }}>{kategoriMap[j].length} kategori</div>
-              </button>;
-            })}
-          </div>
-        </Card>
-      </div>
-    );
-  }
-
-  return (
-    <div>
-      <Card className="mb-3">
-        <Eyebrow>Periode aktif</Eyebrow>
-        <div className="text-sm font-bold" style={{ color: COLORS.ink }}>Periode {periode.periode_no} · {fmtDateRange(periode.tanggal_mulai, periode.tanggal_akhir)}</div>
-      </Card>
-      <Card>
-        <button onClick={function(){setStep(1);}} className="inline-flex items-center gap-1.5 text-sm mb-3" style={{ color: COLORS.green }}>{I.arrowL} {jenis}</button>
-        <Eyebrow>Langkah 2 dari 2 · Detail transaksi</Eyebrow>
-        <TransaksiForm mode="add" jenis={jenis} kategoriMap={kategoriMap} periode={periode}
-          session={session} toast={toast} onSubmit={doSubmit} submitting={submitting}/>
-      </Card>
-    </div>
-  );
-}
+// Input Darurat dihapus: semua transaksi masuk lewat Pengajuan (EditTransaksiModal tetap memakai TransaksiForm).
 
 // ============================================================
 //  EDIT TRANSAKSI Modal
@@ -1740,6 +1646,15 @@ function isiLPDH(wb, data, opsi) {
 // ============================================================
 const EXCELJS_URL = 'https://unpkg.com/exceljs@4.4.0/dist/exceljs.min.js';
 const LPDH_TEMPLATE_URL = (location.protocol === 'file:' ? 'https://eyusron98-eng.github.io/mbg-keuangan/' : '') + 'templates/LPDH_SPPG.xlsx?v=4';
+let _lpdhTplProm = null;
+function ensureExcelJS() { return window.ExcelJS ? Promise.resolve(window.ExcelJS) : loadScriptOnce(EXCELJS_URL).then(function() { return window.ExcelJS; }); }
+function getLpdhTemplateBuf() {
+  if (!_lpdhTplProm) _lpdhTplProm = fetch(LPDH_TEMPLATE_URL).then(function(res) {
+    if (!res.ok) throw new Error('template LPDH tidak ditemukan');
+    return res.arrayBuffer();
+  }).catch(function(e) { _lpdhTplProm = null; throw e; });
+  return _lpdhTplProm;
+}
 const LPDH_STATUS_HARI = ['HPE', 'Libur nasional/cuti bersama', 'Libur sekolah/libur khusus daerah', 'Tanpa pembelajaran tatap muka', 'Kondisi tertentu (pemda/BGN)', 'Melebihi 5 hari dalam seminggu'];
 const LPDH_IDENT = [
   ['SPPG', [['id_sppg', 'ID SPPG resmi (BGN)', 'cth. 32.04.XX.XXXX'], ['desa', 'Desa/Kelurahan'], ['kecamatan', 'Kecamatan'], ['kabupaten', 'Kabupaten/Kota', 'Tulis sama persis dengan daftar indeks kemahalan PPK'], ['provinsi', 'Provinsi']]],
@@ -2549,8 +2464,12 @@ function LpdhPage({ session, scope, toast }) {
   const bisaLengkapi = role === 'admin' || role === 'akuntan';
   const bisaIsi = role === 'admin' || role === 'akuntan' || role === 'pic';
   const [busy, setBusy] = useState(false);
+  const [busyText, setBusyText] = useState('');
   const [hasil, setHasil] = useState(null);
   const [konfirmSaldo, setKonfirmSaldo] = useState(false);
+
+  // Preload ExcelJS & template LPDH di latar belakang saat halaman dibuka agar klik Unduh langsung jalan tanpa tunggu CDN
+  useEffect(function() { ensureExcelJS().catch(function(){}); getLpdhTemplateBuf().catch(function(){}); }, []);
 
   function load() {
     if (!dapurId) return;
@@ -2609,43 +2528,48 @@ function LpdhPage({ session, scope, toast }) {
 
   // Lembar pengesahan PDF: angka dihitung dari isian yang sama dengan berkas LPDH, TTD tiga pihak dari gambar tersimpan
   async function unduhPengesahan() {
-    setBusy(true);
+    setBusy(true); setBusyText('Menyiapkan pengesahan…');
     try {
-      if (!window.ExcelJS) await loadScriptOnce(EXCELJS_URL);
-      const res = await fetch(LPDH_TEMPLATE_URL);
-      if (!res.ok) throw new Error('template LPDH tidak ditemukan');
+      const [, tplBuf, t] = await Promise.all([ensureExcelJS(), getLpdhTemplateBuf(), api('getTtdPengesahan', { dapur: dapurId })]);
       const wb = new window.ExcelJS.Workbook();
-      await wb.xlsx.load(await res.arrayBuffer());
+      await wb.xlsx.load(tplBuf.slice(0));
       const r = isiLPDH(wb, data, Object.assign({}, opsi, { waktu: new Date() }));
-      const t = await api('getTtdPengesahan', { dapur: dapurId });
       const ttd = t.ok && t.data ? t.data : {};
       const nama = r.namaFile.replace(/\.xlsx$/, '');
       const hasilPdf = await buildPengesahanPdf(data, r.ringkasan, ttd, nama);
       hasilPdf.doc.save(nama + '_Pengesahan.pdf');
       toast('Lembar pengesahan diunduh (kode ' + hasilPdf.kode + ')' + (hasilPdf.kurang.length ? ' — belum ada TTD: ' + hasilPdf.kurang.join(', ') : ''), hasilPdf.kurang.length ? 'error' : undefined);
     } catch (e) { toast('Gagal membuat lembar pengesahan: ' + e.message, 'error'); }
-    setBusy(false);
+    setBusy(false); setBusyText('');
   }
   async function unduh() {
-    setBusy(true);
+    setBusy(true); setBusyText('Memeriksa kwitansi…');
     try {
-      // link bukti relawan, PIC sekolah, kader & insentif Mitra harus ke kwitansi bertanda tangan: yang belum ada / usang dibuat dulu
-      // dicek saat tombol ditekan (bukan saat halaman dibuka) agar pemuatan LPDH tetap ringan
+      // Mulai muat ExcelJS & template paralel dengan pemeriksaan kwitansi agar tidak antre serial
+      const excelProm = ensureExcelJS(), tplProm = getLpdhTemplateBuf();
       let isi = data;
       const cek = bisaIsi ? await api('getKwitansiPerlu', { dapur: dapurId, tanggal: tanggal }) : null;
       const perlu = cek && cek.ok && cek.data ? (cek.data.perlu || []) : [];
       if (perlu.length) {
+        setBusyText('Menyiapkan ' + perlu.length + ' kwitansi…');
         toast('Menyiapkan kwitansi bertanda tangan (' + perlu.length + ' berkas)…');
-        const gagal = await siapkanKwitansiLpdh(dapurId, tanggal, perlu);
-        const baru = await api('getDataLPDH', { dapur: dapurId, tanggal: tanggal });
-        if (baru.ok) { isi = baru.data; setData(baru.data); }
-        if (gagal) toast(gagal + ' kwitansi gagal disiapkan (' + SIAPKAN_KW_GALAT.join('; ') + ') — link bukti memakai bukti transaksi. Coba unduh lagi.', 'error');
+        const resKw = await siapkanKwitansiLpdh(dapurId, tanggal, perlu);
+        // Gabungkan tautan & nomor kwitansi baru langsung di memori tanpa memanggil ulang getDataLPDH
+        const kwBaru = Object.assign({}, isi.kwitansi || {}, resKw.urls || {});
+        const nmLama = isi.kwitansiNomor || {};
+        const nmBaru = {
+          PIC_SEKOLAH: (resKw.nomor && resKw.nomor.PIC_SEKOLAH && resKw.nomor.PIC_SEKOLAH.length) ? resKw.nomor.PIC_SEKOLAH : (nmLama.PIC_SEKOLAH || []),
+          KADER: (resKw.nomor && resKw.nomor.KADER && resKw.nomor.KADER.length) ? resKw.nomor.KADER : (nmLama.KADER || []),
+          RELAWAN: Object.assign({}, nmLama.RELAWAN || {}, (resKw.nomor && resKw.nomor.RELAWAN) || {}),
+        };
+        isi = Object.assign({}, isi, { kwitansi: kwBaru, kwitansiNomor: nmBaru });
+        setData(isi);
+        if (resKw.gagal) toast(resKw.gagal + ' kwitansi gagal disiapkan (' + SIAPKAN_KW_GALAT.join('; ') + ') — link bukti memakai bukti transaksi. Coba unduh lagi.', 'error');
       }
-      if (!window.ExcelJS) await loadScriptOnce(EXCELJS_URL);
-      const res = await fetch(LPDH_TEMPLATE_URL);
-      if (!res.ok) throw new Error('template LPDH tidak ditemukan');
+      setBusyText('Menyusun Excel LPDH…');
+      const [, tplBuf] = await Promise.all([excelProm, tplProm]);
       const wb = new window.ExcelJS.Workbook();
-      await wb.xlsx.load(await res.arrayBuffer());
+      await wb.xlsx.load(tplBuf.slice(0));
       const r = isiLPDH(wb, isi, Object.assign({}, opsi, { waktu: new Date() }));
       const blob = new Blob([await wb.xlsx.writeBuffer()], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
       const a = document.createElement('a');
@@ -2655,7 +2579,7 @@ function LpdhPage({ session, scope, toast }) {
       setHasil(r);
       toast('LPDH diunduh: ' + r.namaFile);
     } catch (e) { toast('Gagal membuat LPDH: ' + e.message, 'error'); }
-    setBusy(false);
+    setBusy(false); setBusyText('');
   }
 
   const Baris = function(p) { return <div className="flex justify-between gap-3 py-1.5 text-sm" style={{ borderTop: '1px solid ' + COLORS.line }}>
@@ -2766,7 +2690,7 @@ function LpdhPage({ session, scope, toast }) {
         {saldoBeda && <div className="text-sm rounded-lg p-3 mt-3" style={{ background: '#F8E9E5', color: COLORS.danger }} aria-label="Saldo tidak sinkron">
           <b>Saldo VA tidak sinkron.</b> Tersimpan {fmt(saldoTersimpan)}, sedangkan menurut transaksi hari ini {fmt(saldoAkhirApp)} (selisih {fmt(saldoAkhirApp - saldoTersimpan)}).
           Biasanya karena ada transaksi yang diubah/dihapus setelah saldo disimpan. Cocokkan dengan mutasi rekening, lalu perbarui <b>Saldo VA menurut rekening</b> di atas (atau isi penjelasan bila memang berbeda).</div>}
-        <div className="mt-4"><Btn full onClick={function() { if (saldoBeda) setKonfirmSaldo(true); else unduh(); }} disabled={busy}>{busy ? I.spinner : I.download} Unduh LPDH (.xlsx)</Btn></div>
+        <div className="mt-4"><Btn full onClick={function() { if (saldoBeda) setKonfirmSaldo(true); else unduh(); }} disabled={busy}>{busy ? I.spinner : I.download} {busy && busyText ? busyText : 'Unduh LPDH (.xlsx)'}</Btn></div>
         <div className="mt-2"><Btn full kind="ghost" onClick={unduhPengesahan} disabled={busy}>{busy ? I.spinner : I.file} Lembar Pengesahan (PDF bertanda tangan)</Btn></div>
         {konfirmSaldo && <ConfirmModal title="Saldo VA tidak sinkron" confirmLabel="Tetap unduh" onClose={function() { setKonfirmSaldo(false); }} onConfirm={function() { setKonfirmSaldo(false); unduh(); }}
           message={'Saldo VA tersimpan ' + fmt(saldoTersimpan) + ' berbeda ' + fmt(saldoAkhirApp - saldoTersimpan) + ' dari transaksi hari ini (' + fmt(saldoAkhirApp) + ') tanpa penjelasan. Di LPDH, cek PPK "saldo komponen = saldo VA" akan menunjukkan selisih ini. Sebaiknya perbarui saldo dulu sesuai mutasi rekening.'}/>}
@@ -5191,13 +5115,16 @@ function IdentitasDapurCard({ session, toast }) {
 
 // ---------- Berita Acara (PDF) ----------
 const JSPDF_URLS = ['https://unpkg.com/jspdf@2.5.1/dist/jspdf.umd.min.js', 'https://unpkg.com/jspdf-autotable@3.8.2/dist/jspdf.plugin.autotable.min.js'];
+const _SCRIPT_PROMS = {};
 function loadScriptOnce(src) {
-  return new Promise(function(resolve, reject) {
-    if (document.querySelector('script[data-src="' + src + '"]')) return resolve();
+  if (_SCRIPT_PROMS[src]) return _SCRIPT_PROMS[src];
+  _SCRIPT_PROMS[src] = new Promise(function(resolve, reject) {
     const s = document.createElement('script'); s.src = src; s.setAttribute('data-src', src);
-    s.onload = function(){ resolve(); }; s.onerror = function(){ s.remove(); reject(new Error('Gagal memuat ' + src)); };
+    s.onload = function(){ resolve(); };
+    s.onerror = function(){ delete _SCRIPT_PROMS[src]; s.remove(); reject(new Error('Gagal memuat ' + src)); };
     document.head.appendChild(s);
   });
+  return _SCRIPT_PROMS[src];
 }
 async function ensureJsPDF() {
   if (window.jspdf && window.jspdf.jsPDF && window.jspdf.jsPDF.API.autoTable) return window.jspdf.jsPDF;
@@ -5233,8 +5160,12 @@ function fmtWaktu(ts) {
   const m = String(ts).match(/^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})/);
   return m ? m[3] + '-' + m[2] + '-' + m[1] + ' ' + m[4] + ':' + m[5] + ' WIB' : String(ts);
 }
+const IMG_SIZE_CACHE = {};
 function imgSize(dataUrl) {
-  return new Promise(function(resolve) { const im = new Image(); im.onload = function(){ resolve({ w: im.naturalWidth, h: im.naturalHeight }); }; im.onerror = function(){ resolve(null); }; im.src = dataUrl; });
+  if (!dataUrl) return Promise.resolve(null);
+  if (IMG_SIZE_CACHE[dataUrl]) return IMG_SIZE_CACHE[dataUrl];
+  IMG_SIZE_CACHE[dataUrl] = new Promise(function(resolve) { const im = new Image(); im.onload = function(){ resolve({ w: im.naturalWidth, h: im.naturalHeight }); }; im.onerror = function(){ resolve(null); }; im.src = dataUrl; });
+  return IMG_SIZE_CACHE[dataUrl];
 }
 
 async function kopSppg(doc, dapur, logoData) {
@@ -5248,7 +5179,7 @@ async function kopSppg(doc, dapur, logoData) {
   if (logo) {
     const sz = await imgSize(logo);
     if (sz) { const k = Math.min(logoBox / sz.w, logoBox / sz.h); const lw = sz.w * k, lh = sz.h * k;
-      try { doc.addImage(logo, 'PNG', M + (logoBox - lw) / 2, kopTop + (logoBox - lh) / 2, lw, lh); textX = (M + logoBox + 4 + W - M) / 2; } catch (e) {} }
+      try { doc.addImage(logo, 'PNG', M + (logoBox - lw) / 2, kopTop + (logoBox - lh) / 2, lw, lh, 'kop_logo', 'FAST'); textX = (M + logoBox + 4 + W - M) / 2; } catch (e) {} }
   }
   doc.setTextColor.apply(doc, ink);
   let ky = kopTop + (ba.dapur.alamat && kontakDapur(ba.dapur) ? 4.5 : ba.dapur.alamat || kontakDapur(ba.dapur) ? 6 : 8);
@@ -5362,12 +5293,12 @@ function ttdRingkas(dataUrl) {
   });
   return TTD_RINGKAS[dataUrl];
 }
-async function ttdKolom(doc, cx, y, judul, img, nama, sub) {
+async function ttdKolom(doc, cx, y, judul, img, nama, sub, alias) {
   doc.setFont('helvetica', 'normal'); doc.setFontSize(10);
   judul.forEach(function(t, i) { doc.text(t, cx, y + i * 5, { align: 'center', maxWidth: 58 }); });
   const top = y + judul.length * 5 - 1, maxW = 48, maxH = 22;
   if (img) { const g = await ttdRingkas(img);
-    if (g) { const k = Math.min(maxW / g.w, maxH / g.h); try { doc.addImage(g.url, 'JPEG', cx - g.w * k / 2, top + (maxH - g.h * k) / 2, g.w * k, g.h * k); } catch (e) {} } }
+    if (g) { const k = Math.min(maxW / g.w, maxH / g.h); try { doc.addImage(g.url, 'JPEG', cx - g.w * k / 2, top + (maxH - g.h * k) / 2, g.w * k, g.h * k, alias || undefined, 'FAST'); } catch (e) {} } }
   const ny = top + maxH + 5, nm = nama || '..............................';
   doc.setFont('helvetica', 'bold'); doc.text(nm, cx, ny, { align: 'center', maxWidth: 58 });
   const nw = Math.min(doc.getTextWidth(nm), 58); doc.setLineWidth(0.3); doc.line(cx - nw / 2, ny + 1, cx + nw / 2, ny + 1);
@@ -5376,6 +5307,9 @@ async function ttdKolom(doc, cx, y, judul, img, nama, sub) {
 }
 async function buildKwitansiPdf(k) {
   const JsPDF = await ensureJsPDF();
+  // Perkecil semua gambar TTD & ukuran logo secara paralel sebelum menyusun halaman PDF
+  const imgs = [k.akuntan && k.akuntan.ttd, k.kepala && k.kepala.ttd].concat(k.rows.map(function(r) { return r.ttd; })).filter(Boolean);
+  await Promise.all([imgSize(k.logo || LOGO_BGN)].concat(imgs.map(ttdRingkas)));
   const doc = new JsPDF({ unit: 'mm', format: 'a4', orientation: 'portrait' });
   const W = 210, M = 15, ink = [33, 37, 41];
   const tg = tglPanjang(k.tanggal);
@@ -5405,13 +5339,13 @@ async function buildKwitansiPdf(k) {
     doc.setFont('helvetica', 'normal'); y += 8;
     doc.text(tg.tgl, kol[2], y, { align: 'center' }); y += 7;
     if (rel) {
-      await ttdKolom(doc, kol[0], y, ['Penerima,', ''], r.ttd, r.nama);
-      await ttdKolom(doc, kol[1], y, ['Mengetahui,', 'Akuntan'], k.akuntan.ttd, k.akuntan.nama);
-      await ttdKolom(doc, kol[2], y, ['Menyetujui,', 'Kepala SPPG'], k.kepala.ttd, k.kepala.nama, k.kepala.nip ? 'NIP. ' + k.kepala.nip : '');
+      await ttdKolom(doc, kol[0], y, ['Penerima,', ''], r.ttd, r.nama, '', 'p_' + r.penerima_id);
+      await ttdKolom(doc, kol[1], y, ['Mengetahui,', 'Akuntan'], k.akuntan.ttd, k.akuntan.nama, '', 'ttd_akn');
+      await ttdKolom(doc, kol[2], y, ['Menyetujui,', 'Kepala SPPG'], k.kepala.ttd, k.kepala.nama, k.kepala.nip ? 'NIP. ' + k.kepala.nip : '', 'ttd_kpl');
     } else {
-      await ttdKolom(doc, kol[0], y, ['Mengetahui,', 'Akuntan'], k.akuntan.ttd, k.akuntan.nama);
-      await ttdKolom(doc, kol[1], y, ['Menyerahkan,', 'Kepala SPPG'], k.kepala.ttd, k.kepala.nama, k.kepala.nip ? 'NIP. ' + k.kepala.nip : '');
-      await ttdKolom(doc, kol[2], y, ['Menerima,', r.jenis === 'KADER' ? 'PJ Posyandu' : 'PIC Sekolah'], r.ttd, r.nama);
+      await ttdKolom(doc, kol[0], y, ['Mengetahui,', 'Akuntan'], k.akuntan.ttd, k.akuntan.nama, '', 'ttd_akn');
+      await ttdKolom(doc, kol[1], y, ['Menyerahkan,', 'Kepala SPPG'], k.kepala.ttd, k.kepala.nama, k.kepala.nip ? 'NIP. ' + k.kepala.nip : '', 'ttd_kpl');
+      await ttdKolom(doc, kol[2], y, ['Menerima,', r.jenis === 'KADER' ? 'PJ Posyandu' : 'PIC Sekolah'], r.ttd, r.nama, '', 'p_' + r.penerima_id);
     }
     doc.setFontSize(7.5); doc.setTextColor(110); doc.setDrawColor(200); doc.setLineWidth(0.2); doc.line(M, 297 - 13, W - M, 297 - 13);
     doc.text((r.nomor || 'Tanda terima upah relawan') + '  ·  ' + k.tanggal + '  ·  Dibuat dari aplikasi Keuangan MBG', M, 297 - 9);
@@ -5423,6 +5357,7 @@ async function buildKwitansiPdf(k) {
 // Kuitansi insentif Mitra/Yayasan (Fasilitas SPPG) bertanda tangan: Pengawas Keuangan (menyerahkan) & PIC/pemilik gedung (menerima)
 async function buildKuitansiInsentifPdf(k) {
   const JsPDF = await ensureJsPDF();
+  await Promise.all([imgSize(k.logo || LOGO_BGN), ttdRingkas(k.pengawas && k.pengawas.ttd), ttdRingkas(k.pic && k.pic.ttd)]);
   const doc = new JsPDF({ unit: 'mm', format: 'a4', orientation: 'portrait' });
   const W = 210, M = 15, ink = [33, 37, 41];
   const sppg = /^SPPG\b/i.test(k.dapur.nama) ? k.dapur.nama : 'SPPG ' + k.dapur.nama;
@@ -5441,32 +5376,40 @@ async function buildKuitansiInsentifPdf(k) {
     });
     doc.setFont('helvetica', 'normal'); y += 8;
     doc.text(tg.tgl, W - M - 40, y, { align: 'center' }); y += 7;
-    await ttdKolom(doc, M + 40, y, ['Yang menyerahkan,', 'Pengawas Keuangan'], k.pengawas.ttd, k.pengawas.nama);
-    await ttdKolom(doc, W - M - 40, y, ['Yang menerima,', ''], k.pic.ttd, t.penerima || k.pic.nama);
+    await ttdKolom(doc, M + 40, y, ['Yang menyerahkan,', 'Pengawas Keuangan'], k.pengawas.ttd, k.pengawas.nama, '', 'ttd_pgw');
+    await ttdKolom(doc, W - M - 40, y, ['Yang menerima,', ''], k.pic.ttd, t.penerima || k.pic.nama, '', 'ttd_pic');
     doc.setFontSize(7.5); doc.setTextColor(110); doc.setDrawColor(200); doc.setLineWidth(0.2); doc.line(M, 297 - 13, W - M, 297 - 13);
     doc.text(t.no_bukti + '  ·  ' + t.tanggal + '  ·  Dibuat dari aplikasi Keuangan MBG', M, 297 - 9);
   }
   doc.setProperties({ title: 'Kuitansi insentif ' + sppg + ' ' + k.tanggal, creator: 'Keuangan MBG' });
   return doc;
 }
-// Buat (ulang) PDF kwitansi bertanda tangan yang diminta LPDH, simpan ke Drive → tautannya dipakai LPDH. Mengembalikan jumlah yang gagal.
+// Buat (ulang) PDF kwitansi bertanda tangan yang diminta LPDH, simpan ke Drive secara paralel → kembalikan { gagal, urls, nomor } agar LPDH tidak perlu memuat ulang getDataLPDH.
 let SIAPKAN_KW_GALAT = [];
 async function siapkanKwitansiLpdh(dapurId, tanggal, perlu) {
   SIAPKAN_KW_GALAT = [];
-  const r = await api('getKwitansiCetak', { dapur: dapurId, tanggal: tanggal, jenis: perlu.join(',') });   // hanya jenis yang perlu → gambar TTD lain tidak dimuat
-  if (!r.ok) return perlu.length;
+  const [r] = await Promise.all([api('getKwitansiCetak', { dapur: dapurId, tanggal: tanggal, jenis: perlu.join(',') }), ensureJsPDF().catch(function(){})]);   // hanya jenis yang perlu → gambar TTD lain tidak dimuat
+  if (!r.ok) return { gagal: perlu.length, urls: {}, nomor: null };
+  const nomor = { PIC_SEKOLAH: [], KADER: [], RELAWAN: {} };
+  (r.data.rows || []).forEach(function(x) {
+    if (!x.nomor) return;
+    if (x.jenis === 'RELAWAN') nomor.RELAWAN[String(x.nama || '').trim().toLowerCase()] = x.nomor;
+    else if (nomor[x.jenis]) nomor[x.jenis].push(x.nomor);
+  });
   let gagal = 0;
-  for (const jn of perlu) {
+  const urls = {};
+  await Promise.all(perlu.map(async function(jn) {
     try {
       let doc = null;
       if (jn === 'INSENTIF') { if (r.data.insentif.length) doc = await buildKuitansiInsentifPdf(r.data); }
       else { const bag = r.data.rows.filter(function(x) { return x.jenis === jn; }); if (bag.length) doc = await buildKwitansiPdf(Object.assign({}, r.data, { rows: bag })); }
-      if (!doc) continue;
+      if (!doc) return;
       const up = await apiUpload('simpanKwitansiFile', { dapur: dapurId, tanggal: tanggal, jenis: jn, fileData: doc.output('datauristring').split(',')[1] });
       if (!up.ok) { gagal++; SIAPKAN_KW_GALAT.push(jn + ': ' + (up.error || 'gagal')); }
+      else if (up.data && up.data.url) urls[jn] = up.data.url;
     } catch (e) { gagal++; SIAPKAN_KW_GALAT.push(jn + ': ' + e.message); }
-  }
-  return gagal;
+  }));
+  return { gagal: gagal, urls: urls, nomor: nomor };
 }
 function KwitansiPage({ session, scope, toast }) {
   const role = session.user.role;
@@ -5493,17 +5436,17 @@ function KwitansiPage({ session, scope, toast }) {
       if (!r.ok) { toast(r.error, 'error'); return; }
       const doc = await buildKwitansiPdf(r.data);
       doc.save('Kwitansi_' + String(r.data.dapur.kode || r.data.dapur.nama).replace(/[^A-Za-z0-9]+/g, '_') + '_' + tanggal + '.pdf');
-      // satu PDF per jenis disimpan di Drive; tautannya otomatis masuk ke LPDH hari itu (C1_Relawan / C_Operasional)
+      // satu PDF per jenis disimpan di Drive secara paralel; tautannya otomatis masuk ke LPDH hari itu (C1_Relawan / C_Operasional)
       let gagalSimpan = 0;
-      for (const jn of JENIS_DP) {
+      await Promise.all(JENIS_DP.map(async function(jn) {
         const bag = r.data.rows.filter(function(x) { return x.jenis === jn[0]; });
-        if (!bag.length) continue;
+        if (!bag.length) return;
         try {
           const d2 = await buildKwitansiPdf(Object.assign({}, r.data, { rows: bag }));
           const up = await apiUpload('simpanKwitansiFile', { dapur: dapurId, tanggal: tanggal, jenis: jn[0], fileData: d2.output('datauristring').split(',')[1] });
           if (!up.ok) gagalSimpan++;
         } catch (e) { gagalSimpan++; }
-      }
+      }));
       if (gagalSimpan) toast('PDF terunduh, tetapi ' + gagalSimpan + ' berkas gagal disimpan ke Drive — tautan LPDH belum terbarui. Coba terbitkan lagi.', 'error');
       const kurang = [];
       if (!r.data.akuntan.ttd) kurang.push('akuntan');
@@ -5671,8 +5614,8 @@ function photoToSignature(file) {
   return new Promise(function(resolve, reject) {
     const url = URL.createObjectURL(file); const im = new Image();
     im.onload = function() {
-      const k = Math.min(1, 900 / im.naturalWidth, 500 / im.naturalHeight);
-      const c = document.createElement('canvas'); c.width = Math.round(im.naturalWidth * k); c.height = Math.round(im.naturalHeight * k);
+      const k = Math.min(1, 600 / im.naturalWidth, 240 / im.naturalHeight);
+      const c = document.createElement('canvas'); c.width = Math.max(1, Math.round(im.naturalWidth * k)); c.height = Math.max(1, Math.round(im.naturalHeight * k));
       const ctx = c.getContext('2d'); ctx.drawImage(im, 0, 0, c.width, c.height);
       const img = ctx.getImageData(0, 0, c.width, c.height); const d = img.data;
       for (let i = 0; i < d.length; i += 4) {
@@ -6347,33 +6290,6 @@ function EditRealisasiModal({ trx, periode, session, toast, onClose, onSaved, re
   </Modal>;
 }
 
-// ---------- Input darurat (admin) ----------
-function DaruratPage({ session, dapurList, toast, onSaved }) {
-  const [dapur, setDapur] = useState('');
-  const [alasan, setAlasan] = useState('');
-  const [mulai, setMulai] = useState(false);
-  return <div>
-    <Card className="mb-3">
-      <div className="flex items-start gap-2 rounded-lg p-3 mb-3" style={{ background: '#F8E9E5', color: COLORS.danger }}>
-        {I.warn}<div className="text-sm">Jalur darurat: transaksi dicatat <b>tanpa pengajuan dan tanpa persetujuan Yayasan</b>. Setiap transaksi ditandai merah di Riwayat dan dihitung di Dashboard. Pakai hanya saat Yayasan tidak bisa dihubungi.</div>
-      </div>
-      <div className="grid sm:grid-cols-2 gap-x-4">
-        <Field label="Dapur *">
-          <select value={dapur} onChange={function(e){ setDapur(e.target.value); setMulai(false); }} style={inputStyle}>
-            <option value="">Pilih dapur…</option>
-            {dapurList.map(function(d){ return <option key={d.id} value={d.id}>{d.nama}</option>; })}
-          </select>
-        </Field>
-        <Field label="Alasan darurat *" hint="Tercatat permanen bersama transaksi">
-          <input value={alasan} onChange={function(e){ setAlasan(e.target.value); setMulai(false); }} style={inputStyle} placeholder="cth. Yayasan tidak dapat dihubungi, gas habis"/>
-        </Field>
-      </div>
-      {!mulai && <Btn disabled={!dapur || alasan.trim().length < 5} onClick={function(){ setMulai(true); }}>{I.arrowR} Lanjut input</Btn>}
-    </Card>
-    {mulai && <InputTransaksi key={dapur} session={session} toast={toast} dapurId={dapur} alasan={alasan.trim()} onSaved={onSaved}/>}
-  </div>;
-}
-
 
 // ---------- Perubahan transaksi periode lalu ----------
 const TX_LABEL = { tanggal: 'Tanggal', no_bukti: 'No Bukti', jenis: 'Jenis', kategori: 'Kategori', uraian: 'Uraian', sumber: 'Sumber',
@@ -6622,7 +6538,6 @@ function App() {
       ['bukubesar','Buku Besar',I.trend],
       ['kwitansi','Kwitansi',I.download],
       ['penerima','Data Penerima',I.users],
-      ['darurat','Input Darurat',I.warn],
       ['perubahan','Persetujuan Edit',I.edit],
       ['realmassal','Realisasi Massal',I.download],
       ['periode','Periode',I.settings],
@@ -6695,8 +6610,6 @@ function App() {
           {view === 'beritaacara' && <BeritaAcaraPage session={session} scope={effScope} dapurList={dapurList} toast={toast}/>}
           {view === 'persetujuan' && <PersetujuanPage session={session} scope={effScope} dapurList={dapurList} toast={toast}/>}
           {view === 'perubahan' && <PerubahanAdminPage session={session} dapurList={dapurList} toast={toast}/>}
-          {view === 'darurat' && <DaruratPage session={session} dapurList={dapurList} toast={toast}
-            onSaved={function(){ setRefreshKey(function(k){return k+1;}); setView('riwayat'); }}/>}
           {view === 'laporan' && <Laporan session={session} scope={effScope} toast={toast}/>}
           {view === 'lpdh' && <LpdhPage session={session} scope={effScope} toast={toast}/>}
           {view === 'rencana' && <RencanaOpsPage session={session} scope={effScope} toast={toast}/>}

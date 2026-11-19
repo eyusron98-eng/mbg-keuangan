@@ -47,7 +47,10 @@ function makeEnv(usersInit, transform) {
       flush() {},
     },
     CacheService: { getScriptCache: () => ({
-      get: k => (k in cacheStore ? cacheStore[k] : null), put: (k, v) => { cacheStore[k] = v; },
+      get: k => (k in cacheStore ? cacheStore[k] : null),
+      getAll: ks => { const o = {}; (ks || []).forEach(k => { if (k in cacheStore) o[k] = cacheStore[k]; }); return o; },
+      put: (k, v) => { if (String(v).length > 100000) throw new Error('Argument too large: value'); cacheStore[k] = v; },
+      putAll: map => { Object.keys(map || {}).forEach(k => { if (String(map[k]).length > 100000) throw new Error('Argument too large: value'); cacheStore[k] = map[k]; }); },
       remove: k => { delete cacheStore[k]; }, removeAll: ks => ks.forEach(k => delete cacheStore[k]) }) },
     LockService: { getScriptLock: () => ({ waitLock() {}, releaseLock() {} }) },
     ContentService: { createTextOutput: s => ({ s, setMimeType() { return this; } }), MimeType: { JSON: 'json' } },
@@ -371,8 +374,8 @@ const ok = (c, m) => { console.log((c ? 'PASS ' : 'FAIL ') + m); if (!c) fails++
   ok(r.ok, 'transaksi lama dengan nomor kembar tetap bisa diedit selama nomornya tidak diubah: ' + (r.error || ''));
   r = call(e8, 'POST', { action: 'updateTransaksi', token: tkA, id: 'T7', no_bukti: 'NT-77' });
   ok(!r.ok && /sudah dipakai/.test(r.error), 'mengubah nomor ke nomor yang sudah dipakai ditolak');
-  r = call(e8, 'POST', { action: 'addTransaksi', token: tk8('adm'), dapur: 'D001', tanggal: '2026-10-14', jenis: 'Operasional', kategori: 'Gas', uraian: 'x', sumber: 'VA', riil: 1, no_bukti: '—', alasan: 'uji' });
-  ok(!r.ok && /tidak boleh/.test(r.error), 'input darurat dengan "—" ditolak');
+  r = call(e8, 'POST', { action: 'addTransaksi', token: tk8('adm'), dapur: 'D001', tanggal: '2026-10-14', jenis: 'Operasional', kategori: 'Gas', uraian: 'x', sumber: 'VA', riil: 1, no_bukti: 'NT-999', alasan: 'uji' });
+  ok(!r.ok && /Input Darurat telah dihapus/i.test(r.error), 'Input Darurat (addTransaksi) sudah dinonaktifkan');
 
   // ── Tahap 2 ──
   // rincian per bahan wajib & harus sama dengan nominal
@@ -861,6 +864,17 @@ const ok = (c, m) => { console.log((c ? 'PASS ' : 'FAIL ') + m); if (!c) fails++
     ok(m.drive === 0, 'gambar tanda tangan diambil dari cache pada permintaan berikutnya (Drive dibuka ' + m.drive + '×)');
     m = ukur(() => call(e8, 'POST', { action: 'getKwitansiCetak', token: tA, tanggal: '2026-10-21', jenis: 'INSENTIF' }));
     ok(m.r.ok && m.r.data.rows.length === 0, 'cetak ulang hanya jenis yang diminta (baris lain tidak dibaca)');
+    // Jenis non-INSENTIF tidak perlu membaca sheet Transaksi (ribuan baris) saat cetak atau simpan PDF
+    m = ukur(() => call(e8, 'POST', { action: 'getKwitansiCetak', token: tA, tanggal: '2026-10-21', jenis: 'KADER' }));
+    ok(m.r.ok && (m.baca.Transaksi || 0) === 0, 'getKwitansiCetak KADER tidak membaca sheet Transaksi (' + (m.baca.Transaksi || 0) + '×)');
+    m = ukur(() => call(e8, 'POST', { action: 'simpanKwitansiFile', token: tP, tanggal: '2026-10-21', jenis: 'KADER', fileData: 'JVBERg==' }));
+    ok(m.r.ok && (m.baca.Transaksi || 0) === 0, 'simpanKwitansiFile KADER tidak membaca sheet Transaksi (' + (m.baca.Transaksi || 0) + '×)');
+    // TTD besar (> 100 KB base64, melebihi batas 1 kunci CacheService) tetap ter-cache terpotong → 0 buka Drive saat cetak
+    const bigB64 = Buffer.alloc(110000, 65).toString('base64');   // ~146 KB base64 (< 300 KB batas TTD)
+    const rBig = call(e8, 'POST', { action: 'saveTtd', token: tA, fileData: 'data:image/png;base64,' + bigB64 });
+    ok(rBig.ok, 'simpan TTD besar (> 100 KB base64) berhasil');
+    m = ukur(() => call(e8, 'POST', { action: 'getKwitansiCetak', token: tA, tanggal: '2026-10-21', jenis: 'KADER' }));
+    ok(m.r.ok && m.drive === 0 && m.r.data.akuntan.ttd === 'data:image/png;base64,' + bigB64, 'TTD besar ter-cache terpotong (Drive dibuka ' + m.drive + '×)');
   }
 
 

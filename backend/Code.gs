@@ -674,29 +674,11 @@ function getTransaksi(p) {
   return { ok: true, data: rows };
 }
 
-// v6: input bebas hanya untuk ADMIN (jalur darurat). Akuntan wajib lewat Pengajuan → Realisasi.
+// Input Darurat dihapus: semua pengeluaran wajib melalui menu Pengajuan (otomatis terealisasi saat disetujui).
 function addTransaksi(p) {
   const me = authUser(p);
   if (!me) return { ok: false, error: SESI_ERR };
-  if (me.role !== 'admin') return { ok: false, error: 'Input langsung dinonaktifkan. Gunakan menu Pengajuan lalu Realisasi.' };
-  if (!p.alasan || !String(p.alasan).trim()) return { ok: false, error: 'Alasan input darurat wajib diisi' };
-  p.user_id = me.id;
-  const required = ['dapur', 'tanggal', 'jenis', 'kategori', 'uraian', 'sumber', 'riil'];
-  for (const k of required) if (p[k] === undefined || p[k] === '') return { ok: false, error: 'Field wajib kosong: ' + k };
-
-  const periode = findPeriodeCoveringDate(p.dapur, p.tanggal);
-  if (!periode) return { ok: false, error: 'Tanggal di luar periode aktif. Setup periode dulu.' };
-
-  const nb = siapkanNoBukti(p.no_bukti, p.dapur, p.tanggal, null);
-  if (nb.error) return { ok: false, error: nb.error };
-  const id = idUnik('TX');
-  getSheet(SHEETS.TRANSAKSI).appendRow([
-    id, p.dapur, p.tanggal, teksSel(nb.value), p.jenis, p.kategori, p.uraian,
-    p.sumber, Number(p.riil) || 0, Number(p.unriil) || Number(p.riil) || 0,
-    p.bukti_url || '', new Date(), p.user_id || '', periode.id, 'DARURAT: ' + String(p.alasan).trim()
-  ]);
-  logActivity(p.user_id, 'addTransaksi(darurat)', id);
-  return { ok: true, data: { id: id, periode_id: periode.id, no_bukti: nb.value } };
+  return { ok: false, error: 'Fitur Input Darurat telah dihapus. Semua pengeluaran wajib melalui menu Pengajuan.' };
 }
 
 function updateTransaksi(p) {
@@ -2745,20 +2727,30 @@ function getDataLPDH(p) {
     + topups.filter(sebelum).reduce(function(s, t) { return s + t.jumlah; }, 0)
     - tx.filter(sebelum).reduce(function(s, t) { return s + nilaiLPDH(t); }, 0);
 
-  const items = {};
-  readAllItems().forEach(function(i) { items[i.id] = i; });
-  // Nomor bukti dibaca persis seperti yang tampil di Sheet (data lama "01-2026" tersimpan sebagai tanggal)
-  const txSh = getSheet(SHEETS.TRANSAKSI);
-  const tampil = txSh.getRange(1, 4, Math.max(txSh.getLastRow(), 1), 1).getDisplayValues();
-  const relawan = bacaRelawanSemua(dapurId);
+  const txHari = tx.filter(function(t) { return t.tanggal === tgl; });
+  const adaLink = txHari.some(function(t) { return !!t.pengajuan_item_id; });
+  const items = {}, heads = {};
+  if (adaLink) {
+    readAllItems().forEach(function(i) { items[i.id] = i; });
+    readAllPengajuan().forEach(function(h) { heads[h.id] = h; });
+  }
+  // Nomor bukti dibaca persis seperti yang tampil di Sheet (data lama "01-2026" tersimpan sebagai tanggal),
+  // cukup pada rentang baris transaksi hari itu saja (bukan seluruh sheet Transaksi).
+  let minRow = 0, maxRow = 0, tampil = [];
+  if (txHari.length) {
+    minRow = txHari.reduce(function(m, t) { return Math.min(m, t._rowIndex); }, txHari[0]._rowIndex);
+    maxRow = txHari.reduce(function(m, t) { return Math.max(m, t._rowIndex); }, txHari[0]._rowIndex);
+    tampil = getSheet(SHEETS.TRANSAKSI).getRange(minRow, 4, maxRow - minRow + 1, 1).getDisplayValues();
+  }
+  const relawan = txHari.some(isHonorRelawan) ? bacaRelawanSemua(dapurId) : {};
   const insentif = bacaInsentifSemua(dapurId);
-  const heads = {}; readAllPengajuan().forEach(function(h) { heads[h.id] = h; });
-  const kk = konteksKw(dapurId, tgl, tx.filter(function(t) { return t.tanggal === tgl; }));
+  const kk = konteksKw(dapurId, tgl, txHari);
   const ttdOtomatis = kk.ttdPic && kk.ttdAkn;
-  const hari = tx.filter(function(t) { return t.tanggal === tgl; }).map(function(t) {
+  const hari = txHari.map(function(t) {
     const link = String(t.pengajuan_item_id || '');
     const it = items[isFeeLink(link) ? link.substring(BIAYA_ADMIN_PREFIX.length) : link];
-    return { id: t.id, tanggal: t.tanggal, no_bukti: String((tampil[t.seq] && tampil[t.seq][0]) || t.no_bukti || ''), jenis: t.jenis, kategori: t.kategori,
+    const disp = tampil[t._rowIndex - minRow];
+    return { id: t.id, tanggal: t.tanggal, no_bukti: String((disp && disp[0]) || t.no_bukti || ''), jenis: t.jenis, kategori: t.kategori,
       uraian: t.uraian, sumber: t.sumber, riil: nilaiLPDH(t), aktual: t.riil, bukti_url: String(t.bukti_url || ''),
       pemasok: it ? (isFeeLink(link) ? it.bank : it.penerima_nama) : '', seq: t.seq,
       rincian: it && !isFeeLink(link) && t.jenis === 'Bahan Baku' ? it.rincian : [], nota_url: it && !isFeeLink(link) ? it.nota_url : '',
@@ -2896,19 +2888,90 @@ const TTD_MAX_BYTES = 300 * 1024;
 
 function ttdKey(userId) { return 'ttd_' + userId; }
 
+// Batch & chunked cache untuk gambar tanda tangan (maks 5 × 90 KB = 450 KB base64, mencakup batas 300 KB penuh).
+// Mengurangi 50-80 panggilan CacheService/DriveApp berurutan saat cetak kwitansi / unduh LPDH menjadi 1-2 panggilan batch.
+const TTD_CACHE_CHUNK = 90000;
+function ttdCacheGetAll(cache, keys) {
+  if (!keys.length) return {};
+  try { if (typeof cache.getAll === 'function') return cache.getAll(keys) || {}; } catch (e) {}
+  const out = {};
+  keys.forEach(function(k) { try { const v = cache.get(k); if (v !== null && v !== undefined) out[k] = v; } catch (e) {} });
+  return out;
+}
+function ttdCachePutAll(cache, map) {
+  const keys = Object.keys(map);
+  if (!keys.length) return;
+  try { if (typeof cache.putAll === 'function') { cache.putAll(map, 21600); return; } } catch (e) {}
+  keys.forEach(function(k) { try { cache.put(k, map[k], 21600); } catch (e) {} });
+}
+function ttdStageCache(toPut, fid, url) {
+  if (!fid || !url || url.length > TTD_CACHE_CHUNK * 5) return;
+  const ck = 'ttdimg_' + fid;
+  if (url.length <= TTD_CACHE_CHUNK) { toPut[ck] = url; return; }
+  const n = Math.ceil(url.length / TTD_CACHE_CHUNK);
+  toPut[ck] = '#CH:' + n;
+  for (let i = 0; i < n; i++) toPut[ck + '_' + i] = url.substring(i * TTD_CACHE_CHUNK, (i + 1) * TTD_CACHE_CHUNK);
+}
+function readTtdBatch(userIds, props) {
+  const out = {}, fidById = {}, uniqFids = [], seenFid = {};
+  const src = props || PropertiesService.getScriptProperties().getProperties();
+  (userIds || []).forEach(function(uid) {
+    if (!uid) return;
+    const fid = src[ttdKey(uid)];
+    if (!fid) { out[uid] = null; return; }
+    fidById[uid] = fid;
+    if (!seenFid[fid]) { seenFid[fid] = 1; uniqFids.push(fid); }
+  });
+  if (!uniqFids.length) return out;
+  const cache = CacheService.getScriptCache();
+  const hit = ttdCacheGetAll(cache, uniqFids.map(function(f) { return 'ttdimg_' + f; }));
+  const urlByFid = {}, chunkNeed = [], chunkKeys = [];
+  uniqFids.forEach(function(fid) {
+    const v = hit['ttdimg_' + fid];
+    if (!v) return;
+    if (v.indexOf('#CH:') === 0) {
+      const n = Number(v.substring(4)) || 0;
+      if (n > 0 && n <= 5) {
+        chunkNeed.push({ fid: fid, n: n });
+        for (let i = 0; i < n; i++) chunkKeys.push('ttdimg_' + fid + '_' + i);
+      }
+    } else urlByFid[fid] = v;
+  });
+  if (chunkKeys.length) {
+    const chHit = ttdCacheGetAll(cache, chunkKeys);
+    chunkNeed.forEach(function(item) {
+      let ok = true, parts = [];
+      for (let i = 0; i < item.n; i++) {
+        const part = chHit['ttdimg_' + item.fid + '_' + i];
+        if (!part) { ok = false; break; }
+        parts.push(part);
+      }
+      if (ok) urlByFid[item.fid] = parts.join('');
+    });
+  }
+  const toPut = {};
+  uniqFids.forEach(function(fid) {
+    if (fid in urlByFid) return;
+    try {
+      const blob = DriveApp.getFileById(fid).getBlob();
+      const url = 'data:' + (blob.getContentType() || 'image/png') + ';base64,' + Utilities.base64Encode(blob.getBytes());
+      urlByFid[fid] = url;
+      ttdStageCache(toPut, fid, url);
+    } catch (e) { urlByFid[fid] = null; }
+  });
+  ttdCachePutAll(cache, toPut);
+  Object.keys(fidById).forEach(function(uid) { out[uid] = urlByFid[fidById[uid]] || null; });
+  return out;
+}
+
 // props (opsional): hasil getProperties() sekali per permintaan agar tidak memanggil PropertiesService berulang.
 // Gambar disimpan di cache 6 jam dengan kunci file id: TTD yang diganti otomatis memakai file baru (tidak basi).
 function readTtdDataUrl(userId, props) {
+  if (!userId) return null;
   const fid = props ? props[ttdKey(userId)] : PropertiesService.getScriptProperties().getProperty(ttdKey(userId));
   if (!fid) return null;
-  const cache = CacheService.getScriptCache(), ck = 'ttdimg_' + fid;
-  try { const c = cache.get(ck); if (c) return c; } catch (e) {}
-  try {
-    const blob = DriveApp.getFileById(fid).getBlob();
-    const url = 'data:' + (blob.getContentType() || 'image/png') + ';base64,' + Utilities.base64Encode(blob.getBytes());
-    if (url.length < 95000) { try { cache.put(ck, url, 21600); } catch (e) {} }
-    return url;
-  } catch (e) { return null; }
+  const tmp = {}; tmp[ttdKey(userId)] = fid;
+  return readTtdBatch([userId], tmp)[userId] || null;
 }
 
 // Pemilik tanda tangan: diri sendiri (akuntan/PIC), Kepala SPPG (diunggah PIC/admin), atau penerima insentif/relawan
@@ -2961,6 +3024,9 @@ function saveTtd(p) {
   const file = DriveApp.createFile(Utilities.newBlob(bytes, 'image/png', 'TTD_' + sas.kunci + '_' + nowStamp() + '.png'));
   try { file.setSharing(DriveApp.Access.PRIVATE, DriveApp.Permission.NONE); } catch (e) {}
   props.setProperty(ttdKey(sas.kunci), file.getId());
+  // Langsung isi cache agar cetak kwitansi pertama setelah simpan tidak perlu membaca ulang Drive
+  const toPut = {}; ttdStageCache(toPut, file.getId(), 'data:image/png;base64,' + raw);
+  ttdCachePutAll(CacheService.getScriptCache(), toPut);
   if (old) { try { DriveApp.getFileById(old).setTrashed(true); } catch (e) {} }
   logActivity(me.id, 'saveTtd', sas.kunci + ' ' + file.getId());
   return { ok: true };
@@ -3142,7 +3208,10 @@ function getTtdPengesahan(p) {
   if (!dapurId) return { ok: false, error: 'Pilih dapur' };
   const props = PropertiesService.getScriptProperties().getProperties();
   const akn = getSheet(SHEETS.USERS).getDataRange().getValues().slice(1).find(function(x) { return String(x[4]).toLowerCase() === 'akuntan' && x[5] === dapurId && String(x[6]).toUpperCase() === 'YA'; });
-  return { ok: true, data: { pengawas: akn ? readTtdDataUrl(akn[0], props) : null, kepala: readTtdDataUrl('KEPALA_' + dapurId, props), wakil: readTtdDataUrl('WAKIL_' + dapurId, props) } };
+  const ids = ['KEPALA_' + dapurId, 'WAKIL_' + dapurId];
+  if (akn) ids.push(akn[0]);
+  const map = readTtdBatch(ids, props);
+  return { ok: true, data: { pengawas: akn ? (map[akn[0]] || null) : null, kepala: map['KEPALA_' + dapurId] || null, wakil: map['WAKIL_' + dapurId] || null } };
 }
 function getKwitansiPerlu(p) {
   const me = authUser(p);
@@ -3166,18 +3235,26 @@ function simpanKwitansiFile(p) {
   if (!raw) return { ok: false, error: 'File kwitansi kosong' };
   const bytes = Utilities.base64Decode(raw);
   if (bytes.length > 8 * 1024 * 1024) return { ok: false, error: 'File kwitansi terlalu besar' };
-  return withLock(function() {
-    const sh = kwitansiFileSheet(true), d = sh.getDataRange().getValues();
-    const kode = (getDapur().data.find(function(x) { return x.id === dapurId; }) || {}).kode || dapurId;
-    const file = DriveApp.getFolderById(DRIVE_FOLDER_ID).createFile(Utilities.newBlob(bytes, 'application/pdf', 'KWITANSI_' + jenis + '_' + kode + '_' + tanggal + '.pdf'));
-    file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
-    const baris = [dapurId, tanggal, jenis, file.getUrl(), file.getId(), new Date(), me.id, sigKwitansi(konteksKw(dapurId, tanggal), jenis)];
-    let ada = 0;
-    for (let i = 1; i < d.length; i++) if (d[i][0] === dapurId && tglTeks(d[i][1]) === tanggal && String(d[i][2]) === jenis) { ada = i + 1; break; }
-    if (ada) { try { DriveApp.getFileById(String(d[ada - 1][4])).setTrashed(true); } catch (e) {} sh.getRange(ada, 1, 1, baris.length).setValues([baris]); } else sh.appendRow(baris);
-    logActivity(me.id, 'simpanKwitansiFile', dapurId + ' ' + tanggal + ' ' + jenis);
-    return { ok: true, data: { url: file.getUrl() } };
-  });
+  // Unggah PDF ke Drive di luar withLock agar unggahan beberapa jenis kwitansi bisa berjalan serentak (paralel)
+  const kode = (getDapur().data.find(function(x) { return x.id === dapurId; }) || {}).kode || dapurId;
+  const file = DriveApp.getFolderById(DRIVE_FOLDER_ID).createFile(Utilities.newBlob(bytes, 'application/pdf', 'KWITANSI_' + jenis + '_' + kode + '_' + tanggal + '.pdf'));
+  file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+  try {
+    return withLock(function() {
+      const sh = kwitansiFileSheet(true), d = sh.getDataRange().getValues();
+      // Hanya INSENTIF yang memakai sheet Transaksi dalam sigKwitansi → jenis lain lewati pembacaan Transaksi
+      const k = konteksKw(dapurId, tanggal, jenis === 'INSENTIF' ? null : []);
+      const baris = [dapurId, tanggal, jenis, file.getUrl(), file.getId(), new Date(), me.id, sigKwitansi(k, jenis)];
+      let ada = 0;
+      for (let i = 1; i < d.length; i++) if (d[i][0] === dapurId && tglTeks(d[i][1]) === tanggal && String(d[i][2]) === jenis) { ada = i + 1; break; }
+      if (ada) { try { DriveApp.getFileById(String(d[ada - 1][4])).setTrashed(true); } catch (e) {} sh.getRange(ada, 1, 1, baris.length).setValues([baris]); } else sh.appendRow(baris);
+      logActivity(me.id, 'simpanKwitansiFile', dapurId + ' ' + tanggal + ' ' + jenis);
+      return { ok: true, data: { url: file.getUrl() } };
+    });
+  } catch (e) {
+    try { file.setTrashed(true); } catch (e2) {}
+    throw e;
+  }
 }
 // Bahan untuk membuat ulang PDF kwitansi (dipakai LPDH): data yang SUDAH terbit + tanda tangan tersimpan. Tidak menomori ulang / mengubah apa pun.
 function getKwitansiCetak(p) {
@@ -3186,14 +3263,22 @@ function getKwitansiCetak(p) {
   if (!bisaIsiLPDH(me)) return { ok: false, error: 'Hanya PIC, akuntan, atau admin' };
   const dapurId = lpdhDapur(me, p.dapur), tanggal = String(p.tanggal || '').substring(0, 10);
   if (!dapurId || !/^\d{4}-\d{2}-\d{2}$/.test(tanggal)) return { ok: false, error: 'Pilih dapur & tanggal' };
-  lengkapiNomorRelawan(dapurId, tanggal);   // kwitansi relawan lama diberi nomor TTUR sebelum dicetak
-  const urut = { RELAWAN: 0, PIC_SEKOLAH: 1, KADER: 2 }, k = konteksKw(dapurId, tanggal), ident = readIdentitasLPDH(dapurId) || {};
   let jenis = p.jenis; if (typeof jenis === 'string') jenis = jenis ? jenis.split(',') : null;
   const mau = function(j) { return !jenis || jenis.indexOf(j) >= 0; };   // hanya jenis yang perlu dibuat → gambar TTD yang lain tidak dibaca
-  const rows = k.kw.filter(function(x) { return mau(x.jenis); })
-    .sort(function(a, b) { return (urut[a.jenis] - urut[b.jenis]) || (a.seq - b.seq) || a.nama.localeCompare(b.nama); })
-    .map(function(x) { return { penerima_id: x.penerima_id, jenis: x.jenis, nomor: x.nomor, nama: x.nama, jabatan: x.jabatan, lembaga: x.lembaga, pm: x.pm, nominal: x.nominal,
-      keterangan: x.keterangan, ttd: readTtdDataUrl('P_' + x.penerima_id, k.props) }; });
+  if (mau('RELAWAN')) lengkapiNomorRelawan(dapurId, tanggal);   // kwitansi relawan lama diberi nomor TTUR sebelum dicetak
+  const urut = { RELAWAN: 0, PIC_SEKOLAH: 1, KADER: 2 };
+  const k = konteksKw(dapurId, tanggal, mau('INSENTIF') ? null : []);
+  const ident = readIdentitasLPDH(dapurId) || {};
+  const kwPilih = k.kw.filter(function(x) { return mau(x.jenis); })
+    .sort(function(a, b) { return (urut[a.jenis] - urut[b.jenis]) || (a.seq - b.seq) || a.nama.localeCompare(b.nama); });
+  // Baca seluruh tanda tangan (penerima + akuntan + kepala + PIC) dalam satu batch cache
+  const ttdIds = kwPilih.map(function(x) { return 'P_' + x.penerima_id; });
+  ttdIds.push('KEPALA_' + dapurId);
+  if (k.akn) ttdIds.push(k.akn.id);
+  if (k.pic) ttdIds.push(k.pic.id);
+  const ttdMap = readTtdBatch(ttdIds, k.props);
+  const rows = kwPilih.map(function(x) { return { penerima_id: x.penerima_id, jenis: x.jenis, nomor: x.nomor, nama: x.nama, jabatan: x.jabatan, lembaga: x.lembaga, pm: x.pm, nominal: x.nominal,
+    keterangan: x.keterangan, ttd: ttdMap['P_' + x.penerima_id] || null }; });
   const items = {}, heads = {};
   if (mau('INSENTIF') && k.ins.length) { readAllItems().forEach(function(i) { items[i.id] = i; }); readAllPengajuan().forEach(function(h) { heads[h.id] = h; }); }
   const insentif = (mau('INSENTIF') ? k.ins : []).map(function(t) {
@@ -3201,9 +3286,9 @@ function getKwitansiCetak(p) {
     return { id: t.id, tanggal: t.tanggal, no_bukti: String(t.no_bukti || ''), nominal: nilaiLPDH(t), uraian: String(t.uraian || ''), kategori: String(t.kategori || ''),
       penerima: it.penerima_nama || '', bank: it.bank || '', no_rek: it.no_rek || '', ref: it.pengajuan_id && heads[it.pengajuan_id] ? heads[it.pengajuan_id].nomor + ' #' + it.urut : '' };
   });
-  return { ok: true, data: Object.assign(dataKwitansi(dapurId, tanggal, k), { rows: rows, insentif: insentif,
-    pengawas: { nama: ident.pengawas_nama || (k.akn && k.akn.nama) || '', ttd: k.akn ? readTtdDataUrl(k.akn.id, k.props) : null },
-    pic: { nama: k.pic ? k.pic.nama : '', ttd: k.pic ? readTtdDataUrl(k.pic.id, k.props) : null }, perlu: kwitansiPerlu(k) }) };
+  return { ok: true, data: Object.assign(dataKwitansi(dapurId, tanggal, k, ident, ttdMap), { rows: rows, insentif: insentif,
+    pengawas: { nama: ident.pengawas_nama || (k.akn && k.akn.nama) || '', ttd: k.akn ? (ttdMap[k.akn.id] || null) : null },
+    pic: { nama: k.pic ? k.pic.nama : '', ttd: k.pic ? (ttdMap[k.pic.id] || null) : null }, perlu: kwitansiPerlu(k) }) };
 }
 // Nomor Tanda Terima Upah Relawan: urut per dapur per bulan, terpisah dari BASTI → NNN/TTUR/SPPG-<kode>/<bulan romawi>/<tahun>
 function nomorRelawan(seq, kode, tanggal) {
@@ -3246,17 +3331,18 @@ function relawanHadirTanggal(dapurId, tanggal, txHari) {
   });
   return ada ? nama : null;
 }
-function dataKwitansi(dapurId, tanggal, k) {
+function dataKwitansi(dapurId, tanggal, k, identPre, ttdPre) {
   const dapurRow = getDapur().data.find(function(d) { return d.id === dapurId; }) || {};
-  const ident = readIdentitasLPDH(dapurId) || {};
+  const ident = identPre || readIdentitasLPDH(dapurId) || {};
   let akn = k ? k.akn : null, props = k ? k.props : PropertiesService.getScriptProperties().getProperties();
   if (!k) { const u = getSheet(SHEETS.USERS).getDataRange().getValues().slice(1).find(function(x) { return String(x[4]).toLowerCase() === 'akuntan' && x[5] === dapurId && String(x[6]).toUpperCase() === 'YA'; });
     akn = u ? { id: u[0], nama: String(u[3] || '') } : null; }
+  const ttd = ttdPre || readTtdBatch([akn ? akn.id : '', 'KEPALA_' + dapurId], props);
   return { tanggal: tanggal,
     dapur: { id: dapurId, nama: dapurRow.nama || dapurId, kode: dapurRow.kode || '', alamat: dapurRow.alamat || '', telepon: dapurRow.telepon || '', email: dapurRow.email || '' },
     logo: readLogoKop(),
-    akuntan: { nama: akn ? akn.nama : '', ttd: akn ? readTtdDataUrl(akn.id, props) : null },
-    kepala: { nama: ident.kepala_nama || '', nip: ident.kepala_nip || '', ttd: readTtdDataUrl('KEPALA_' + dapurId, props) } };
+    akuntan: { nama: akn ? akn.nama : '', ttd: akn ? (ttd[akn.id] || null) : null },
+    kepala: { nama: ident.kepala_nama || '', nip: ident.kepala_nip || '', ttd: ttd['KEPALA_' + dapurId] || null } };
 }
 function getKwitansiHarian(p) {
   const me = authUser(p);
@@ -3305,15 +3391,20 @@ function terbitkanKwitansi(p) {
     if (!(nominal > 0)) return { ok: false, error: 'Nominal ' + pn.nama + ' wajib > 0' };
     masuk.push({ pn: pn, nominal: nominal, pm: Math.max(0, Math.round(Number(x.pm) || 0)), keterangan: String(x.keterangan || '').trim().substring(0, 120) });
   }
+  const propsTtd = PropertiesService.getScriptProperties().getProperties();
+  const aknRow = getSheet(SHEETS.USERS).getDataRange().getValues().slice(1).find(function(x) { return String(x[4]).toLowerCase() === 'akuntan' && x[5] === dapurId && String(x[6]).toUpperCase() === 'YA'; });
+  const akn = aknRow ? { id: aknRow[0], nama: String(aknRow[3] || '') } : null;
+  const ttdIds = masuk.map(function(m) { return 'P_' + m.pn.id; }).concat(['KEPALA_' + dapurId, akn ? akn.id : '']);
+  const ttdMap = readTtdBatch(ttdIds, propsTtd);
   return withLock(function() {
     const sh = kwitansiSheet(), semua = bacaKwitansi(dapurId), hariIni = semua.filter(function(k) { return k.tanggal === tanggal; });
     const kode = (getDapur().data.find(function(d) { return d.id === dapurId; }) || {}).kode || '';
     const bulan = tanggal.substring(0, 7);
-    const propsTtd = PropertiesService.getScriptProperties().getProperties();
     const noBasti = nomorBerikut(semua, dapurId, bulan, false), noRl = nomorBerikut(semua, dapurId, bulan, true);
     // urutan cetak: relawan, PIC sekolah, kader; dalam jenis menurut nama
     const urut = { RELAWAN: 0, PIC_SEKOLAH: 1, KADER: 2 };
     masuk.sort(function(x, y) { return (urut[x.pn.jenis] - urut[y.pn.jenis]) || x.pn.nama.localeCompare(y.pn.nama); });
+    const now = new Date(), baruRows = [];
     const hasil = masuk.map(function(m) {
       const ada = hariIni.find(function(k) { return k.penerima_id === m.pn.id; });
       let nomor = ada ? ada.nomor : '', sq = ada ? ada.seq : 0;
@@ -3321,16 +3412,17 @@ function terbitkanKwitansi(p) {
         if (m.pn.jenis === 'RELAWAN') { sq = noRl.ambil(); nomor = nomorRelawan(sq, kode, tanggal); }
         else { sq = noBasti.ambil(); nomor = nomorBasti(sq, kode, tanggal); }
       }
-      const baris = [ada ? ada.id : idUnik('KW'), dapurId, tanggal, m.pn.id, m.pn.jenis, nomor, sq, m.pn.nama, m.pn.jabatan, m.pn.lembaga, m.pm, m.nominal, m.keterangan, new Date(), me.id];
-      if (ada) sh.getRange(ada._row, 1, 1, baris.length).setValues([baris]); else sh.appendRow(baris);
+      const baris = [ada ? ada.id : idUnik('KW'), dapurId, tanggal, m.pn.id, m.pn.jenis, nomor, sq, m.pn.nama, m.pn.jabatan, m.pn.lembaga, m.pm, m.nominal, m.keterangan, now, me.id];
+      if (ada) sh.getRange(ada._row, 1, 1, baris.length).setValues([baris]); else baruRows.push(baris);
       return { penerima_id: m.pn.id, jenis: m.pn.jenis, nomor: nomor, nama: m.pn.nama, jabatan: m.pn.jabatan, lembaga: m.pn.lembaga, pm: m.pm, nominal: m.nominal,
-        keterangan: m.keterangan, ttd: readTtdDataUrl('P_' + m.pn.id, propsTtd) };
+        keterangan: m.keterangan, ttd: ttdMap['P_' + m.pn.id] || null };
     });
+    if (baruRows.length) sh.getRange(sh.getLastRow() + 1, 1, baruRows.length, baruRows[0].length).setValues(baruRows);
     noBasti.simpan(); noRl.simpan();
     // yang tidak dipilih lagi dibuang dari tanggal ini (nomornya tidak dipakai ulang agar arsip tidak bentrok)
     hariIni.filter(function(k) { return !dipakai[k.penerima_id]; }).sort(function(x, y) { return y._row - x._row; }).forEach(function(k) { sh.deleteRow(k._row); });
     logActivity(me.id, 'terbitkanKwitansi', dapurId + ' ' + tanggal + ' (' + hasil.length + ')');
-    return { ok: true, data: Object.assign(dataKwitansi(dapurId, tanggal), { rows: hasil }) };
+    return { ok: true, data: Object.assign(dataKwitansi(dapurId, tanggal, { akn: akn, props: propsTtd }, null, ttdMap), { rows: hasil }) };
   });
 }
 

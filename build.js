@@ -32,13 +32,13 @@ fs.unlinkSync(cssFile);
 // 2. JSX → JavaScript biasa (hanya preset react; sintaks modern lainnya dibiarkan)
 const m = src.match(/<script type="text\/babel"[^>]*>([\s\S]*?)<\/script>/);
 if (!m) throw new Error('Build gagal: <script type="text/babel"> tidak ditemukan');
-const js = Babel.transform(m[1], { presets: ['react'], sourceType: 'script', comments: false, compact: false }).code;
+const js = Babel.transform(m[1], { presets: ['react'], sourceType: 'script', comments: false, compact: true }).code;
 if (/<\/script/i.test(js)) throw new Error('Build gagal: hasil JavaScript memuat "</script"');
 
 // 3. Rakit index.html
 let out = src;
 out = ganti(out, '<!DOCTYPE html>\n', '<!DOCTYPE html>\n<!-- FILE HASIL BUILD — jangan diedit langsung. Ubah src/index.html lalu jalankan: npm run build -->\n');
-out = ganti(out, TAILWIND_TAG, '<link rel="preconnect" href="https://unpkg.com" crossorigin>\n');
+out = ganti(out, TAILWIND_TAG, '<link rel="preconnect" href="https://unpkg.com" crossorigin>\n<link rel="preconnect" href="https://script.google.com" crossorigin>\n');
 out = ganti(out, BABEL_TAG, '');
 out = ganti(out, m[0], '<script>\n' + js + '\n</script>');
 out = ganti(out, '</head>', '<style id="tailwind">' + css + '</style>\n</head>');

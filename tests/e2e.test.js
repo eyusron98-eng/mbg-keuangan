@@ -306,6 +306,7 @@ async function isiBahanBaku(page, uraian, volume, harga) {
     assert(srv.log.urls.length + srv.log.posts.length > n0 && baru.some(u => /sebagai[=":]+"?akuntan/.test(u) && /sebagai_dapur[=":]+"?D1/.test(u)), 'permintaan tidak membawa mode peran: ' + baru.join(' || '));
     await page.click('text=Kembali ke Admin');
     await page.waitForSelector('nav:visible >> text=Pengguna');
+    assert(!(await page.isVisible('nav:visible >> text=Input Darurat')), 'menu Input Darurat harus sudah dihapus');
     assert(!(await page.isVisible('text=Mode uji: bertindak sebagai')), 'spanduk mode uji masih tampil');
   });
 
@@ -748,6 +749,8 @@ async function isiBahanBaku(page, uraian, volume, harga) {
     const cetak = srv.log.urls.concat(srv.log.posts.map(x => JSON.stringify(x.params))).find(u => /getKwitansiCetak/.test(u)) || '';
     assert(/KADER(%2C|,)INSENTIF/.test(cetak), 'cetak ulang harus meminta jenis yang perlu saja: ' + cetak.slice(0, 200));
     assert(up === 'INSENTIF,KADER', 'kwitansi yang diminta LPDH harus dibuat & disimpan dulu: ' + up);
+    const nLpdh = srv.log.urls.filter(u => /action=getDataLPDH/.test(u)).length;
+    assert(nLpdh === 1, 'unduh LPDH tidak boleh memanggil ulang getDataLPDH setelah kwitansi dibuat (dipanggil ' + nLpdh + 'x)');
     const ExcelJS = require('exceljs');
     const wb = new ExcelJS.Workbook(); await wb.xlsx.readFile(await dl.path());
     const v = (s, a) => wb.getWorksheet(s).getCell(a).value;
