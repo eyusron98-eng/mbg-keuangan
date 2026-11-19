@@ -797,15 +797,16 @@ function getDashboard(p) {
   });
 
   let totalVATopup = 0, totalPettyTopup = 0;
-  const topupListVA = [], topupListPetty = [];
+  const topupListVA = [], topupListPetty = [], allVA = [], allPetty = [];
   targetDapur.forEach(d => {
-    readVATopups(d).forEach(t => { if (periodeIds.indexOf(t.periode_id) >= 0) { totalVATopup += t.jumlah; topupListVA.push(t); } });
-    readPettyTopups(d).forEach(t => { if (periodeIds.indexOf(t.periode_id) >= 0) { totalPettyTopup += t.jumlah; topupListPetty.push(t); } });
+    readVATopups(d).forEach(t => { allVA.push(t); if (periodeIds.indexOf(t.periode_id) >= 0) { totalVATopup += t.jumlah; topupListVA.push(t); } });
+    readPettyTopups(d).forEach(t => { allPetty.push(t); if (periodeIds.indexOf(t.periode_id) >= 0) { totalPettyTopup += t.jumlah; topupListPetty.push(t); } });
   });
   const saldoVATotal = saldoVAAwal + totalVATopup;
   const saldoPettyTotal = saldoPettyAwal + totalPettyTopup;
 
-  const transaksi = readAllTransaksi(targetDapur).filter(r => {
+  const allTx = readAllTransaksi(targetDapur);
+  const transaksi = allTx.filter(r => {
     if (periodeIds.length === 0) return false;
     return periodeIds.indexOf(r.periode_id) >= 0;
   });
@@ -865,10 +866,38 @@ function getDashboard(p) {
     periodeInfo = { multi: true, count: activePeriode.length };
   }
 
+  // Hitung sinkronisasi saldo akhir periode sebelumnya di memori (0 pembacaan sheet tambahan)
+  let saldoSync = null;
+  if (targetDapur.length === 1) {
+    const aktifP = allPeriode.find(r => r.status === 'AKTIF') || null;
+    const prevP = allPeriode.filter(r => r.status !== 'AKTIF' && (!aktifP || r.periode_no < aktifP.periode_no))
+      .sort((a, b) => b.periode_no - a.periode_no)[0] || null;
+    if (prevP) {
+      let keluarVA = 0, keluarLpdh = 0, keluarPetty = 0, topupVA = 0, topupPetty = 0;
+      allVA.forEach(t => { if (t.periode_id === prevP.id) topupVA += (Number(t.jumlah) || 0); });
+      allPetty.forEach(t => { if (t.periode_id === prevP.id) topupPetty += (Number(t.jumlah) || 0); });
+      allTx.forEach(t => {
+        if (t.periode_id !== prevP.id) return;
+        if (t.sumber === 'VA') { keluarVA += (Number(t.riil) || 0); keluarLpdh += nilaiLPDH(t); }
+        else if (t.sumber === 'Petty Cash') keluarPetty += (Number(t.riil) || 0);
+      });
+      const masukVA = Number(prevP.saldoVA || 0) + topupVA - topupPetty;
+      const akhir = { va: masukVA - keluarVA, vaLpdh: masukVA - keluarLpdh, petty: Number(prevP.saldoPettyAwal || 0) + topupPetty - keluarPetty };
+      const awal = aktifP ? { va: Number(aktifP.saldoVA || 0), petty: Number(aktifP.saldoPettyAwal || 0) } : null;
+      const beda = Math.abs(akhir.va - akhir.vaLpdh) >= 1;
+      const acuanVA = awal && beda && Math.abs(awal.va - akhir.vaLpdh) < Math.abs(awal.va - akhir.va) ? akhir.vaLpdh : akhir.va;
+      saldoSync = { aktif: aktifP, prev: prevP, akhir: akhir, awal: awal, beda: beda,
+        selisihVA: awal ? awal.va - acuanVA : 0, selisihPetty: awal ? awal.petty - akhir.petty : 0 };
+    }
+  }
+  const periodeListSorted = allPeriode.slice().sort((a, b) => (a.tanggal_mulai < b.tanggal_mulai ? 1 : -1));
+
   return {
     ok: true,
     data: {
       periode: periodeInfo,
+      periodeList: periodeListSorted,
+      saldoSync: saldoSync,
       hasActivePeriode: activePeriode.length > 0,
       kpi: {
         penerima: totalPenerima,
@@ -1561,7 +1590,12 @@ function getPengajuan(p) {
     periodeAktif[d] = activeByDapur[d].id;
     periodeRange[d] = { mulai: activeByDapur[d].tanggal_mulai, akhir: activeByDapur[d].tanggal_akhir };
   });
-  return { ok: true, data: { pengajuan: out, va: va, periodeAktif: periodeAktif, periodeRange: periodeRange } };
+  let baAktif = undefined;
+  if (!p.periode_id && !p.filter && me.role !== 'asisten') {
+    const b = getBADaftar({ token: p.token, sebagai: p.sebagai, sebagai_dapur: p.sebagai_dapur, mode: 'aktif' });
+    if (b && b.ok) baAktif = (b.data || []).filter(g => g.periode_status === 'AKTIF');
+  }
+  return { ok: true, data: { pengajuan: out, va: va, periodeAktif: periodeAktif, periodeRange: periodeRange, baAktif: baAktif } };
 }
 
 function findItem(itemId) {
@@ -2185,20 +2219,75 @@ let _SS = null;
 let _reqVals = {};
 let _reqSheets = {};
 function resetReqCache() { _reqVals = {}; _reqSheets = {}; }
-function wrapSheet(name, sh) {
-  if (!sh || name === SHEETS.SESI) return sh;
+
+// Cache nilai sheet lintas-permintaan di CacheService (90 detik, otomatis dihapus instan saat ada penulisan ke sheet tsb).
+// Di lingkungan Apps Script asli (typeof __book === 'undefined'), permintaan baca yang ter-cache tidak perlu membuka SpreadsheetApp sama sekali.
+function useSrvSheetCache() { return typeof __book === 'undefined' || (typeof __srvCache !== 'undefined' && __srvCache); }
+const SRV_SHEET_TTL = 90;
+function srvSheetGet(name) {
+  if (!useSrvSheetCache() || name === SHEETS.SESI || name === SHEETS.LOG) return null;
+  try {
+    const cache = CacheService.getScriptCache();
+    const raw = cache.get('shv_' + name);
+    if (!raw) return null;
+    if (raw.indexOf('#CH:') === 0) {
+      const n = Number(raw.substring(4)) || 0;
+      if (n <= 0 || n > 6) return null;
+      const keys = []; for (let i = 0; i < n; i++) keys.push('shv_' + name + '_' + i);
+      const hit = ttdCacheGetAll(cache, keys);
+      const parts = [];
+      for (let i = 0; i < n; i++) { if (!hit[keys[i]]) return null; parts.push(hit[keys[i]]); }
+      return JSON.parse(parts.join(''));
+    }
+    return JSON.parse(raw);
+  } catch (e) { return null; }
+}
+function srvSheetPut(name, vals) {
+  if (!useSrvSheetCache() || name === SHEETS.SESI || name === SHEETS.LOG) return;
+  try {
+    const norm = vals.map(function(row) {
+      return row.map(function(v) { return v instanceof Date ? formatTimestamp(v) : v; });
+    });
+    const s = JSON.stringify(norm);
+    if (s.length > 90000 * 6) return;
+    const cache = CacheService.getScriptCache();
+    if (s.length <= 90000) { cache.put('shv_' + name, s, SRV_SHEET_TTL); return; }
+    const n = Math.ceil(s.length / 90000), map = {};
+    map['shv_' + name] = '#CH:' + n;
+    for (let i = 0; i < n; i++) map['shv_' + name + '_' + i] = s.substring(i * 90000, (i + 1) * 90000);
+    ttdCachePutAll(cache, map);
+  } catch (e) {}
+}
+function srvSheetDel(name) {
+  if (!useSrvSheetCache()) return;
+  try { CacheService.getScriptCache().remove('shv_' + name); } catch (e) {}
+}
+
+function wrapSheet(name, shOrFn) {
+  if (!shOrFn) return shOrFn;
+  if (name === SHEETS.SESI) return typeof shOrFn === 'function' ? shOrFn() : shOrFn;
   if (_reqSheets[name]) return _reqSheets[name];
-  const inv = function() { delete _reqVals[name]; };
+  let _raw = typeof shOrFn === 'function' ? null : shOrFn;
+  function raw() { if (!_raw) _raw = shOrFn(); return _raw; }
+  const inv = function() { delete _reqVals[name]; srvSheetDel(name); };
   const w = {
     getDataRange: function() {
       return {
         getValues: function() {
-          if (!_reqVals[name]) _reqVals[name] = sh.getDataRange().getValues();
+          if (!_reqVals[name]) {
+            const cached = srvSheetGet(name);
+            if (cached) _reqVals[name] = cached;
+            else {
+              _reqVals[name] = raw().getDataRange().getValues();
+              srvSheetPut(name, _reqVals[name]);
+            }
+          }
           return _reqVals[name].map(function(r) { return r.slice(); });
         }
       };
     },
     getRange: function(r, c, nr, nc) {
+      const sh = raw();
       const rng = arguments.length === 2 ? sh.getRange(r, c) : arguments.length === 3 ? sh.getRange(r, c, nr) : sh.getRange(r, c, nr, nc);
       return {
         getValues: function() { return rng.getValues(); },
@@ -2208,18 +2297,17 @@ function wrapSheet(name, sh) {
         setFontWeight: function(v) { return rng.setFontWeight(v); },
       };
     },
-    appendRow: function(row) { inv(); return sh.appendRow(row); },
-    deleteRow: function(n) { inv(); return sh.deleteRow(n); },
-    getLastRow: function() { return _reqVals[name] ? _reqVals[name].length : sh.getLastRow(); },
-    getLastColumn: function() { return sh.getLastColumn(); },
-    clear: function() { inv(); return sh.clear(); },
+    appendRow: function(row) { inv(); return raw().appendRow(row); },
+    deleteRow: function(n) { inv(); return raw().deleteRow(n); },
+    getLastRow: function() { return _reqVals[name] ? _reqVals[name].length : raw().getLastRow(); },
+    getLastColumn: function() { return raw().getLastColumn(); },
+    clear: function() { inv(); return raw().clear(); },
   };
   _reqSheets[name] = w;
   return w;
 }
 function getSS() {
   if (_SS) return _SS;
-  resetReqCache();
   let lastErr = null;
   for (let i = 0; i < 3; i++) {
     try { _SS = SpreadsheetApp.openById(SPREADSHEET_ID); return _SS; }
@@ -2233,10 +2321,12 @@ function getSS() {
 }
 
 function getSheet(name) {
-  const ss = getSS();
-  let s = ss.getSheetByName(name);
-  if (!s) throw new Error('Sheet "' + name + '" tidak ditemukan. Jalankan setupSheets() atau migrateV4() dulu.');
-  return wrapSheet(name, s);
+  return wrapSheet(name, function() {
+    const ss = getSS();
+    let s = ss.getSheetByName(name);
+    if (!s) throw new Error('Sheet "' + name + '" tidak ditemukan. Jalankan setupSheets() atau migrateV4() dulu.');
+    return s;
+  });
 }
 
 // ── Nomor bukti: wajib unik (syarat LPDH PPK). Kosong → aplikasi membuat nomor unik; "-" ditolak. ──
@@ -2295,13 +2385,15 @@ const LPDH_FIELDS = ['id_sppg', 'desa', 'kecamatan', 'kabupaten', 'provinsi', 'y
   'pengawas_nama', 'pengawas_nik', 'kepala_nama', 'kepala_nip', 'wakil_nama', 'wakil_nik', 'bast_folder'];
 
 function lpdhSheet() {
-  const ss = getSS();
-  let s = ss.getSheetByName(SHEETS.LPDH);
-  if (!s) {
-    s = ss.insertSheet(SHEETS.LPDH);
-    s.appendRow(['dapur_id'].concat(LPDH_FIELDS, ['updated_at', 'updated_by']));
-  }
-  return wrapSheet(SHEETS.LPDH, s);
+  return wrapSheet(SHEETS.LPDH, function() {
+    const ss = getSS();
+    let s = ss.getSheetByName(SHEETS.LPDH);
+    if (!s) {
+      s = ss.insertSheet(SHEETS.LPDH);
+      s.appendRow(['dapur_id'].concat(LPDH_FIELDS, ['updated_at', 'updated_by']));
+    }
+    return s;
+  });
 }
 // akuntan/pic hanya dapurnya sendiri; admin & yayasan memilih dapur
 function lpdhDapur(me, dapur) {
@@ -2362,10 +2454,12 @@ const LPDH_ALASAN = ['Kualitas tidak layak/tidak standar', 'Kemasan rusak/tumpah
   'Keterlambatan pengiriman', 'Kelebihan kirim/dikembalikan', 'Lainnya'];
 const LPDH_SYARAT = ['kontaminasi', 'fatal', 'suspend', 'verifikasi', 'sipgn'];
 function sheetOtomatis(nama, header) {
-  const ss = getSS();
-  let s = ss.getSheetByName(nama);
-  if (!s) { s = ss.insertSheet(nama); s.appendRow(header); }
-  return wrapSheet(nama, s);
+  return wrapSheet(nama, function() {
+    const ss = getSS();
+    let s = ss.getSheetByName(nama);
+    if (!s) { s = ss.insertSheet(nama); s.appendRow(header); }
+    return s;
+  });
 }
 function bacaJson(v) { try { return JSON.parse(v); } catch (e) { return null; } }
 function harianSheet() { return sheetOtomatis(SHEETS.LPDH_HARIAN, ['dapur_id', 'tanggal', 'data_json', 'updated_at', 'updated_by']); }

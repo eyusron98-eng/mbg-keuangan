@@ -179,8 +179,10 @@ async function kirimDenganSesi(kirim) {
   }
   return checkSession(j, tok);
 }
-// Cache memori & deduplikasi permintaan baca agar pindah menu/tab instan dan tidak memanggil Apps Script berulang.
-// Otomatis dibersihkan setiap kali ada aksi tulis/ubah data atau ganti sesi/peran.
+// Cache memori + localStorage (Stale-While-Revalidate) & deduplikasi permintaan baca:
+// - Pindah menu/tab: instan 0 ms dari memori.
+// - Muat ulang halaman (F5): tampil instan 0 ms dari cache localStorage sambil diperbarui di latar belakang.
+// - Otomatis dibersihkan setiap kali ada aksi tulis/ubah data atau ganti sesi/peran.
 const READ_CACHE_TTL = {
   getDapur: 300000, getKategori: 300000, getLogoKop: 300000, getBankVA: 300000,
   getPenandatangan: 180000, getTtd: 180000, getTtdPengesahan: 180000,
@@ -192,10 +194,46 @@ const READ_CACHE_TTL = {
   getDataLPDH: 45000, getHarianLPDH: 45000, getRelawanTetap: 60000, getRelawanBayar: 60000,
   getKwitansiHarian: 30000, getTugasHarian: 30000, getUsers: 60000,
 };
+const API_STORAGE_KEY = 'mbg_api_cache_v2';
+const API_STORAGE_TTL = 600000;   // 10 menit di localStorage
 const _apiCache = {};
 const _apiInflight = {};
+let _apiSaveTimer = 0;
+(function loadApiCacheStorage() {
+  try {
+    const raw = localStorage.getItem(API_STORAGE_KEY);
+    if (!raw) return;
+    const map = JSON.parse(raw) || {};
+    const now = Date.now();
+    Object.keys(map).forEach(function(k) {
+      if (map[k] && map[k].v && (now - map[k].t < API_STORAGE_TTL)) {
+        _apiCache[k] = { t: map[k].t, v: map[k].v, fromDisk: true };
+      }
+    });
+  } catch (e) {}
+})();
+function flushApiCacheStorage() {
+  _apiSaveTimer = 0;
+  try {
+    const now = Date.now();
+    const keys = Object.keys(_apiCache)
+      .filter(function(k) { return _apiCache[k] && (now - _apiCache[k].t < API_STORAGE_TTL); })
+      .sort(function(a, b) { return _apiCache[b].t - _apiCache[a].t; })
+      .slice(0, 32);
+    const out = {};
+    keys.forEach(function(k) {
+      const s = JSON.stringify(_apiCache[k].v);
+      if (s && s.length <= 32000) out[k] = { t: _apiCache[k].t, v: _apiCache[k].v };
+    });
+    localStorage.setItem(API_STORAGE_KEY, JSON.stringify(out));
+  } catch (e) {}
+}
+function scheduleApiCacheSave() {
+  if (!_apiSaveTimer) _apiSaveTimer = setTimeout(flushApiCacheStorage, 300);
+}
 function clearApiCache() {
   Object.keys(_apiCache).forEach(function(k) { delete _apiCache[k]; });
+  try { localStorage.removeItem(API_STORAGE_KEY); } catch (e) {}
 }
 function apiCacheKey(action, params) {
   const sb = paramSebagai();
@@ -204,18 +242,13 @@ function apiCacheKey(action, params) {
   ks.forEach(function(k) { if (params[k] !== undefined && params[k] !== null) norm[k] = params[k]; });
   return [AUTH_TOKEN || '', sb.sebagai || '', sb.sebagai_dapur || '', action, JSON.stringify(norm)].join('|');
 }
-async function api(action, params) {
-  params = params || {};
-  const ttl = READ_CACHE_TTL[action] || 0;
-  const key = ttl ? apiCacheKey(action, params) : '';
-  if (ttl) {
-    const hit = _apiCache[key];
-    if (hit && (Date.now() - hit.t < ttl)) return hit.v;
-    if (_apiInflight[key]) return _apiInflight[key];
-  } else {
-    clearApiCache();
-  }
-  const req = kirimDenganSesi(async function(tok) {
+function seedApiCache(action, params, val) {
+  if (!val || !val.ok) return;
+  _apiCache[apiCacheKey(action, params)] = { t: Date.now(), v: val };
+  scheduleApiCacheSave();
+}
+function fetchApiRaw(action, params) {
+  return kirimDenganSesi(async function(tok) {
     const url = new URL(API_URL);
     url.searchParams.set('action', action);
     if (tok && !params.token) url.searchParams.set('token', tok);
@@ -228,11 +261,37 @@ async function api(action, params) {
     try { const res = await fetch(url.toString(), { method: 'GET', redirect: 'follow' }); return await res.json(); }
     catch (e) { return { ok: false, error: 'Koneksi gagal: ' + e.message }; }
   });
+}
+async function api(action, params) {
+  params = params || {};
+  const ttl = READ_CACHE_TTL[action] || 0;
+  const key = ttl ? apiCacheKey(action, params) : '';
+  if (ttl) {
+    const hit = _apiCache[key];
+    if (hit && !hit.fromDisk && (Date.now() - hit.t < ttl)) return hit.v;
+    if (hit && hit.fromDisk && (Date.now() - hit.t < API_STORAGE_TTL)) {
+      // Sajikan instan dari localStorage, sekaligus segarkan di latar belakang
+      hit.fromDisk = false;
+      if (!_apiInflight[key]) {
+        const bg = fetchApiRaw(action, params).then(function(out) {
+          delete _apiInflight[key];
+          if (out && out.ok) { _apiCache[key] = { t: Date.now(), v: out }; scheduleApiCacheSave(); }
+          return out;
+        });
+        _apiInflight[key] = bg;
+      }
+      return hit.v;
+    }
+    if (_apiInflight[key]) return _apiInflight[key];
+  } else {
+    clearApiCache();
+  }
+  const req = fetchApiRaw(action, params);
   if (ttl) {
     _apiInflight[key] = req;
     const out = await req;
     delete _apiInflight[key];
-    if (out && out.ok) _apiCache[key] = { t: Date.now(), v: out };
+    if (out && out.ok) { _apiCache[key] = { t: Date.now(), v: out }; scheduleApiCacheSave(); }
     return out;
   }
   const out = await req;
@@ -515,21 +574,25 @@ function hitungSaldoAkhir(p, vaTopups, pettyTopups, tx) {
     petty: Number(p.saldoPettyAwal || 0) + topupPetty - keluarPetty,
   };
 }
-async function fetchSaldoSync(session) {
+async function fetchSaldoSync(session, plPre, vaPre, pcPre) {
   const dapur = session.user.dapur;
-  const [pl, va, pc] = await Promise.all([
-    api('getPeriodeList', { role: session.user.role, dapur: dapur, scope: dapur }),
-    api('getVATopups', { dapur: dapur }),
-    api('getPettyTopups', { dapur: dapur }),
-  ]);
-  if (!pl.ok || !va.ok || !pc.ok) return null;
-  const aktif = pl.data.find(function(p){ return p.status === 'AKTIF'; }) || null;
-  const prev = pl.data.filter(function(p){ return p.status !== 'AKTIF' && (!aktif || p.periode_no < aktif.periode_no); })
+  let plData = plPre, vaData = vaPre, pcData = pcPre;
+  if (!plData || !vaData || !pcData) {
+    const [pl, va, pc] = await Promise.all([
+      plData ? Promise.resolve({ ok: true, data: plData }) : api('getPeriodeList', { role: session.user.role, dapur: dapur, scope: dapur }),
+      vaData ? Promise.resolve({ ok: true, data: vaData }) : api('getVATopups', { dapur: dapur }),
+      pcData ? Promise.resolve({ ok: true, data: pcData }) : api('getPettyTopups', { dapur: dapur }),
+    ]);
+    if (!pl.ok || !va.ok || !pc.ok) return null;
+    plData = pl.data; vaData = va.data; pcData = pc.data;
+  }
+  const aktif = plData.find(function(p){ return p.status === 'AKTIF'; }) || null;
+  const prev = plData.filter(function(p){ return p.status !== 'AKTIF' && (!aktif || p.periode_no < aktif.periode_no); })
     .sort(function(a, b){ return b.periode_no - a.periode_no; })[0];
   if (!prev) return null;
   const tx = await api('getTransaksi', { role: session.user.role, dapur: dapur || '', scope: dapur, periode_id: prev.id });
   if (!tx.ok) return null;
-  const akhir = hitungSaldoAkhir(prev, va.data, pc.data, tx.data);
+  const akhir = hitungSaldoAkhir(prev, vaData, pcData, tx.data);
   const awal = aktif ? { va: Number(aktif.saldoVA || 0), petty: Number(aktif.saldoPettyAwal || 0) } : null;
   const beda = Math.abs(akhir.va - akhir.vaLpdh) >= 1;
   const acuanVA = awal && beda && Math.abs(awal.va - akhir.vaLpdh) < Math.abs(awal.va - akhir.va) ? akhir.vaLpdh : akhir.va;
@@ -564,14 +627,15 @@ function SaldoSyncCard({ sync, onSamakan }) {
   </Card>;
 }
 
-function SaldoSyncBanner({ session, onGoSetup }) {
-  const [sync, setSync] = useState(null);
+function SaldoSyncBanner({ session, syncData, onGoSetup }) {
+  const [sync, setSync] = useState(syncData !== undefined ? syncData : null);
   const [, bump] = useState(0);
   useEffect(function() {
+    if (syncData !== undefined) { setSync(syncData); return; }
     let live = true;
     fetchSaldoSync(session).then(function(s){ if (live) setSync(s); });
     return function() { live = false; };
-  }, []);
+  }, [syncData]);
   if (!sync || !sync.aktif || (sync.selisihVA === 0 && sync.selisihPetty === 0)) return null;
   let acked = false; try { acked = !!localStorage.getItem(syncKey(sync)); } catch (e) {}
   if (acked) return null;
@@ -804,7 +868,7 @@ function SetupPeriode({ session, toast }) {
     if (pl.ok) setList(pl.data);
     if (va.ok) setVaTopups(va.data);
     if (pc.ok) setPettyTopups(pc.data);
-    fetchSaldoSync(session).then(setSync);   // tidak memblokir tampilan Setup
+    fetchSaldoSync(session, pl.ok ? pl.data : null, va.ok ? va.data : null, pc.ok ? pc.data : null).then(setSync);   // tanpa panggil ulang pl/va/pc
   }, []);
   useEffect(function() { load(); }, [load]);
 
@@ -957,20 +1021,20 @@ function Dashboard({ session, scope, toast, onGoSetup }) {
   const [selPeriode, setSelPeriode] = useState('');
   const canPickPeriode = (session.user.role === 'akuntan' || session.user.role === 'pic') && scope && scope !== 'ALL';
 
-  useEffect(function() {
-    if (canPickPeriode) {
-      api('getPeriodeList', { role: session.user.role, dapur: scope, scope: scope }).then(function(r){
-        if (r.ok) setPeriodeList(r.data);
-      });
-    }
-  }, [scope]);
-
   const load = useCallback(async function() {
     setLoading(true);
     const res = await api('getDashboard', { role: session.user.role, dapur: session.user.dapur || '',
       scope: scope || 'ALL', periode_id: selPeriode || '' });
     setLoading(false);
-    if (res.ok) setData(res.data); else toast(res.error || 'Gagal memuat dashboard', 'error');
+    if (res.ok) {
+      setData(res.data);
+      if (Array.isArray(res.data.periodeList)) {
+        setPeriodeList(res.data.periodeList);
+        seedApiCache('getPeriodeList', { role: session.user.role, dapur: scope, scope: scope }, { ok: true, data: res.data.periodeList });
+      } else if (canPickPeriode) {
+        api('getPeriodeList', { role: session.user.role, dapur: scope, scope: scope }).then(function(r){ if (r.ok) setPeriodeList(r.data); });
+      }
+    } else toast(res.error || 'Gagal memuat dashboard', 'error');
   }, [session, scope, selPeriode]);
   useEffect(function() { load(); }, [load]);
 
@@ -983,7 +1047,7 @@ function Dashboard({ session, scope, toast, onGoSetup }) {
 
   return (
     <div>
-      {session.user.role === 'akuntan' && onGoSetup && <SaldoSyncBanner session={session} onGoSetup={onGoSetup}/>}
+      {session.user.role === 'akuntan' && onGoSetup && <SaldoSyncBanner session={session} syncData={data.saldoSync} onGoSetup={onGoSetup}/>}
       <Card className="mb-3">
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
           <div>
@@ -3114,7 +3178,7 @@ function Laporan({ session, scope, toast }) {
 
   // Penanda tangan Laporan: Akuntan dapur, Perwakilan Mitra/Yayasan (dari LPDH), dan Kepala SPPG (dari LPDH) + gambar TTD
   const [penandatangan, setPenandatangan] = useState(null);
-  const dapurLaporan = periode ? periode.dapur : '';
+  const dapurLaporan = (periode && periode.dapur) || (scope && scope !== 'ALL' ? scope : (session.user.dapur || ''));
   useEffect(function() {
     if (!dapurLaporan) return;
     let live = true;
@@ -4805,11 +4869,15 @@ function PengajuanPage({ session, scope, dapurList, toast }) {
 
   const load = useCallback(async function() {
     setLoading(true);
-    const pBa = !isAsisten ? api('getBADaftar', { mode: 'aktif' }) : null;
     const res = await api('getPengajuan', { scope: scope || 'ALL' });
     setLoading(false);
-    if (res.ok) setData(res.data); else toast(res.error || 'Gagal memuat pengajuan', 'error');
-    if (pBa) { const b = await pBa; if (b.ok) setBaList(b.data.filter(function(g){ return g.periode_status === 'AKTIF'; })); }
+    if (res.ok) {
+      setData(res.data);
+      if (!isAsisten) {
+        if (Array.isArray(res.data.baAktif)) setBaList(res.data.baAktif);
+        else { const b = await api('getBADaftar', { mode: 'aktif' }); if (b.ok) setBaList(b.data.filter(function(g){ return g.periode_status === 'AKTIF'; })); }
+      }
+    } else toast(res.error || 'Gagal memuat pengajuan', 'error');
   }, [scope]);
   useEffect(function() {
     setDataLalu(null);
@@ -6577,11 +6645,13 @@ function App() {
       const sc = session.user.dapur || 'ALL';
       setScope(sc);
       api('getDapur').then(function(r){ if (r.ok) setDapurList(r.data); });
-      // Pra-muat daftar periode & kategori di latar belakang agar perpindahan ke Laporan / Buku Kas / Pengajuan langsung cepat
+      // Pra-muat daftar periode & kategori hanya saat antrean request sedang kosong (idle) agar tidak menghambat halaman pertama
       const t = setTimeout(function() {
-        api('getKategori');
-        if (session.user.role !== 'asisten') api('getPeriodeList', { role: session.user.role, dapur: sc, scope: sc });
-      }, 400);
+        if (Object.keys(_apiInflight).length === 0) {
+          api('getKategori');
+          if (session.user.role !== 'asisten') api('getPeriodeList', { role: session.user.role, dapur: sc, scope: sc });
+        }
+      }, 1500);
       return function() { clearTimeout(t); };
     }
   }, [authSession, actAs]);

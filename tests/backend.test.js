@@ -896,6 +896,16 @@ const ok = (c, m) => { console.log((c ? 'PASS ' : 'FAIL ') + m); if (!c) fails++
     ok(rBig.ok, 'simpan TTD besar (> 100 KB base64) berhasil');
     m = ukur(() => call(e8, 'POST', { action: 'getKwitansiCetak', token: tA, tanggal: '2026-10-21', jenis: 'KADER' }));
     ok(m.r.ok && m.drive === 0 && m.r.data.akuntan.ttd === 'data:image/png;base64,' + bigB64, 'TTD besar ter-cache terpotong (Drive dibuka ' + m.drive + '×)');
+
+    // Cache sheet lintas-permintaan di CacheService: request ke-2 membaca 0 sheet (tanpa SpreadsheetApp.openById) & otomatis di-invalidasi saat ada penulisan
+    e8.__srvCache = true;
+    const mDash1 = ukur(() => call(e8, 'POST', { action: 'getDashboard', token: tA, scope: 'D001' }));
+    const mDash2 = ukur(() => call(e8, 'POST', { action: 'getDashboard', token: tA, scope: 'D001' }));
+    ok(mDash1.r.ok && Array.isArray(mDash1.r.data.periodeList) && mDash2.r.ok && mDash2.tot === 0, 'getDashboard menyertakan periodeList & request ke-2 membaca 0 sheet dari SpreadsheetApp (' + mDash2.tot + '×)');
+    const mPj1 = ukur(() => call(e8, 'POST', { action: 'getPengajuan', token: tA, scope: 'D001' }));
+    const mPj2 = ukur(() => call(e8, 'POST', { action: 'getPengajuan', token: tA, scope: 'D001' }));
+    ok(mPj1.r.ok && Array.isArray(mPj1.r.data.baAktif) && mPj2.r.ok && mPj2.tot === 0, 'getPengajuan menyertakan baAktif & request ke-2 membaca 0 sheet dari SpreadsheetApp (' + mPj2.tot + '×)');
+    e8.__srvCache = false;
   }
 
 
