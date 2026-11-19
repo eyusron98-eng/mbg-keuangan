@@ -296,7 +296,8 @@ async function isiBahanBaku(page, uraian, volume, harga) {
     await page.selectOption('[aria-label="Dapur uji"]', 'D1');
     await page.click('.sheet >> text=Mulai');
     await page.waitForSelector('text=Mode uji: bertindak sebagai');
-    await page.waitForSelector('nav:visible >> text=Realisasi');
+    await page.waitForSelector('nav:visible >> text=Setup');
+    assert(!(await page.isVisible('nav:visible >> text=Realisasi')), 'menu Realisasi terpisah tidak boleh tampil lagi untuk akuntan');
     assert(!(await page.isVisible('nav:visible >> text=Pengguna')), 'menu admin masih tampil saat sebagai akuntan');
     const n0 = srv.log.urls.length + srv.log.posts.length;
     await page.click('nav:visible >> text=Riwayat');
@@ -308,72 +309,84 @@ async function isiBahanBaku(page, uraian, volume, harga) {
     assert(!(await page.isVisible('text=Mode uji: bertindak sebagai')), 'spanduk mode uji masih tampil');
   });
 
-  all &= await run('Realisasi sekali klik: Bahan Baku pakai nota, sewa kendaraan kuitansi otomatis, gas tetap unggah', { role: 'akuntan' }, async (page, srv) => {
+  all &= await run('Pengajuan Operasional lainnya: wajib rencana realisasi & bukti, rekomendasi biaya admin dari bank VA, total potong VA = anggaran + admin', { role: 'akuntan',
+    override: (a, m, p) => a === 'getKategori' ? { ok: true, data: { 'Bahan Baku': ['Beras'], 'Operasional': ['Gas', 'Insentif Guru/PIC Sekolah', 'Asuransi kecelakaan kerja (BPJS) relawan'], 'Fasilitas SPPG': ['Sewa Gedung'] } }
+      : a === 'getPenerima' ? { ok: true, data: [{ id: 'pnBRI', nama: 'Toko Gas', bank: 'BRI', no_rek: '456', aktif: true }, { id: 'pnBNI', nama: 'Pak Guru', bank: 'BNI', no_rek: '789', aktif: true }] }
+      : a === 'getBankVA' ? { ok: true, data: { bank: 'Bank Negara Indonesia (BNI)', fee: 6500 } }
+      : a === 'getPaguOps' ? { ok: true, data: { tanggal: p.tanggal, pm: 1000, indeks: 100, libur: false, pagu: 3000000, terpakai: 0, diajukan: 0, nDiajukan: 0, rencanaBelum: 0, bankVA: 'BNI' } }
+      : null }, async (page, srv) => {
     await login(page, 'siti');
     await page.waitForSelector('header');
-    await page.click('nav:visible >> text=Realisasi');
-    await page.click('text=Beras 50 kg');
-    await page.waitForSelector('text=nota dari pengajuan');
-    await page.waitForSelector('.sheet >> text=NT-RB77');
-    assert(!(await page.isVisible('.sheet input[placeholder="kosong = otomatis"]')), 'kolom nomor bukti seharusnya tidak tampil untuk Bahan Baku bernota');
-    await page.click('text=Simpan realisasi');
-    await page.waitForSelector('text=bukti: nota pengajuan');
-    assert(srv.log.real[0].item_id === 'RB' && srv.log.real[0].bukti_url === '' && !srv.log.upload, 'Bahan Baku: tidak boleh ada unggahan');
-    await page.waitForSelector('.sheet', { state: 'detached' });
-    await page.click('text=Sewa mobil antar');
+    assert(!(await page.isVisible('nav:visible >> text=Realisasi')), 'akuntan tidak boleh punya menu Realisasi terpisah');
+    await page.click('nav:visible >> text=Pengajuan');
+    await page.click('button:has-text("Buat pengajuan")');
+    await page.selectOption('.rounded-lg select >> nth=0', 'Operasional');
+    await page.selectOption('.rounded-lg select >> nth=1', 'Gas');
+    await page.fill('input[placeholder="cth. Isi gas 12 kg 8 tabung"]', 'Gas 12 kg');
+    await page.fill('[aria-label="Anggaran pengajuan"]', '300000');
+    await page.waitForSelector('[aria-label="Rencana realisasi"]');
+    await page.selectOption('select >> nth=-1', 'pnBRI');
+    await page.waitForSelector('[aria-label="Biaya admin baris"] >> text=Antarbank BRI → VA BNI: biaya admin Rp 6.500');
+    assert(await page.isDisabled('button:has-text("Kirim untuk persetujuan")'), 'harus terkunci sebelum rencana realisasi & bukti diisi');
+    await page.fill('[aria-label="Rencana realisasi"]', '280000');
+    assert(await page.isDisabled('button:has-text("Kirim untuk persetujuan")'), 'harus tetap terkunci sebelum bukti/nota diunggah');
+    await page.setInputFiles('input[type=file] >> nth=0', { name: 'nota-gas.jpg', mimeType: 'image/jpeg', buffer: Buffer.from('nota-gas') });
+    await page.waitForSelector('text=Total potong VA');
+    const txt = await page.innerText('main');
+    assert(txt.includes('Rp 306.500'), 'total potong VA harus anggaran + biaya admin (Rp 306.500)');
+    await page.click('text=Kirim untuk persetujuan');
+    await page.click('.sheet button:text-is("Kirim")');
+    await page.waitForSelector('text=Pengajuan terkirim.');
+    const sent = srv.log.posts.find(x => x.action === 'createPengajuan');
+    const it = sent && sent.params.items[0];
+    assert(it && it.nominal === 300000 && it.rencana_riil === 280000 && it.biaya_admin === 6500 && /^https:\/\/drive\.google\.com\/up/.test(it.nota_url),
+      'kiriman Operasional lainnya salah: ' + JSON.stringify(it));
+  });
+
+  all &= await run('Pengajuan kuitansi otomatis (Insentif PIC Sekolah): realisasi = anggaran, tanpa unggah bukti, sesama bank tanpa admin', { role: 'akuntan',
+    override: (a, m, p) => a === 'getKategori' ? { ok: true, data: { 'Operasional': ['Insentif Guru/PIC Sekolah', 'Gas'] } }
+      : a === 'getPenerima' ? { ok: true, data: [{ id: 'pnBNI', nama: 'Pak Guru', bank: 'BNI', no_rek: '789', aktif: true }] }
+      : a === 'getBankVA' ? { ok: true, data: { bank: 'BNI', fee: 6500 } }
+      : a === 'getPaguOps' ? { ok: true, data: { tanggal: p.tanggal, pm: 1000, indeks: 100, libur: false, pagu: 3000000, terpakai: 0, diajukan: 0, nDiajukan: 0, rencanaBelum: 0, bankVA: 'BNI' } }
+      : null }, async (page, srv) => {
+    await login(page, 'siti');
+    await page.waitForSelector('header');
+    await page.click('nav:visible >> text=Pengajuan');
+    await page.click('button:has-text("Buat pengajuan")');
+    await page.selectOption('.rounded-lg select >> nth=0', 'Operasional');
+    await page.selectOption('.rounded-lg select >> nth=1', 'Insentif Guru/PIC Sekolah');
+    assert(!(await page.isVisible('[aria-label="Rencana realisasi"]')), 'Insentif PIC tidak boleh meminta rencana realisasi terpisah');
     await page.waitForSelector('text=Kuitansi / bukti pembayaran dibuat otomatis');
-    assert((await page.inputValue('.sheet input[inputmode=numeric] >> nth=1')).replace(/\D/g, '') === '750000', 'realisasi aktual tidak terisi otomatis');
-    await page.click('text=Simpan realisasi');
-    await page.waitForSelector('text=kuitansi dibuat otomatis');
-    assert(srv.log.real[1].item_id === 'RS' && srv.log.real[1].bukti_url === '' && Number(srv.log.real[1].riil) === 750000, 'sewa kendaraan: kirim tanpa unggah, riil = nominal');
-    await page.waitForSelector('.sheet', { state: 'detached' });
-    await page.click('text=Gas 3 kg');
-    await page.waitForSelector('text=Realisasi aktual wajib');
-    await page.fill('.sheet input[inputmode=numeric] >> nth=1', '40000');
-    await page.waitForSelector('text=Bukti transfer wajib diunggah');
-    assert(await page.isDisabled('text=Simpan realisasi'), 'gas tanpa unggahan seharusnya belum bisa disimpan');
+    await page.fill('input[placeholder="cth. Isi gas 12 kg 8 tabung"]', 'Insentif PIC Okt');
+    await page.fill('[aria-label="Nominal"]', '500000');
+    await page.selectOption('select >> nth=-1', 'pnBNI');
+    await page.waitForSelector('[aria-label="Biaya admin baris"] >> text=Sesama BNI: tanpa biaya admin');
+    await page.click('text=Kirim untuk persetujuan');
+    await page.click('.sheet button:text-is("Kirim")');
+    await page.waitForSelector('text=Pengajuan terkirim.');
+    const it = srv.log.posts.find(x => x.action === 'createPengajuan').params.items[0];
+    assert(it.nominal === 500000 && it.rencana_riil === 500000 && it.biaya_admin === 0 && it.nota_url === '' && !srv.log.upload,
+      'kiriman Insentif PIC salah: ' + JSON.stringify(it));
   });
 
-  all &= await run('Realisasi: tanggal terkunci = tanggal pengajuan; biaya admin direkomendasikan dari bank VA', { role: 'akuntan',
-    override: (a, m, p) => a === 'getRealisasiList' ? { ok: true, data: [
-        { id: 'RX', urut: 1, nomor: 'BA-PA/S1/2026/10/009', tanggal_pengajuan: '2026-10-28', jenis: 'Operasional', kategori: 'Gas', uraian: 'Gas antarbank', nominal: 300000, penerima_nama: 'Toko Gas', bank: 'BRI', no_rek: '9', status: 'DISETUJUI', nota_url: '' },
-        { id: 'RY', urut: 2, nomor: 'BA-PA/S1/2026/10/009', tanggal_pengajuan: '2026-10-28', jenis: 'Operasional', kategori: 'Gas', uraian: 'Gas sesama bank', nominal: 200000, penerima_nama: 'Toko BNI', bank: 'BNI', no_rek: '8', status: 'DISETUJUI', nota_url: '' }] }
-      : a === 'getBankVA' ? { ok: true, data: { bank: 'Bank Negara Indonesia (BNI)', fee: 6500 } } : null }, async (page, srv) => {
+  all &= await run('Persetujuan: menampilkan anggaran & rencana realisasi (aktual) + biaya admin; validasi VA = anggaran + admin', { role: 'yayasan',
+    override: (a, m, p) => a === 'getPengajuan' ? { ok: true, data: {
+        pengajuan: [{ id: 'g1', nomor: 'BA-PA/S1/2026/10/010', dapur: 'D1', tanggal: '2026-10-30', status: 'MENUNGGU', created_at: '2026-10-30T08:00:00', created_by_nama: 'Siti',
+          total_diajukan: 200000, total_disetujui: 0,
+          items: [{ id: 'it1', urut: 1, jenis: 'Operasional', kategori: 'Gas', uraian: 'Gas 12 kg', nominal: 200000, rencana_riil: 170000, biaya_admin: 6500, penerima_nama: 'Toko Gas', bank: 'BRI', no_rek: '456', status: 'DIAJUKAN', nota_url: 'https://drive.google.com/gas' }] }],
+        va: { D1: { sisaVA: 205000, komitmen: 0, tersedia: 205000 } }, periodeAktif: { D1: 'P2' }, periodeRange: { D1: { mulai: '2026-10-01', akhir: '2026-10-31' } } } } : null }, async (page) => {
     await login(page, 'siti');
     await page.waitForSelector('header');
-    await page.click('nav:visible >> text=Realisasi');
-    await page.click('text=Gas antarbank');
-    await page.waitForSelector('[aria-label="Rekomendasi biaya admin"] >> text=Antarbank BRI → VA BNI: biaya admin Rp 6.500');
-    assert(await page.isDisabled('[aria-label="Tanggal transfer"]') && (await page.inputValue('[aria-label="Tanggal transfer"]')) === '2026-10-28', 'tanggal harus terkunci ke tanggal pengajuan');
-    await page.fill('.sheet input[inputmode=numeric] >> nth=1', '300000');
-    await page.setInputFiles('.sheet input[type=file] >> nth=0', { name: 'tf.jpg', mimeType: 'image/jpeg', buffer: Buffer.from('ffd8ffe0', 'hex') });
-    await page.click('text=Simpan realisasi');
-    await page.waitForSelector('text=Realisasi tersimpan');
-    const r1 = srv.log.real[0];
-    assert(r1.tanggal === '2026-10-28' && Number(r1.biaya_admin) === 6500, 'antarbank: biaya admin 6.500 tercentang otomatis & tanggal pengajuan: ' + JSON.stringify(r1));
-    await page.waitForSelector('.sheet', { state: 'detached' });
-    await page.click('text=Gas sesama bank');
-    await page.waitForSelector('[aria-label="Rekomendasi biaya admin"] >> text=Sesama BNI: tanpa biaya admin');
-    await page.fill('.sheet input[inputmode=numeric] >> nth=1', '200000');
-    await page.setInputFiles('.sheet input[type=file] >> nth=0', { name: 'tf.jpg', mimeType: 'image/jpeg', buffer: Buffer.from('ffd8ffe0', 'hex') });
-    await page.click('text=Simpan realisasi');
-    await page.waitForSelector('text=Realisasi tersimpan');
-    assert(Number(srv.log.real[1].biaya_admin) === 0, 'sesama bank: tanpa biaya admin');
-  });
-
-  all &= await run('Realisasi Barang Habis Pakai: boleh dipindah ke baris LPDH (opsional)', { role: 'akuntan',
-    override: (a) => a === 'getRealisasiList' ? { ok: true, data: [{ id: 'RH', urut: 1, nomor: 'BA-PA/S1/2026/11/001', jenis: 'Operasional', kategori: 'Barang Habis Pakai', uraian: 'Pembelian barang habis pakai 4 november', nominal: 1380000, penerima_nama: 'Fahmi', bank: 'BNI', no_rek: '1', status: 'DISETUJUI', nota_url: '' }] } : null }, async (page, srv) => {
-    await login(page, 'siti');
-    await page.waitForSelector('header');
-    await page.click('nav:visible >> text=Realisasi');
-    await page.click('text=Pembelian barang habis pakai 4 november');
-    await page.waitForSelector('text=Baris LPDH (opsional)');
-    await page.selectOption('[aria-label="Sub-kategori barang habis pakai"]', 'Alat Kebersihan');
-    await page.fill('.sheet input[inputmode=numeric] >> nth=1', '1380000');
-    await page.setInputFiles('.sheet input[type=file] >> nth=0', { name: 'tf.jpg', mimeType: 'image/jpeg', buffer: Buffer.from('ffd8ffe0', 'hex') });
-    await page.click('text=Simpan realisasi');
-    await page.waitForSelector('text=Realisasi tersimpan');
-    assert(srv.log.real[0].sub_kategori === 'Alat Kebersihan', 'sub-kategori tidak terkirim: ' + JSON.stringify(srv.log.real[0]));
+    await page.click('nav:visible >> text=Persetujuan');
+    await page.waitForSelector('text=Gas 12 kg');
+    const txt = await page.innerText('main');
+    assert(txt.includes('Rp 200.000') && txt.includes('Rencana realisasi') && txt.includes('Rp 170.000') && txt.includes('Rp 6.500'),
+      'kartu persetujuan harus menampilkan anggaran, rencana realisasi, dan biaya admin: ' + txt);
+    await page.click('button:text-is("Setuju")');
+    await page.waitForSelector('text=Total disetujui (potong VA)');
+    await page.waitForSelector('text=Total rencana realisasi (aktual)');
+    await page.waitForSelector('text=melebihi VA tersedia');
+    assert(await page.isDisabled('button:has-text("Kirim keputusan")'), 'keputusan harus diblokir karena anggaran (200k) + admin (6,5k) = 206,5k > VA (205k)');
   });
 
   all &= await run('Rencana Ops: usulan otomatis dari periode lalu, simpan, ajukan satu hari', { role: 'akuntan',
@@ -416,6 +429,10 @@ async function isiBahanBaku(page, uraian, volume, harga) {
     await page.waitForSelector('text=Rencana tersimpan');
     const L = globalThis.__ro;
     assert(L.save.length === 1 && L.save[0].data.items.length >= 12 && L.save[0].periode_id === 'P19', 'rencana tidak tersimpan: ' + JSON.stringify(L.save[0] && L.save[0].data.items.length));
+    // Unggah bukti pada baris Honor relawan 2026-11-09 agar siap diajukan
+    await page.click('[aria-label="Honor relawan 2026-11-09"]');
+    await page.setInputFiles('.sheet input[type=file] >> nth=0', { name: 'nota-honor.pdf', mimeType: 'application/pdf', buffer: Buffer.from('%PDF-1.4\n%%EOF') });
+    await page.click('.sheet button:has-text("Simpan baris")');
     await page.click('button:has-text("Ajukan") >> nth=0');
     await page.waitForSelector('text=Ajukan 1 baris untuk');
     assert(globalThis.__ro.aju.length === 0, 'pengajuan terkirim sebelum dikonfirmasi');
@@ -426,7 +443,7 @@ async function isiBahanBaku(page, uraian, volume, harga) {
     assert(/BA-PA\/S1\/2026\/11\/009/.test(wa) && /Transfer ke: Wanda/.test(wa) && /Senin, 9 November 2026/.test(wa), 'teks WA salah: ' + wa);
     await page.click('button:has-text("Tutup")');
     const aj = L.aju[0];
-    assert(aj && aj.tanggal === '2026-11-09' && aj.items.every(i => i.jenis === 'Operasional' && i.penerima_id) && aj.items.some(i => /honor/i.test(i.kategori)), 'pengajuan salah: ' + JSON.stringify(aj));
+    assert(aj && aj.tanggal === '2026-11-09' && aj.items.every(i => i.jenis === 'Operasional' && i.penerima_id && /^https:/.test(i.nota_url)) && aj.items.some(i => /honor/i.test(i.kategori)), 'pengajuan salah: ' + JSON.stringify(aj));
     assert(L.save.length >= 2 && L.save[L.save.length - 1].data.items.filter(x => x.pengajuan_id === 'PA9').length === aj.items.length, 'baris yang diajukan tidak ditandai di rencana');
     globalThis.__ro = null;
   });
@@ -434,7 +451,7 @@ async function isiBahanBaku(page, uraian, volume, harga) {
   all &= await run('Rencana Ops: tanggal lewat terkunci, ajukan baris siap saja, ajukan satu baris', { role: 'akuntan',
     override: (a, m, p) => {
       const L = globalThis.__ro2 = globalThis.__ro2 || { save: [], aju: [], versi: 3 };
-      const it = (id, t, kat, nom, pn) => ({ id, tanggal: t, kategori: kat, uraian: kat, nominal: nom, penerima_id: pn || '' });
+      const it = (id, t, kat, nom, pn) => ({ id, tanggal: t, kategori: kat, uraian: kat, nominal: nom, penerima_id: pn || '', nota_url: pn ? 'https://drive.google.com/nota-' + id : '' });
       if (a === 'getRencanaOps') return { ok: true, data: { dapur: 'D1', bisaUbah: true, bankVA: 'BSI', status: {}, aktual: {}, riwayat: null,
         periode: { id: 'P18', periode_no: 18, tanggal_mulai: '2026-10-26', tanggal_akhir: '2026-11-06', penerima: 1000, status: 'AKTIF' },
         penerima: [{ id: 'W', nama: 'Wanda', bank: 'BSI', no_rek: '1' }],
@@ -510,12 +527,14 @@ async function isiBahanBaku(page, uraian, volume, harga) {
     await page.waitForSelector('text=Pengajuan sebelumnya dibatalkan');
     assert(!(await page.isVisible('text=Sudah diajukan (BA-PA1)')) && await page.isEnabled('[aria-label="Nominal rencana"]'), 'baris dibatalkan masih terkunci');
     await page.fill('[aria-label="Nominal rencana"]', '700000');
+    await page.fill('[aria-label="Rencana realisasi"]', '650000');
+    await page.setInputFiles('.sheet input[type=file] >> nth=0', { name: 'nota-gas.pdf', mimeType: 'application/pdf', buffer: Buffer.from('%PDF-1.4\n%%EOF') });
     await page.click('text=Ajukan baris ini');
     await page.click('text=Ya, ajukan');
     await page.waitForSelector('text=Pengajuan BA-PA3 terkirim');
     await page.click('button:has-text("Tutup")');
     const L = globalThis.__ro3;
-    assert(L.aju.length === 1 && L.aju[0].items[0].nominal === 700000 && L.aju[0].tanggal === '2026-11-03', 'pengajuan ulang salah: ' + JSON.stringify(L.aju[0]));
+    assert(L.aju.length === 1 && L.aju[0].items[0].nominal === 700000 && L.aju[0].items[0].rencana_riil === 650000 && /^https:/.test(L.aju[0].items[0].nota_url) && L.aju[0].tanggal === '2026-11-03', 'pengajuan ulang salah: ' + JSON.stringify(L.aju[0]));
     assert(L.saved.items.find(x => x.id === 'A').pengajuan_id === 'PA3' && L.saved.items.find(x => x.id === 'B').pengajuan_id === 'PA2', 'status baris tidak tersimpan benar');
     // batalkan pengajuan yang sudah disetujui langsung dari matriks
     await page.click('[aria-label="Gas 2026-11-04"]');
@@ -576,7 +595,7 @@ async function isiBahanBaku(page, uraian, volume, harga) {
         penerima: [{ id: 'W', nama: 'Wanda', bank: 'BSI', no_rek: '1' }],
         luar: [{ id: 'LUAR-X1', pitem_id: 'PAX-1', tanggal: '2026-11-03', kategori: 'Gas', uraian: 'Gas dari menu Pengajuan', nominal: 2500000, penerima_id: 'W', pengajuan_id: 'PAX', nomor: 'BA-X', status: 'DISETUJUI' },
           { id: 'LUAR-T9', tanggal: '2026-11-03', kategori: 'Listrik', uraian: 'Token darurat', nominal: 300000, penerima_id: '', pengajuan_id: '', nomor: 'NB-9', status: 'TRANSAKSI' }],
-        rencana: { versi: 1, setelan: { indeks: 100, batas: 100 }, hari: {}, items: [{ id: 'R1', tanggal: '2026-11-03', kategori: 'APD', uraian: 'Masker', nominal: 400000, penerima_id: 'W' }] } } };
+        rencana: { versi: 1, setelan: { indeks: 100, batas: 100 }, hari: {}, items: [{ id: 'R1', tanggal: '2026-11-03', kategori: 'APD', uraian: 'Masker', nominal: 400000, rencana_riil: 380000, nota_url: 'https://drive.google.com/nota-r1', penerima_id: 'W' }] } } };
       if (a === 'getKategori') return { ok: true, data: { 'Operasional': ['Gas', 'Listrik', 'APD'] } };
       if (a === 'saveRencanaOps') return { ok: true, data: { versi: (p.data.versi || 0) + 1 } };
       if (a === 'createPengajuan') { L.aju.push(p); return { ok: true, data: { id: 'PA9', nomor: 'BA-9' } }; }
@@ -861,6 +880,7 @@ async function isiBahanBaku(page, uraian, volume, harga) {
     await login(page, 'siti');
     await page.waitForSelector('header');
     await page.click('nav:visible >> text=Realisasi Massal');
+    await page.click('button:has-text("Cocokkan mutasi BNI (PDF)")');
     await page.selectOption('[aria-label="Dapur realisasi massal"]', 'D2');
     await page.check('[aria-label="Sertakan periode ditutup"]');
     assert(await page.isDisabled('button:has-text("Simulasi")'), 'simulasi harus terkunci sebelum mutasi diunggah');
@@ -891,6 +911,36 @@ async function isiBahanBaku(page, uraian, volume, harga) {
     const p = globalThis.__rm;
     assert(p.dapur === 'D2' && p.eksekusi === true && p.jumlah_konfirmasi === 204 && p.sertakan_tutup === true && p.mutasi && p.mutasi.debit.length === 2, 'kiriman eksekusi salah: ' + JSON.stringify(p).slice(0, 300));
     globalThis.__rm = null; globalThis.__rmSim = null;
+  });
+
+  all &= await run('Realisasi Massal (admin): mode langsung (tunggakan lama semua dapur tanpa mutasi)', { role: 'admin',
+    override: (a, m, p) => a === 'realisasiMassal' ? (p.eksekusi ? (globalThis.__rmd = p, { ok: true, data: { simulasi: false, tanpaMutasi: true, dibuat: 12, ditautkanUlang: 0, nominal: 5400000, admin: 19500, nAdmin: 3, perPeriode: [], saldo: [{ dapur_id: 'D1', dapur_nama: 'SPPG Satu', periode_no: 2, saldo_sekarang: 7000000, saldo_sesudah: 4000000 }] } })
+        : (globalThis.__rmdSim = p, { ok: true, data: { simulasi: true, tanpaMutasi: true, jumlah: 12, nominal: 5400000, sudahTertaut: 0, dilewati: 0, alasanLewat: [], bankVA: '', admin: 19500, nAdmin: 3, mutasi: null, cekSaldo: null,
+          perPeriode: [{ dapur_id: 'D1', dapur_nama: 'SPPG Satu', periode_no: 2, status: 'AKTIF', baris: 7, nominal: 3000000, jenis: { 'Bahan Baku': 3000000 }, dari: '2026-10-10', sampai: '2026-10-20' },
+                       { dapur_id: 'D2', dapur_nama: 'SPPG Dua', periode_no: 3, status: 'AKTIF', baris: 5, nominal: 2400000, jenis: { Operasional: 2400000 }, dari: '2026-10-12', sampai: '2026-10-22' }],
+          saldo: [{ dapur_id: 'D1', dapur_nama: 'SPPG Satu', periode_no: 2, saldo_sekarang: 7000000, saldo_sesudah: 4000000 }],
+          contoh: [{ dapur_id: 'D1', dapur_nama: 'SPPG Satu', tanggal: '2026-10-10', no_bukti: 'S1-20261010-001', jenis: 'Bahan Baku', kategori: 'Beras', uraian: 'Beras 50 kg', nominal: 500000 }] } }))
+      : null }, async (page) => {
+    await login(page, 'siti');
+    await page.waitForSelector('header');
+    await page.click('nav:visible >> text=Realisasi Massal');
+    // Default sudah mode langsung & Semua dapur, tombol Simulasi langsung aktif tanpa unggah PDF
+    assert((await page.inputValue('[aria-label="Dapur realisasi massal"]')) === 'ALL', 'default dapur mode langsung harus ALL');
+    assert(await page.isChecked('[aria-label="Hitung biaya admin otomatis"]'), 'hitung biaya admin otomatis default harus tercentang');
+    assert(!(await page.isDisabled('button:has-text("Simulasi")')), 'tombol Simulasi mode langsung harus langsung aktif tanpa mutasi');
+    await page.click('button:has-text("Simulasi")');
+    await page.waitForSelector('text=12 baris akan direalisasi');
+    await page.waitForSelector('text=SPPG Satu · Periode 2');
+    await page.waitForSelector('text=SPPG Dua · Periode 3');
+    assert(globalThis.__rmdSim && globalThis.__rmdSim.dapur === 'ALL' && globalThis.__rmdSim.tanpa_mutasi === true && globalThis.__rmdSim.catat_admin === true,
+      'payload simulasi mode langsung salah: ' + JSON.stringify(globalThis.__rmdSim));
+    await page.fill('[aria-label="Ketik jumlah baris untuk konfirmasi"]', '12');
+    await page.click('button:has-text("Realisasikan sekarang")');
+    await page.waitForSelector('text=Selesai: 12 transaksi dibuat');
+    const p = globalThis.__rmd;
+    assert(p && p.dapur === 'ALL' && p.tanpa_mutasi === true && p.catat_admin === true && p.eksekusi === true && p.jumlah_konfirmasi === 12,
+      'payload eksekusi mode langsung salah: ' + JSON.stringify(p));
+    globalThis.__rmd = null; globalThis.__rmdSim = null;
   });
 
   all &= await run('Relawan: daftar kosong bisa diisi (tombol tidak tertutup) & tempel dari Excel', { role: 'akuntan',
@@ -1170,7 +1220,7 @@ async function isiBahanBaku(page, uraian, volume, harga) {
     await page.click('button:has-text("Buat pengajuan")');
     await page.selectOption('.rounded-lg select >> nth=0', 'Operasional');
     await page.selectOption('.rounded-lg select >> nth=1', 'Gas');
-    await page.fill('input[placeholder="cth. Beras 50 kg"]', 'Isi gas 12 kg');
+    await page.fill('input[placeholder="cth. Isi gas 12 kg 8 tabung"]', 'Isi gas 12 kg');
     await page.fill('.rounded-lg input[inputmode=numeric] >> nth=0', '400000');
     await page.selectOption('select >> nth=-1', 'pn1');
     await page.waitForSelector('text=masih dalam pagu harian');

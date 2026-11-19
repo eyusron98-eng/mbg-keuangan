@@ -386,14 +386,13 @@ const ok = (c, m) => { console.log((c ? 'PASS ' : 'FAIL ') + m); if (!c) fails++
   ok(!r.ok && /kategori bahan/.test(r.error), 'kategori bahan di luar daftar PPK ditolak');
   r = pa([bb({ nota_url: 'http://x', rincian: [{ nama: 'Wortel', kategori: 'Sayuran', volume: 10, satuan: 'kg', harga: 15000 }] })]);
   ok(!r.ok && /link nota/.test(r.error), 'link nota bukan https ditolak');
-  r = pa([bb({ nota_url: 'https://drive.google.com/nota1', rincian: [{ nama: 'Wortel', kategori: 'Sayuran', volume: 2.5, satuan: 'kg', harga: 20000 }, { nama: 'Kol', kategori: 'Sayuran', volume: 5, satuan: 'kg', harga: 20000 }] })]);
+  r = pa([bb({ nota_url: 'https://drive.google.com/nota1', nota_no: 'NT-SAYUR', rincian: [{ nama: 'Wortel', kategori: 'Sayuran', volume: 2.5, satuan: 'kg', harga: 20000 }, { nama: 'Kol', kategori: 'Sayuran', volume: 5, satuan: 'kg', harga: 20000 }] })]);
   ok(r.ok, 'asisten mengajukan Bahan Baku dengan rincian desimal + nota: ' + (r.error || ''));
   const itR = B8.PengajuanItem[B8.PengajuanItem.length - 1];
   ok(JSON.parse(itR[22]).length === 2 && itR[23] === 'https://drive.google.com/nota1', 'rincian & nota tersimpan di baris pengajuan');
-  // realisasi → LPDH membawa rincian & nota
-  call(e8, 'POST', { action: 'decidePengajuan', token: tk8('adm'), pengajuan_id: r.data.id, keputusan: [{ item_id: itR[0], status: 'DISETUJUI' }] });
-  r = call(e8, 'POST', { action: 'realisasiItem', token: tkA, item_id: itR[0], tanggal: '2026-10-15', no_bukti: 'NT-SAYUR', bukti_url: 'https://drive.google.com/tf' });
-  ok(r.ok, 'realisasi item berrincian: ' + (r.error || ''));
+  // disetujui → otomatis terealisasi & LPDH membawa rincian & nota
+  r = call(e8, 'POST', { action: 'decidePengajuan', token: tk8('adm'), pengajuan_id: r.data.id, keputusan: [{ item_id: itR[0], status: 'DISETUJUI' }] });
+  ok(r.ok && itR[14] === 'TEREALISASI', 'disetujui → Bahan Baku berrincian otomatis terealisasi: ' + (r.error || itR[14]));
   r = call(e8, 'POST', { action: 'getDataLPDH', token: tk8('adm'), dapur: 'D001', tanggal: '2026-10-15' });
   const txR = r.data.transaksi.find(t => t.no_bukti === 'NT-SAYUR');
   ok(txR && txR.rincian.length === 2 && txR.rincian[0].volume === 2.5 && txR.nota_url === 'https://drive.google.com/nota1', 'data LPDH membawa rincian bahan & link nota');
@@ -474,7 +473,7 @@ const ok = (c, m) => { console.log((c ? 'PASS ' : 'FAIL ') + m); if (!c) fails++
   r = call(e8, 'POST', sb('akuntan', 'D001', { action: 'getRealisasiList' }));
   ok(r.ok, 'admin sebagai akuntan D001 bisa membuka daftar realisasi: ' + (r.error || ''));
   ok(!call(e8, 'POST', { action: 'getRealisasiList', token: tkAdm }).ok, 'tanpa mode uji, admin tetap admin (realisasi khusus akuntan)');
-  r = call(e8, 'POST', sb('akuntan', 'D001', { action: 'createPengajuan', tanggal: '2026-10-18', items: [{ jenis: 'Operasional', kategori: 'Gas', uraian: 'Gas uji', nominal: 50000, penerima_id: 'pn1' }] }));
+  r = call(e8, 'POST', sb('akuntan', 'D001', { action: 'createPengajuan', tanggal: '2026-10-18', items: [{ jenis: 'Operasional', kategori: 'Gas', uraian: 'Gas uji', nominal: 50000, rencana_riil: 48000, nota_url: 'https://drive.google.com/gas-uji', penerima_id: 'pn1' }] }));
   ok(r.ok, 'admin sebagai akuntan bisa membuat pengajuan: ' + (r.error || ''));
   const headUji = B8.Pengajuan[B8.Pengajuan.length - 1];
   ok(headUji[2] === 'D001' && headUji[7] === 'U1', 'pengajuan masuk dapur yang dipilih, tercatat atas nama admin (U1)');
@@ -596,16 +595,18 @@ const ok = (c, m) => { console.log((c ? 'PASS ' : 'FAIL ') + m); if (!c) fails++
   ok(itNN[24] === 'NT-TELUR', 'nomor nota tersimpan di baris pengajuan');
   r = pa([bb({ uraian: 'lain', nota_no: 'NT-TELUR ', rincian: rincNN })]); ok(!r.ok && /pengajuan lain/.test(r.error), 'nomor nota yang dipakai pengajuan lain yang masih berjalan ditolak');
   B8.VATopup.push(['V9', 'D001', 'P1', '2026-10-19', 100000000, 'tambah saldo uji', '', 'U2', '', '', '']);   // saldo uji sudah terpakai uji sebelumnya
-  call(e8, 'POST', { action: 'decidePengajuan', token: tk8('adm'), pengajuan_id: itNN[1], keputusan: [{ item_id: itNN[0], status: 'DISETUJUI' }] });
-  r = call(e8, 'POST', { action: 'realisasiItem', token: tkA, item_id: itNN[0], tanggal: '2026-10-19' });
+  r = call(e8, 'POST', { action: 'decidePengajuan', token: tk8('adm'), pengajuan_id: itNN[1], keputusan: [{ item_id: itNN[0], status: 'DISETUJUI' }] });
+  const txNN = B8.Transaksi.find(t => t[14] === itNN[0]);
+  ok(r.ok && itNN[14] === 'TEREALISASI' && txNN && txNN[3] === 'NT-TELUR' && txNN[10] === 'https://drive.google.com/nota-x', 'disetujui → otomatis terealisasi dengan nomor nota & foto pengajuan: ' + (r.error || (txNN && txNN[3])));
+  // kompatibilitas mundur realisasiItem untuk tunggakan lama DISETUJUI: tetap menolak tanggal di luar tanggal pengajuan
+  B8.PengajuanItem.push(['IT-TGL', itNN[1], 'D001', 'P1', 9, 'Bahan Baku', 'Semua Kategori', 'Lama tgl', 50000, 'pn1', 'Toko A', 'BCA', '123', 'TIDAK', 'DISETUJUI', '', 1, '', '', '', '', '', '', 'https://drive.google.com/nota-x', '']);
+  r = call(e8, 'POST', { action: 'realisasiItem', token: tkA, item_id: 'IT-TGL', tanggal: '2026-10-19' });
   ok(!r.ok && /sama dengan tanggal pengajuan \(15-10-2026\)/.test(r.error), 'realisasi di luar tanggal pengajuan ditolak: ' + (r.error || ''));
-  r = call(e8, 'POST', { action: 'realisasiItem', token: tkA, item_id: itNN[0], tanggal: '2026-10-15' });
-  ok(r.ok && r.data.no_bukti === 'NT-TELUR' && r.data.bukti === 'nota', 'realisasi sekali klik: nomor bukti = nomor nota pengajuan: ' + (r.error || r.data.no_bukti));
   r = pa([bb({ uraian: 'tanpa nomor', rincian: rincNN })]); ok(r.ok, 'nota tanpa nomor boleh (kosong)');
   const itTN = B8.PengajuanItem[B8.PengajuanItem.length - 1];
-  call(e8, 'POST', { action: 'decidePengajuan', token: tk8('adm'), pengajuan_id: itTN[1], keputusan: [{ item_id: itTN[0], status: 'DISETUJUI' }] });
-  r = call(e8, 'POST', { action: 'realisasiItem', token: tkA, item_id: itTN[0], tanggal: '2026-10-15' });
-  ok(r.ok && /^S1-20261015-\d{3}$/.test(r.data.no_bukti), 'nota tak bernomor → nomor otomatis saat realisasi: ' + (r.data && r.data.no_bukti));
+  r = call(e8, 'POST', { action: 'decidePengajuan', token: tk8('adm'), pengajuan_id: itTN[1], keputusan: [{ item_id: itTN[0], status: 'DISETUJUI' }] });
+  const txTN = B8.Transaksi.find(t => t[14] === itTN[0]);
+  ok(r.ok && txTN && /^S1-20261015-\d{3}$/.test(txTN[3]), 'nota tak bernomor → nomor otomatis saat disetujui: ' + (txTN && txTN[3]));
   // edit baris: nomor nota ikut diperiksa
   r = pa([bb({ uraian: 'edit', nota_no: 'NT-EDIT', rincian: rincNN })]);
   const itED = B8.PengajuanItem[B8.PengajuanItem.length - 1][0];
@@ -721,12 +722,12 @@ const ok = (c, m) => { console.log((c ? 'PASS ' : 'FAIL ') + m); if (!c) fails++
   // ── Catatan akuntan (mis. melebihi pagu harian) ikut ke Yayasan & tidak hilang saat diputuskan ──
   {
     let r = call(e8, 'POST', { action: 'createPengajuan', token: tk8('akn'), tanggal: '2026-10-16', request_id: 'cat-1',
-      items: [{ jenis: 'Operasional', kategori: 'Gas', uraian: 'Gas 12 kg', nominal: 900000, penerima_id: 'pn1', catatan: 'Melebihi pagu harian Rp 200.000. Alasan: stok gas habis' }] });
+      items: [{ jenis: 'Operasional', kategori: 'Gas', uraian: 'Gas 12 kg', nominal: 900000, rencana_riil: 850000, nota_url: 'https://drive.google.com/gas-cat', penerima_id: 'pn1', catatan: 'Melebihi pagu harian Rp 200.000. Alasan: stok gas habis' }] });
     ok(r.ok, 'pengajuan dengan catatan akuntan terkirim: ' + (r.error || ''));
     const it = B8.PengajuanItem.find(x => x[1] === r.data.id);
     ok(it && it[15] === 'Catatan akuntan: Melebihi pagu harian Rp 200.000. Alasan: stok gas habis', 'catatan tersimpan dengan awalan "Catatan akuntan:" (' + (it && it[15]) + ')');
     r = call(e8, 'POST', { action: 'decidePengajuan', token: tk8('adm'), pengajuan_id: it[1], keputusan: [{ item_id: it[0], status: 'DISETUJUI' }] });
-    ok(r.ok && it[14] === 'DISETUJUI' && /^Catatan akuntan: Melebihi pagu/.test(it[15]), 'disetujui tanpa catatan → catatan akuntan tetap ada: ' + (r.error || it[15]));
+    ok(r.ok && it[14] === 'TEREALISASI' && /^Catatan akuntan: Melebihi pagu/.test(it[15]), 'disetujui tanpa catatan → otomatis terealisasi & catatan akuntan tetap ada: ' + (r.error || it[15]));
   }
 
   // ── Rencana operasional per periode ──
@@ -969,6 +970,128 @@ const ok = (c, m) => { console.log((c ? 'PASS ' : 'FAIL ') + m); if (!c) fails++
       'eksekusi: transaksi biaya admin terpisah bertanggal sama, hanya untuk antarbank');
     r = call(e8, 'POST', { action: 'getBankVA', token: tk8('akn') });
     ok(r.ok && r.data.fee === 6500 && 'bank' in r.data, 'rekomendasi biaya admin: bank VA dapur tersedia untuk form');
+  }
+
+  // ── Realisasi otomatis saat persetujuan, rencana_riil, bukti wajib, biaya_admin, potong VA, Rencana Ops & Realisasi Massal langsung ──
+  {
+    const ea = makeEnv([
+      ['U1', 'adm', 'passwd1', 'Admin', 'admin', '', 'YA'],
+      ['U2', 'akn1', 'passwd2', 'Akuntan 1', 'akuntan', 'D001', 'YA'],
+      ['U3', 'yay', 'passwd3', 'Yayasan', 'yayasan', '', 'YA'],
+    ]);
+    const BA = ea.__book;
+    BA.Dapur.push(['D002', 'SPPG Dua', '', 'S2']);
+    BA.Setup = [
+      ['id', 'dapur', 'no', 'mulai', 'akhir', 'penerima', 'va', 'petty', 'status'],
+      ['P1', 'D001', 1, '2026-10-01', '2026-10-31', 100, 1000000, 0, 'AKTIF'],
+      ['P2', 'D002', 1, '2026-10-01', '2026-10-31', 100, 2000000, 0, 'AKTIF'],
+      ['P2OLD', 'D002', 0, '2026-09-01', '2026-09-30', 100, 1000000, 0, 'DITUTUP'],
+    ];
+    BA.Penerima.push(['pn2', 'Yayasan Mitra', 'BNI', '999', 'YA']);
+    const loginA = (u, p) => call(ea, 'POST', { action: 'login', username: u, password: p }).data.token;
+    const tAdm = loginA('adm', 'passwd1'), tAkn = loginA('akn1', 'passwd2'), tYay = loginA('yay', 'passwd3');
+
+    // 1. Validasi rencana_riil & bukti/nota wajib saat pengajuan
+    let r = call(ea, 'POST', { action: 'createPengajuan', token: tAkn, tanggal: '2026-10-10', items: [
+      { jenis: 'Operasional', kategori: 'Asuransi kecelakaan kerja (BPJS) relawan', uraian: 'BPJS Okt', nominal: 200000, penerima_id: 'pn1', nota_url: 'https://drive.google.com/bpjs' },
+    ] });
+    ok(!r.ok && /rencana realisasi/.test(r.error), 'BPJS masuk Operasional Lainnya: wajib rencana_riil');
+
+    r = call(ea, 'POST', { action: 'createPengajuan', token: tAkn, tanggal: '2026-10-10', items: [
+      { jenis: 'Operasional', kategori: 'Asuransi kecelakaan kerja (BPJS) relawan', uraian: 'BPJS Okt', nominal: 200000, rencana_riil: 185000, penerima_id: 'pn1' },
+    ] });
+    ok(!r.ok && /bukti \/ nota pengajuan wajib/.test(r.error), 'Operasional non-kuitansi wajib unggah bukti/nota saat pengajuan: ' + (r.error || ''));
+
+    r = call(ea, 'POST', { action: 'createPengajuan', token: tAkn, tanggal: '2026-10-10', items: [
+      { jenis: 'Operasional', kategori: 'Gaji/honor relawan pekerja SPPG', uraian: 'Honor', nominal: 100000, penerima_id: 'pn1' },
+    ] });
+    ok(!r.ok && /bukti \/ nota pengajuan wajib/.test(r.error), 'Honor relawan wajib unggah bukti/nota saat pengajuan: ' + (r.error || ''));
+
+    // 2. Pengajuan lengkap: Gas (aktual beda + biaya_admin), BPJS (aktual beda), Honor relawan (realisasi = anggaran), Insentif PIC (kuitansi otomatis, realisasi = anggaran), Sewa Gedung (kuitansi otomatis, realisasi = anggaran)
+    r = call(ea, 'POST', { action: 'createPengajuan', token: tAkn, tanggal: '2026-10-10', items: [
+      { jenis: 'Operasional', kategori: 'Gas', uraian: 'Gas 12kg', nominal: 200000, rencana_riil: 170000, biaya_admin: 6500, nota_url: 'https://drive.google.com/gas1', nota_no: 'GAS-01', penerima_id: 'pn1' },
+      { jenis: 'Operasional', kategori: 'Asuransi kecelakaan kerja (BPJS) relawan', uraian: 'BPJS', nominal: 150000, rencana_riil: 140000, nota_url: 'https://drive.google.com/bpjs1', penerima_id: 'pn1' },
+      { jenis: 'Operasional', kategori: 'Gaji/honor relawan pekerja SPPG', uraian: 'Honor 10 Okt', nominal: 100000, nota_url: 'https://drive.google.com/honor1', penerima_id: 'pn1' },
+      { jenis: 'Operasional', kategori: 'Insentif Guru/PIC Sekolah', uraian: 'Insentif PIC', nominal: 100000, penerima_id: 'pn1' },
+      { jenis: 'Fasilitas SPPG', kategori: 'Sewa Gedung', uraian: 'Sewa Okt', nominal: 250000, penerima_id: 'pn2' },
+    ] });
+    ok(r.ok, 'pengajuan campuran (aktual beda + realisasi sama + kuitansi + biaya admin) diterima: ' + (r.error || ''));
+    const pid = r.data.id;
+    const itemsA = BA.PengajuanItem.filter(x => x[1] === pid);
+    ok(itemsA.length === 5 && itemsA[0][25] === 170000 && itemsA[0][26] === 6500 && itemsA[2][25] === 100000, 'rencana_riil & biaya_admin tersimpan di PengajuanItem');
+
+    // 3. Cek VA saat persetujuan: total anggaran + biaya admin = 806.500 (<= 1.000.000) → berhasil dan langsung TEREALISASI!
+    const nK0 = ea.__kuitansi.length;
+    r = call(ea, 'POST', { action: 'decidePengajuan', token: tYay, pengajuan_id: pid, keputusan: itemsA.map(x => ({ item_id: x[0], status: 'DISETUJUI' })) });
+    ok(r.ok, 'Yayasan menyetujui semua baris: ' + (r.error || ''));
+    ok(itemsA.every(x => x[14] === 'TEREALISASI' && !!x[19]), 'semua baris langsung TEREALISASI & bertaut ke transaksi');
+    const txGas = BA.Transaksi.find(t => t[14] === itemsA[0][0]);
+    const txFee = BA.Transaksi.find(t => t[14] === 'ADMIN:' + itemsA[0][0]);
+    const txBpjs = BA.Transaksi.find(t => t[14] === itemsA[1][0]);
+    const txHon = BA.Transaksi.find(t => t[14] === itemsA[2][0]);
+    const txPic = BA.Transaksi.find(t => t[14] === itemsA[3][0]);
+    const txSew = BA.Transaksi.find(t => t[14] === itemsA[4][0]);
+    ok(txGas && txGas[8] === 170000 && txGas[9] === 200000 && txGas[3] === 'GAS-01' && txGas[10] === 'https://drive.google.com/gas1', 'Gas: riil=rencana_riil (170k), unriil=anggaran (200k), no_bukti=nota_no');
+    ok(txFee && txFee[5] === 'Biaya Admin Bank' && txFee[8] === 6500 && txFee[9] === 6500, 'biaya_admin otomatis membuat transaksi Biaya Admin Bank terpisah (6.500)');
+    ok(txBpjs && txBpjs[8] === 140000 && txBpjs[9] === 150000, 'BPJS: riil=140k, unriil=150k');
+    ok(txHon && txHon[8] === 100000 && txHon[9] === 100000, 'Honor relawan: riil = anggaran (100k)');
+    ok(txPic && txPic[8] === 100000 && txPic[9] === 100000 && /^https:\/\/drive\.google\.com\/kuitansi\//.test(txPic[10]), 'Insentif PIC: riil = anggaran & kuitansi PDF dibuat otomatis');
+    ok(txSew && txSew[8] === 250000 && txSew[9] === 250000 && /^https:\/\/drive\.google\.com\/kuitansi\//.test(txSew[10]) && ea.__kuitansi.length === nK0 + 2, 'Sewa Gedung: riil = anggaran & kuitansi PDF dibuat otomatis');
+
+    // 4. Saldo VA terpotong sebesar Nilai Pengajuan (anggaran) + Biaya Admin = 806.500 → sisa VA = 193.500 (BUKAN berdasarkan riil 766.500!)
+    const ap = call(ea, 'GET', { action: 'getActivePeriode', token: tAkn, dapur: 'D001' });
+    ok(ap.ok && ap.data.sisaVA === 193500, 'sisa VA terpotong anggaran + biaya admin (1.000.000 - 806.500 = 193.500, dapat ' + (ap.data && ap.data.sisaVA) + ')');
+    const dash = call(ea, 'GET', { action: 'getDashboard', token: tAkn, scope: 'D001' });
+    ok(dash.ok && dash.data.kpi.sisaVA === 193500 && dash.data.kpi.vaTersedia === 193500, 'Dashboard sisaVA & vaTersedia memakai anggaran + biaya admin (193.500)');
+
+    // 5. Persetujuan ditolak bila anggaran + biaya_admin > va.tersedia walau rencana_riil <= va.tersedia
+    r = call(ea, 'POST', { action: 'createPengajuan', token: tAkn, tanggal: '2026-10-11', items: [
+      { jenis: 'Operasional', kategori: 'Gas', uraian: 'Gas besar', nominal: 190000, rencana_riil: 100000, biaya_admin: 6500, nota_url: 'https://drive.google.com/gas2', penerima_id: 'pn1' },
+    ] });
+    const itOver = BA.PengajuanItem.find(x => x[1] === r.data.id);
+    r = call(ea, 'POST', { action: 'decidePengajuan', token: tYay, pengajuan_id: r.data.id, keputusan: [{ item_id: itOver[0], status: 'DISETUJUI' }] });
+    ok(!r.ok && /VA tersedia tidak cukup/.test(r.error), 'persetujuan ditolak karena anggaran (190k) + admin (6,5k) = 196,5k > VA tersedia (193,5k): ' + (r.error || ''));
+
+    // 6. updateTransaksi: riil hanya bisa diedit untuk Operasional Lainnya & fee row, terkunci untuk Honor/Insentif/Sewa
+    r = call(ea, 'POST', { action: 'updateTransaksi', token: tAkn, id: txHon[0], riil: 90000 });
+    ok(r.ok && txHon[8] === 100000, 'edit Honor relawan: nilai riil terkunci = anggaran (tetap 100.000)');
+    r = call(ea, 'POST', { action: 'updateTransaksi', token: tAkn, id: txGas[0], riil: 175000 });
+    ok(r.ok && txGas[8] === 175000 && txGas[9] === 200000, 'edit Gas: nilai riil boleh diubah (175k), anggaran tetap 200k');
+
+    // 7. deleteTransaksi → baris pengajuan jadi DIBATALKAN & biaya admin terkait ikut terhapus
+    r = call(ea, 'POST', { action: 'deleteTransaksi', token: tAkn, id: txGas[0] });
+    ok(r.ok && itemsA[0][14] === 'DIBATALKAN' && !BA.Transaksi.some(t => t[14] === 'ADMIN:' + itemsA[0][0]), 'hapus transaksi linked → item jadi DIBATALKAN & biaya admin terkait ikut terhapus');
+
+    // 8. saveRencanaOps menyimpan rencana_riil, nota_url, nota_no, biaya_admin
+    r = call(ea, 'POST', { action: 'saveRencanaOps', token: tAkn, data: { versi: 0, setelan: { indeks: 100, batas: 95 }, hari: {}, items: [
+      { id: 'R1', tanggal: '2026-10-12', kategori: 'Gas', uraian: 'Gas rencana', nominal: 200000, rencana_riil: 180000, nota_url: 'https://drive.google.com/r1', nota_no: 'RN-1', biaya_admin: 6500, penerima_id: 'pn1' },
+    ] } });
+    ok(r.ok, 'saveRencanaOps dengan rencana_riil, nota_url, nota_no, biaya_admin tersimpan: ' + (r.error || ''));
+    r = call(ea, 'GET', { action: 'getRencanaOps', token: tAkn });
+    const ro1 = r.data.rencana.items[0];
+    ok(ro1 && ro1.rencana_riil === 180000 && ro1.nota_url === 'https://drive.google.com/r1' && ro1.nota_no === 'RN-1' && ro1.biaya_admin === 6500, 'Rencana Ops membaca kembali rencana_riil, nota_url, nota_no, biaya_admin');
+
+    // 9. Realisasi Massal langsung (tanpa_mutasi: true) untuk tunggakan lama — satu dapur maupun ALL dapur sekaligus
+    BA.IdentitasLPDH = [['dapur_id', 'id_sppg', 'nama_sppg', 'alamat', 'kel', 'kec', 'yayasan', 'no_va', 'bank'], ['D001', '', '', '', '', '', '', '', 'BNI'], ['D002', '', '', '', '', '', '', '', 'BNI']];
+    BA.Pengajuan.push(['PL1', 'BA-PL1', 'D001', 'P1', '2026-10-08', 'SELESAI', '', 'U2', '', 'U3']);
+    BA.Pengajuan.push(['PL2', 'BA-PL2', 'D002', 'P2', '2026-10-09', 'SELESAI', '', 'U2', '', 'U3']);
+    BA.Pengajuan.push(['PL3', 'BA-PL3', 'D002', 'P2OLD', '2026-09-20', 'SELESAI', '', 'U2', '', 'U3']);
+    BA.PengajuanItem.push(
+      ['PL1-1', 'PL1', 'D001', 'P1', 1, 'Operasional', 'Gas', 'Tunggakan D1', 50000, 'pn1', 'Toko A', 'BCA', '123', 'TIDAK', 'DISETUJUI', '', 1, '', 'U3', '', '', '', '', '', ''],
+      ['PL2-1', 'PL2', 'D002', 'P2', 1, 'Bahan Baku', 'Semua Kategori', 'Tunggakan D2', 120000, 'pn2', 'Yayasan Mitra', 'BNI', '999', 'TIDAK', 'DISETUJUI', '', 1, '', 'U3', '', '', '', '', 'https://nota/d2', 'NT-D2'],
+      ['PL3-1', 'PL3', 'D002', 'P2OLD', 1, 'Operasional', 'Listrik', 'Tunggakan D2 lama', 80000, 'pn1', 'Toko A', 'BCA', '123', 'TIDAK', 'DISETUJUI', '', 1, '', 'U3', '', '', '', '', '', '']
+    );
+    r = call(ea, 'POST', { action: 'realisasiMassal', token: tAdm, dapur: 'ALL', tanpa_mutasi: true, sertakan_tutup: false, catat_admin: true });
+    ok(r.ok && r.data.tanpaMutasi && r.data.jumlah === 2 && r.data.nominal === 170000 && r.data.admin === 6500 && r.data.nAdmin === 1, 'simulasi langsung ALL (periode aktif): 2 baris, 1 antarbank Rp 6.500 (' + JSON.stringify(r.data && [r.data.jumlah, r.data.nominal, r.data.admin]) + ')');
+    r = call(ea, 'POST', { action: 'realisasiMassal', token: tAdm, dapur: 'ALL', tanpa_mutasi: true, sertakan_tutup: true, catat_admin: true });
+    ok(r.ok && r.data.jumlah === 3 && r.data.nominal === 250000 && r.data.admin === 13000 && r.data.nAdmin === 2, 'simulasi langsung ALL (+ periode ditutup): 3 baris Rp 250k + 2 admin Rp 13k');
+    r = call(ea, 'POST', { action: 'realisasiMassal', token: tAdm, dapur: 'ALL', tanpa_mutasi: true, sertakan_tutup: true, catat_admin: false });
+    ok(r.ok && r.data.jumlah === 3 && r.data.admin === 0 && r.data.nAdmin === 0, 'simulasi langsung tanpa catat admin: admin = 0');
+    r = call(ea, 'POST', { action: 'realisasiMassal', token: tAdm, dapur: 'ALL', tanpa_mutasi: true, sertakan_tutup: true, catat_admin: true, eksekusi: true, jumlah_konfirmasi: 3 });
+    ok(r.ok && r.data.dibuat === 3 && r.data.nAdmin === 2 && r.data.admin === 13000, 'eksekusi langsung ALL: 3 transaksi + 2 biaya admin dibuat');
+    ok(BA.PengajuanItem.filter(x => ['PL1-1', 'PL2-1', 'PL3-1'].includes(x[0])).every(x => x[14] === 'TEREALISASI' && !!x[19]), 'semua tunggakan lama di semua dapur berstatus TEREALISASI');
+    r = call(ea, 'POST', { action: 'realisasiMassal', token: tAdm, dapur: 'ALL', tanpa_mutasi: true, sertakan_tutup: true });
+    ok(r.ok && r.data.jumlah === 0, 'setelah realisasi langsung ALL: 0 tunggakan tersisa');
   }
 
   console.log(fails ? '\n' + fails + ' GAGAL' : '\nSEMUA LULUS');

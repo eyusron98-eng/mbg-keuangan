@@ -1788,6 +1788,7 @@ function roKodeBank(b) {
 }
 function roFee(item, penerimaMap, bankVA) {
   if (item.status === 'TRANSAKSI') return 0;   // transaksi tercatat: biaya admin (bila ada) sudah jadi baris sendiri
+  if (item.biaya_admin !== undefined && item.biaya_admin !== '' && item.biaya_admin !== null) return Math.max(0, Number(item.biaya_admin) || 0);
   const pn = penerimaMap && penerimaMap[item.penerima_id];
   if (!pn) return RO_FEE;
   const a = roKodeBank(pn.bank), b = roKodeBank(bankVA);
@@ -2015,6 +2016,20 @@ function roGeserLebih(items, ctx, setelan, hariSet, dariTgl, luar) {
   return { items: hasil, pindah: pindah, sisaLebih: sisaLebih };
 }
 // </RENCANA-OPS>
+// Kategori yang bukti pembayarannya (kuitansi) dibuat otomatis oleh server saat persetujuan/realisasi
+const KATEGORI_KUITANSI = ['Insentif Guru/PIC Sekolah', 'Insentif Kader Posyandu', 'Sewa Kendaraan'];
+function pakaiKuitansi(it) { return it && (it.jenis === 'Fasilitas SPPG' || (it.jenis === 'Operasional' && KATEGORI_KUITANSI.indexOf(it.kategori) >= 0)); }
+// Kategori Operasional yang nilai realisasinya selalu sama dengan nilai pengajuan (anggaran)
+const KATEGORI_OPS_REALISASI_SAMA = ['Gaji/honor relawan pekerja SPPG', 'Insentif Guru/PIC Sekolah', 'Insentif Kader Posyandu'];
+function butuhRencanaRealisasi(jenis, kategori) { return jenis === 'Operasional' && !!kategori && KATEGORI_OPS_REALISASI_SAMA.indexOf(kategori) < 0; }
+const BIAYA_ADMIN_DEFAULT = 6500;
+function roSiapAjukan(x) {
+  if (!x || !x.penerima_id) return false;
+  if (butuhRencanaRealisasi('Operasional', x.kategori) && !(Number(x.rencana_riil) > 0)) return false;
+  if (!pakaiKuitansi({ jenis: 'Operasional', kategori: x.kategori }) && !x.nota_url) return false;
+  if (/^[\s\-\u2013\u2014_.\/]+$/.test(x.nota_no || '')) return false;
+  return true;
+}
 function RencanaOpsPage({ session, scope, toast }) {
   const role = session.user.role;
   const dapurId = role === 'akuntan' ? session.user.dapur : (scope && scope !== 'ALL' ? scope : '');
@@ -2093,12 +2108,12 @@ function RencanaOpsPage({ session, scope, toast }) {
     setKonfirm(false);
     toast(muat.length ? 'Usulan dibuat — periksa lalu Simpan' : u.catatan, muat.length ? undefined : 'error');
   }
-  // Ajukan baris siap (penerima terisi) di tanggal t; hanyaId = satu baris saja. Baris yang belum lengkap dilewati.
+  // Ajukan baris siap (penerima, rencana realisasi bila perlu, & bukti/nota terisi) di tanggal t; hanyaId = satu baris saja.
   async function ajukan(t, hanyaId, daftar) {
     const semua = daftar || items;
     if (lewat(t)) { toast('Tanggal sudah lewat — tidak bisa diajukan', 'error'); return; }
-    const baris = semua.filter(function(x) { return x.tanggal === t && !terkunci(x) && x.penerima_id && (!hanyaId || x.id === hanyaId); });
-    if (!baris.length) { toast(hanyaId ? 'Pilih penerima baris ini dulu' : 'Belum ada baris siap diajukan (penerima belum dipilih)', 'error'); return; }
+    const baris = semua.filter(function(x) { return x.tanggal === t && !terkunci(x) && roSiapAjukan(x) && (!hanyaId || x.id === hanyaId); });
+    if (!baris.length) { toast(hanyaId ? 'Lengkapi penerima, rencana realisasi, dan bukti/nota baris ini dulu' : 'Belum ada baris siap diajukan (lengkapi penerima, rencana realisasi, dan bukti/nota)', 'error'); return; }
     const h = roHari(ctx.periode, hariSet).find(function(d) { return d.tanggal === t; });
     const nilai = function(a) { return a.reduce(function(sm, x) { return sm + x.nominal + roFee(x, pmap, ctx.bankVA); }, 0); };
     const sudah = nilai(semua.concat(luarItems).filter(function(x) { return x.tanggal === t && terkunci(x); }));
@@ -2113,7 +2128,10 @@ function RencanaOpsPage({ session, scope, toast }) {
     setAjukanTgl(t);
     if (daftar && !(await simpan(semua))) { setAjukanTgl(''); return; }
     const res = await apiPost('createPengajuan', { tanggal: t, request_id: 'RO-' + ctx.periode.id + '-' + t + '-' + roHash(baris.map(function(x) { return x.id + ':' + x.nominal + ':' + x.penerima_id; }).join(',') + '|' + Math.floor(Date.now() / 60000)).toString(36),   // kirim ulang dalam 1 menit = sama; ajukan ulang setelah dibatalkan = pengajuan baru
-      items: baris.map(function(x) { return { jenis: 'Operasional', kategori: x.kategori, uraian: x.uraian + (x.bagian ? ' (bagian ' + x.bagian + ')' : ''), nominal: x.nominal, penerima_id: x.penerima_id, catatan: catatan }; }) });
+      items: baris.map(function(x) { return { jenis: 'Operasional', kategori: x.kategori, uraian: x.uraian + (x.bagian ? ' (bagian ' + x.bagian + ')' : ''), nominal: x.nominal,
+        rencana_riil: butuhRencanaRealisasi('Operasional', x.kategori) ? Number(x.rencana_riil) : x.nominal,
+        biaya_admin: roFee(x, pmap, ctx.bankVA), nota_url: x.nota_url || '', nota_no: String(x.nota_no || '').trim(),
+        penerima_id: x.penerima_id, catatan: catatan }; }) });
     if (!res.ok) { setAjukanTgl(''); toast('Gagal mengajukan: ' + (res.error || ''), 'error'); return; }
     const ids = {}; baris.forEach(function(x) { ids[x.id] = 1; });
     const baru = semua.map(function(x) { return ids[x.id] ? Object.assign({}, x, { pengajuan_id: res.data.id, nomor: res.data.nomor, batal: undefined }) : x; });
@@ -2151,15 +2169,19 @@ function RencanaOpsPage({ session, scope, toast }) {
   const statusAju = function(x) { return (x.luar ? 'Di luar rencana · ' : '') + (({ DIAJUKAN: 'Menunggu persetujuan', DISETUJUI: 'Disetujui', REVISI: 'Perlu revisi — ubah di menu Pengajuan', TEREALISASI: 'Terealisasi', TRANSAKSI: 'Transaksi tercatat' })[x.luar ? x.status : stBaris[x.id]] || 'Diajukan'); };
   const Baris = function({ x }) {
     const fee = roFee(x, pmap, ctx.bankVA), pn = pmap[x.penerima_id];
+    const butuhRiil = butuhRencanaRealisasi('Operasional', x.kategori);
     return <button type="button" onClick={function() { setEdit(Object.assign({}, x)); }} className="w-full text-left flex items-start justify-between gap-2 py-2"
       style={{ borderTop: '1px solid ' + COLORS.line }}>
       <div className="min-w-0">
         <div className="text-sm truncate" style={{ color: COLORS.ink }}>{x.rutin ? '↻ ' : ''}{x.uraian}{x.bagian ? ' · bagian ' + x.bagian : ''}</div>
-        <div className="text-xs truncate" style={{ color: pn ? COLORS.muted : COLORS.danger }}>{x.kategori} · {pn ? pn.nama + ' (' + roKodeBank(pn.bank) + ')' : 'penerima belum dipilih'}{fee ? ' · admin ' + fmtNoRp(fee) : ''}</div>
+        <div className="text-xs truncate" style={{ color: pn ? COLORS.muted : COLORS.danger }}>{x.kategori} · {pn ? pn.nama + ' (' + roKodeBank(pn.bank) + ')' : 'penerima belum dipilih'}{fee ? ' · admin ' + fmtNoRp(fee) : ''}{!x.pengajuan_id && !x.luar && !pakaiKuitansi({ jenis: 'Operasional', kategori: x.kategori }) && !x.nota_url ? ' · belum ada bukti' : ''}</div>
         {(x.pengajuan_id || x.luar) && <div className="text-[11px] font-semibold" style={{ color: x.luar ? COLORS.blue : stBaris[x.id] === 'REVISI' ? COLORS.amber : COLORS.green }}>{x.nomor ? x.nomor + ' · ' : ''}{statusAju(x)}</div>}
         {!x.pengajuan_id && x.batal && <div className="text-[11px] font-semibold" style={{ color: COLORS.amber }}>Pengajuan sebelumnya {x.batal} — bisa diubah & diajukan lagi</div>}
       </div>
-      <div className="text-sm font-semibold num shrink-0" style={{ color: COLORS.ink }}>{fmtNoRp(x.nominal)}</div>
+      <div className="text-right shrink-0">
+        <div className="text-sm font-semibold num" style={{ color: COLORS.ink }}>{fmtNoRp(x.nominal)}</div>
+        {butuhRiil && x.rencana_riil > 0 && <div className="text-[11px] num" style={{ color: COLORS.green }}>Aktual {fmtNoRp(x.rencana_riil)}</div>}
+      </div>
     </button>;
   };
   const tak = items.filter(function(x) { return !x.tanggal; });
@@ -2242,7 +2264,7 @@ function RencanaOpsPage({ session, scope, toast }) {
       const baris = hitung.filter(function(x) { return x.tanggal === h.tanggal; });
       const lebih = h.pakai > h.pagu, warn = !lebih && h.pakai > h.batas;
       const pct = h.pagu ? Math.min(100, Math.round(h.pakai / h.pagu * 100)) : (h.pakai ? 100 : 0);
-      const belum = baris.filter(function(x) { return !terkunci(x) && x.penerima_id; });
+      const belum = baris.filter(function(x) { return !terkunci(x) && roSiapAjukan(x); });
       const sudahLewat = lewat(h.tanggal);
       if (h.libur && !baris.length && !bisaUbah) return null;
       return <Card key={h.tanggal}>
@@ -2262,7 +2284,7 @@ function RencanaOpsPage({ session, scope, toast }) {
         {baris.map(function(x) { return <Baris key={x.id} x={x}/>; })}
         {bisaUbah && !sudahLewat && belum.length > 0 && <div className="mt-2">
           <Btn size="sm" full disabled={!!ajukanTgl} onClick={function() { ajukan(h.tanggal); }}>{ajukanTgl === h.tanggal ? I.spinner : I.file} Ajukan {belum.length} baris siap ({fmt(belum.reduce(function(s, x) { return s + x.nominal; }, 0))})</Btn>
-          <div className="text-xs mt-1" style={{ color: COLORS.muted }}>Baris tanpa penerima dilewati. Bisa juga diajukan satu per satu dari baris masing-masing.</div>
+          <div className="text-xs mt-1" style={{ color: COLORS.muted }}>Baris yang belum lengkap (penerima, rencana realisasi, atau bukti/nota) dilewati. Bisa juga diajukan satu per satu dari baris masing-masing.</div>
         </div>}
       </Card>;
     })}
@@ -2273,20 +2295,35 @@ function RencanaOpsPage({ session, scope, toast }) {
         setEdit({ id: 'RO' + Date.now().toString(36), tanggal: p.tanggal, kategori: p.kategori, uraian: roLabel(p.kategori), nominal: 0, penerima_id: '', baru: true }); }}>{I.plus} Tambah baris {roLabel(pilihSel.kategori)}</Btn></div>}
     </Modal>}
     {waText && <WAModal text={waText.text} ids={waText.ids} toast={toast} onDisalin={function() { setWaVer(function(v) { return v + 1; }); }} onClose={function() { setWaText(null); }}/>}
-    {konfirmAju && <Modal title={'Ajukan ' + konfirmAju.baris.length + ' baris untuk ' + fmtDateLong(konfirmAju.t) + '?'} onClose={function() { setKonfirmAju(null); }}>
-      <div className="text-sm mb-2" style={{ color: COLORS.ink }}>Pengajuan akan dikirim ke Yayasan/PIC dengan <b>hari H {fmtDateLong(konfirmAju.t)}</b>{konfirmAju.t !== hariIni ? ' (bukan hari ini)' : ''}.</div>
-      {konfirmAju.baris.map(function(x) { return <div key={x.id} className="flex justify-between gap-2 py-1.5 text-sm" style={{ borderTop: '1px solid ' + COLORS.line }}>
-        <span className="min-w-0 truncate">{x.uraian} · {(pmap[x.penerima_id] || {}).nama}</span><b className="num shrink-0">{fmt(x.nominal)}</b></div>; })}
-      <div className="flex justify-between py-1.5 text-sm font-bold" style={{ borderTop: '1px solid ' + COLORS.line }}><span>Jumlah</span><span className="num">{fmt(konfirmAju.baris.reduce(function(a, x) { return a + x.nominal; }, 0))}</span></div>
-      {konfirmAju.lebih > 0 && <div className="rounded-lg p-2.5 mt-2 text-xs" style={{ background: '#F8E9E5', color: COLORS.danger }}>
-        <div className="font-semibold">⚠️ Melebihi pagu harian {fmt(konfirmAju.lebih)}</div>
-        <div>Pagu {fmt(konfirmAju.pagu)} (PM {fmtNoRp(konfirmAju.pm)}){konfirmAju.sudah ? ' · sudah diajukan ' + fmt(konfirmAju.sudah) : ''}. Tetap bisa diajukan dengan catatan untuk Yayasan; di LPDH hari ini akan tertulis "Melebihi pagu" dan perlu dijelaskan.</div>
-        <textarea value={konfirmAju.catatan} onChange={function(e) { setKonfirmAju(Object.assign({}, konfirmAju, { catatan: e.target.value })); }} rows={3} aria-label="Catatan untuk Yayasan"
-          placeholder="Alasan melebihi pagu (wajib), cth. stok gas habis, harga naik, PM hari ini turun" style={Object.assign({}, inputStyle, { marginTop: 8, fontSize: 13, minHeight: 64 })}/>
-      </div>}
-      <div className="flex gap-2 justify-end mt-3"><Btn kind="ghost" onClick={function() { setKonfirmAju(null); }}>Batal</Btn>
-        <Btn kind={konfirmAju.lebih > 0 ? 'danger' : 'solid'} disabled={konfirmAju.lebih > 0 && konfirmAju.catatan.trim().length < 10} onClick={function() { kirimAju(konfirmAju); }}>{I.file} {konfirmAju.lebih > 0 ? 'Ajukan dengan catatan' : 'Ya, ajukan'}</Btn></div>
-    </Modal>}
+    {konfirmAju && (function() {
+      const totAng = konfirmAju.baris.reduce(function(a, x) { return a + x.nominal; }, 0);
+      const totAdm = konfirmAju.baris.reduce(function(a, x) { return a + roFee(x, pmap, ctx.bankVA); }, 0);
+      return <Modal title={'Ajukan ' + konfirmAju.baris.length + ' baris untuk ' + fmtDateLong(konfirmAju.t) + '?'} onClose={function() { setKonfirmAju(null); }}>
+        <div className="text-sm mb-2" style={{ color: COLORS.ink }}>Pengajuan akan dikirim ke Yayasan/PIC dengan <b>hari H {fmtDateLong(konfirmAju.t)}</b>{konfirmAju.t !== hariIni ? ' (bukan hari ini)' : ''}. Bila disetujui, otomatis terealisasi menjadi transaksi.</div>
+        {konfirmAju.baris.map(function(x) {
+          const fAdm = roFee(x, pmap, ctx.bankVA), bRiil = butuhRencanaRealisasi('Operasional', x.kategori);
+          return <div key={x.id} className="flex justify-between gap-2 py-1.5 text-sm" style={{ borderTop: '1px solid ' + COLORS.line }}>
+            <div className="min-w-0 truncate">
+              <div className="truncate">{x.uraian} · {(pmap[x.penerima_id] || {}).nama}</div>
+              {bRiil && <div className="text-xs" style={{ color: COLORS.green }}>Rencana realisasi (aktual): {fmt(x.rencana_riil)}</div>}
+              {fAdm > 0 && <div className="text-xs" style={{ color: '#9A6A0B' }}>+ biaya admin {fmt(fAdm)}</div>}
+            </div>
+            <b className="num shrink-0">{fmt(x.nominal)}</b>
+          </div>;
+        })}
+        <div className="flex justify-between py-1.5 text-sm font-bold" style={{ borderTop: '1px solid ' + COLORS.line }}><span>Jumlah anggaran</span><span className="num">{fmt(totAng)}</span></div>
+        {totAdm > 0 && <div className="flex justify-between py-1 text-xs" style={{ color: '#9A6A0B' }}><span>Biaya admin transfer</span><span className="num">{fmt(totAdm)}</span></div>}
+        {totAdm > 0 && <div className="flex justify-between py-1 text-sm font-bold" style={{ color: COLORS.ink }}><span>Total potong VA</span><span className="num">{fmt(totAng + totAdm)}</span></div>}
+        {konfirmAju.lebih > 0 && <div className="rounded-lg p-2.5 mt-2 text-xs" style={{ background: '#F8E9E5', color: COLORS.danger }}>
+          <div className="font-semibold">⚠️ Melebihi pagu harian {fmt(konfirmAju.lebih)}</div>
+          <div>Pagu {fmt(konfirmAju.pagu)} (PM {fmtNoRp(konfirmAju.pm)}){konfirmAju.sudah ? ' · sudah diajukan ' + fmt(konfirmAju.sudah) : ''}. Tetap bisa diajukan dengan catatan untuk Yayasan; di LPDH hari ini akan tertulis "Melebihi pagu" dan perlu dijelaskan.</div>
+          <textarea value={konfirmAju.catatan} onChange={function(e) { setKonfirmAju(Object.assign({}, konfirmAju, { catatan: e.target.value })); }} rows={3} aria-label="Catatan untuk Yayasan"
+            placeholder="Alasan melebihi pagu (wajib), cth. stok gas habis, harga naik, PM hari ini turun" style={Object.assign({}, inputStyle, { marginTop: 8, fontSize: 13, minHeight: 64 })}/>
+        </div>}
+        <div className="flex gap-2 justify-end mt-3"><Btn kind="ghost" onClick={function() { setKonfirmAju(null); }}>Batal</Btn>
+          <Btn kind={konfirmAju.lebih > 0 ? 'danger' : 'solid'} disabled={konfirmAju.lebih > 0 && konfirmAju.catatan.trim().length < 10} onClick={function() { kirimAju(konfirmAju); }}>{I.file} {konfirmAju.lebih > 0 ? 'Ajukan dengan catatan' : 'Ya, ajukan'}</Btn></div>
+      </Modal>;
+    })()}
     {hapusTak && <ConfirmModal title="Hapus yang tidak muat?" danger confirmLabel="Hapus" message={'Hapus ' + tak.length + ' baris yang tidak muat (' + fmt(ring.takNilai) + ') dari rencana? Baris terjadwal tidak berubah.'}
       onConfirm={function() { ubah(function(a) { return a.filter(function(x) { return x.tanggal || x.pengajuan_id; }); }); setHapusTak(false); toast('Baris tidak muat dihapus — tekan Simpan'); }}
       onClose={function() { setHapusTak(false); }}/>}
@@ -2316,7 +2353,7 @@ function RencanaMatriks({ m, bisaUbah, ajukanTgl, onSel, onAjukan, terkunci, lew
   return <Card pad={false}>
     <div className="px-4 pt-3 pb-2 text-xs" style={{ color: COLORS.muted }}>Geser ke samping untuk melihat semua pos. Ketuk sel untuk mengubah/menambah; ketuk sel merah "Tidak muat" untuk melihat barangnya.
       Usulan otomatis hanya mengisi sampai {m.batas}% pagu (cadangan bila PM turun); sisanya boleh diisi manual. Tanggal yang sudah lewat (abu-abu) tidak bisa diisi atau diajukan — anggarannya diubah lewat menu Riwayat; PM & HPE-nya tetap bisa diubah.
-      Tombol Ajukan mengirim baris yang penerimanya sudah dipilih; satu baris bisa diajukan sendiri dari selnya.
+      Tombol Ajukan mengirim baris yang sudah lengkap (penerima, rencana realisasi, & bukti/nota); satu baris bisa diajukan sendiri dari selnya.
       PM tiap hari bisa diubah langsung di kolom Hari (bingkai kuning = berbeda dari PM setup {fmtNoRp(pmSetup)}); pagu hari itu ikut berubah — jangan lupa Simpan.
       <span className="inline-flex items-center gap-1 ml-2"><span style={{ width: 10, height: 10, background: '#DCEFE3', display: 'inline-block', borderRadius: 2 }}/> sudah diajukan</span>
       <span className="inline-flex items-center gap-1 ml-2"><span style={{ width: 10, height: 10, background: '#E3ECF7', display: 'inline-block', borderRadius: 2 }}/> di luar rencana (menu Pengajuan / input darurat)</span>
@@ -2332,7 +2369,7 @@ function RencanaMatriks({ m, bisaUbah, ajukanTgl, onSel, onAjukan, terkunci, lew
           {r.hari.map(function(h) {
             const row = m.sel[h.tanggal] || {}, lebih = h.pakai > h.pagu, sisa = h.pagu - h.pakai;
             const sudahLewat = lewat(h.tanggal);
-            const belum = kol.reduce(function(n, k) { return n + (row[k] ? row[k].items.filter(function(x) { return !x.pengajuan_id && !x.luar && x.penerima_id; }).length : 0); }, 0);
+            const belum = kol.reduce(function(n, k) { return n + (row[k] ? row[k].items.filter(function(x) { return !x.pengajuan_id && !x.luar && roSiapAjukan(x); }).length : 0); }, 0);
             const bg = sudahLewat ? '#EEEEEA' : lebih ? '#F8E9E5' : h.libur ? COLORS.paper : COLORS.surface;
             return <tr key={h.tanggal}>
               <td style={Object.assign({}, td, kiri, { background: bg, fontWeight: 600, color: COLORS.ink })}>{h.nama} {h.tanggal.slice(8)}/{h.tanggal.slice(5, 7)}
@@ -2360,7 +2397,7 @@ function RencanaMatriks({ m, bisaUbah, ajukanTgl, onSel, onAjukan, terkunci, lew
                 style={{ background: w.belum ? '#FBF3E3' : 'transparent', color: w.belum ? '#9A6A0B' : COLORS.green, border: '1px solid ' + (w.belum ? '#E8C77A' : COLORS.line) }}>{w.belum ? '● ' : ''}WA</button>; })()}
                 {belum > 0 && !sudahLewat && <button type="button" disabled={!!ajukanTgl} onClick={function() { onAjukan(h.tanggal); }}
                 className="rounded-md px-2 py-1 text-[11px] font-semibold" style={{ background: COLORS.green, color: '#fff' }}
-                title={'Ajukan ' + belum + ' baris yang penerimanya sudah dipilih'}>{ajukanTgl === h.tanggal ? '…' : 'Ajukan ' + belum}</button>}</td>}
+                title={'Ajukan ' + belum + ' baris yang sudah siap'}>{ajukanTgl === h.tanggal ? '…' : 'Ajukan ' + belum}</button>}</td>}
             </tr>;
           })}
         </tbody>
@@ -2386,21 +2423,57 @@ function RencanaMatriks({ m, bisaUbah, ajukanTgl, onSel, onAjukan, terkunci, lew
 }
 function RencanaItemModal({ x, ctx, hari, kategori, bisaUbah, pmap, onClose, onSave, onDelete, onAjukan, lewat, busy, toast, onPenerima, statusBaris, bisaBatal, onBatal, onWa }) {
   const [f, setF] = useState(x);
+  const [notaFile, setNotaFile] = useState(null);
+  const [uploading, setUploading] = useState(false);
+  const [adminDiatur, setAdminDiatur] = useState(x.biaya_admin !== undefined);
+  const [adaAdmin, setAdaAdmin] = useState(x.biaya_admin !== undefined ? Number(x.biaya_admin) > 0 : roFee(x, pmap, ctx.bankVA) > 0);
+  const [biayaAdmin, setBiayaAdmin] = useState(String(x.biaya_admin > 0 ? x.biaya_admin : BIAYA_ADMIN_DEFAULT));
   const [alasan, setAlasan] = useState('');
   const [mauBatal, setMauBatal] = useState(false);
   const labelSt = ({ DIAJUKAN: 'menunggu persetujuan', DISETUJUI: 'sudah disetujui, belum direalisasi', REVISI: 'perlu revisi', TEREALISASI: 'sudah direalisasi' })[statusBaris] || 'diajukan';
   const bolehBatal = bisaBatal && ['DIAJUKAN', 'REVISI', 'DISETUJUI'].indexOf(statusBaris) >= 0;
-  const set = function(k, v) { setF(Object.assign({}, f, { [k]: v })); };
+  const set = function(k, v) {
+    const next = Object.assign({}, f, { [k]: v });
+    if (k === 'penerima_id' && !adminDiatur) {
+      const fAuto = roFee({ penerima_id: v }, pmap, ctx.bankVA);
+      setAdaAdmin(fAuto > 0);
+      setBiayaAdmin(String(fAuto > 0 ? fAuto : BIAYA_ADMIN_DEFAULT));
+      delete next.biaya_admin;
+    }
+    setF(next);
+  };
+  const butuhRiil = butuhRencanaRealisasi('Operasional', f.kategori);
+  const kuitansi = !!f.kategori && pakaiKuitansi({ jenis: 'Operasional', kategori: f.kategori });
+  const feeAktif = adaAdmin ? (Number(biayaAdmin) || 0) : 0;
   const h = hari.find(function(d) { return d.tanggal === f.tanggal; });
   const lama = x.tanggal === f.tanggal ? x.nominal + roFee(x, pmap, ctx.bankVA) : 0;
-  const sisa = h ? h.pagu - h.pakai + lama : 0, butuh = (Number(f.nominal) || 0) + roFee(f, pmap, ctx.bankVA);
-  const err = !f.kategori ? 'Pilih kategori' : !String(f.uraian || '').trim() ? 'Uraian wajib' : !(Number(f.nominal) > 0) ? 'Nominal wajib' : null;
+  const sisa = h ? h.pagu - h.pakai + lama : 0, butuh = (Number(f.nominal) || 0) + feeAktif;
+  const err = !f.kategori ? 'Pilih kategori' : !String(f.uraian || '').trim() ? 'Uraian wajib' : !(Number(f.nominal) > 0) ? 'Nominal wajib'
+    : /^[\s\-\u2013\u2014_.\/]+$/.test(f.nota_no || '') ? 'Nomor nota tidak boleh "-"'
+    : (adaAdmin && !(Number(biayaAdmin) > 0 && Number(biayaAdmin) <= 50000)) ? 'Biaya admin Rp 1 – Rp 50.000' : null;
+  const ajuErr = err || (!f.tanggal ? 'Pilih tanggal' : !f.penerima_id ? 'Pilih penerima' : lewat(f.tanggal) ? 'Tanggal sudah lewat'
+    : (butuhRiil && !(Number(f.rencana_riil) > 0)) ? 'Isi nilai rencana realisasi (aktual)'
+    : (!kuitansi && !notaFile && !f.nota_url) ? 'Unggah bukti / nota dulu' : null);
+  async function siapkanSimpan() {
+    let url = f.nota_url || '';
+    if (notaFile) {
+      setUploading(true);
+      try { url = await unggahNota(notaFile, f.tanggal || todayISO(), f.uraian || f.kategori); }
+      catch (e) { setUploading(false); toast(e.message, 'error'); return null; }
+      setUploading(false);
+    }
+    const out = Object.assign({}, f, { nominal: Number(f.nominal) || 0, uraian: String(f.uraian).trim(),
+      rencana_riil: butuhRiil ? (Number(f.rencana_riil) || 0) : undefined,
+      nota_url: url, nota_no: String(f.nota_no || '').trim(),
+      biaya_admin: adminDiatur ? feeAktif : undefined });
+    return out;
+  }
   return <Modal title={x.baru ? 'Tambah kebutuhan' : (bisaUbah ? 'Ubah baris rencana' : 'Baris rencana')} onClose={onClose}>
     {x.luar && x.status === 'TRANSAKSI' && <div className="rounded-lg p-2.5 mb-3 text-xs" style={{ background: '#E3ECF7', color: COLORS.blue }}>
       Transaksi tanpa pengajuan (input darurat / manual){x.nomor ? ', no bukti ' + x.nomor : ''}. Ikut dihitung dalam pagu hari ini; ubah lewat menu Riwayat.</div>}
     {x.pengajuan_id && x.luar && <div className="rounded-lg p-2.5 mb-1 text-xs" style={{ background: '#E3ECF7', color: COLORS.blue }}>Diajukan di luar rencana, lewat menu Pengajuan. Ikut dihitung dalam pagu hari itu.</div>}
     {x.pengajuan_id && <div className="rounded-lg p-2.5 mb-3 text-xs" style={{ background: '#E8F1EC', color: COLORS.deep }}>
-      Sudah diajukan ({x.nomor}) — <b>{labelSt}</b>, hari H {fmtDateLong(x.tanggal)}. Lihat di menu <b>Pengajuan</b> → tampilan <b>Periode aktif</b>{statusBaris === 'DISETUJUI' ? ', dan di menu Realisasi' : ''}.
+      Sudah diajukan ({x.nomor}) — <b>{labelSt}</b>, hari H {fmtDateLong(x.tanggal)}. Lihat di menu <b>Pengajuan</b> → tampilan <b>Periode aktif</b>.
       {['DIAJUKAN', 'REVISI', 'DISETUJUI'].indexOf(statusBaris) >= 0 && <div className="mt-2"><Btn size="sm" kind="ghost" onClick={function() { onWa(x); }}>{I.file} Salin teks WA pengajuan ini</Btn></div>}
       {bolehBatal && <div className="mt-2">
         {!mauBatal ? <Btn size="sm" kind="ghost" onClick={function() { setMauBatal(true); }}>{I.x} Batalkan pengajuan baris ini</Btn>
@@ -2421,18 +2494,37 @@ function RencanaItemModal({ x, ctx, hari, kategori, bisaUbah, pmap, onClose, onS
     <Field label="Kategori"><select value={f.kategori} disabled={!bisaUbah} onChange={function(e) { set('kategori', e.target.value); }} style={inputStyle} aria-label="Kategori rencana">
       <option value="">Pilih…</option>{kategori.map(function(k) { return <option key={k} value={k}>{k}</option>; })}</select></Field>
     <Field label="Uraian"><input value={f.uraian} disabled={!bisaUbah} onChange={function(e) { set('uraian', e.target.value); }} style={inputStyle} aria-label="Uraian rencana" placeholder="cth. Isi gas 12 kg 8 tabung"/></Field>
-    <Field label="Nominal"><RupiahInput value={String(f.nominal || '')} disabled={!bisaUbah} onChange={function(v) { set('nominal', Number(v) || 0); }} label="Nominal rencana"/></Field>
-    <Field label="Penerima / toko" hint={f.penerima_id && roFee(f, pmap, ctx.bankVA) ? 'Beda bank dengan VA → biaya transfer Rp 6.500 ikut dihitung' : f.penerima_id ? 'Sesama bank VA → tanpa biaya transfer' : 'Wajib diisi sebelum diajukan'}>
+    <Field label={butuhRiil ? 'Anggaran pengajuan' : 'Nominal'} hint={butuhRiil ? 'Nilai anggaran yang diajukan & memotong saldo VA' : (f.kategori ? 'Nilai realisasi otomatis sama dengan nominal pengajuan' : null)}>
+      <RupiahInput value={String(f.nominal || '')} disabled={!bisaUbah} onChange={function(v) { set('nominal', Number(v) || 0); }} label="Nominal rencana"/></Field>
+    {butuhRiil && <Field label="Nilai rencana realisasi (aktual)" hint="Nilai aktual yang akan dibayarkan. Wajib diisi sebelum diajukan.">
+      <RupiahInput value={String(f.rencana_riil || '')} disabled={!bisaUbah} onChange={function(v) { set('rencana_riil', Number(v) || 0); }} label="Rencana realisasi"/></Field>}
+    <Field label="Penerima / toko" hint={f.penerima_id && roFee({ penerima_id: f.penerima_id }, pmap, ctx.bankVA) ? 'Beda bank dengan VA → rekomendasi biaya transfer Rp 6.500' : f.penerima_id ? 'Sesama bank VA → tanpa biaya transfer' : 'Wajib diisi sebelum diajukan'}>
       {bisaUbah ? <div aria-label="Penerima rencana"><PenerimaSelect list={ctx.penerima} value={f.penerima_id} toast={toast} onChange={function(v) { set('penerima_id', v); }} onListChange={onPenerima}/></div>
         : <select value={f.penerima_id} disabled style={inputStyle}><option value="">—</option>{ctx.penerima.map(function(p) { return <option key={p.id} value={p.id}>{p.nama} · {roKodeBank(p.bank)} {p.no_rek}</option>; })}</select>}</Field>
+    {bisaUbah && <BiayaAdminField ada={adaAdmin} biaya={biayaAdmin} onChange={function(patch) {
+      setAdminDiatur(true);
+      const nAda = patch.adaAdmin !== undefined ? patch.adaAdmin : adaAdmin;
+      const nBiaya = patch.biaya !== undefined ? patch.biaya : biayaAdmin;
+      setAdaAdmin(nAda); setBiayaAdmin(nBiaya);
+      setF(Object.assign({}, f, { biaya_admin: nAda ? (Number(nBiaya) || 0) : 0 }));
+    }}/>}
+    {f.kategori && !kuitansi && <>
+      <Field label="Nomor nota / bukti" hint="Opsional; kosong = nomor dibuat otomatis."><input value={f.nota_no || ''} disabled={!bisaUbah} onChange={function(e) { set('nota_no', e.target.value); }} style={inputStyle} placeholder="cth. NT-0012" aria-label="Nomor nota rencana"/></Field>
+      {bisaUbah ? <Field label="Bukti / nota *" hint="Wajib diunggah sebelum diajukan."><BuktiPicker bukti={notaFile} setBukti={setNotaFile} existing={f.nota_url}/></Field>
+        : f.nota_url && <div className="mb-3 text-xs"><a href={f.nota_url} target="_blank" rel="noopener" className="underline" style={{ color: COLORS.blue }}>Lihat bukti/nota</a></div>}
+    </>}
+    {f.kategori && kuitansi && <div className="rounded-lg p-2.5 mb-3 text-xs" style={{ background: '#E8F1EC', color: COLORS.deep }}>
+      {I.check} <b>Kuitansi / bukti pembayaran dibuat otomatis</b> (PDF) saat pengajuan disetujui.
+      {bisaUbah && <details className="mt-1.5"><summary style={{ cursor: 'pointer', color: COLORS.muted }}>Atau unggah bukti sendiri (opsional)?</summary><div className="mt-2"><BuktiPicker bukti={notaFile} setBukti={setNotaFile} existing={f.nota_url}/></div></details>}
+    </div>}
     {x.tanggal && lewat(x.tanggal) && !x.pengajuan_id && <div className="rounded-lg p-2 mb-3 text-xs" style={{ background: COLORS.paper, color: COLORS.muted }}>Tanggal sudah lewat — baris ini tidak bisa diubah atau diajukan.</div>}
     {bisaUbah && <div className="flex gap-2">
       {!x.baru && <Btn kind="ghost" onClick={onDelete}>{I.trash} Hapus</Btn>}
-      <div className="flex-1"><Btn full kind="ghost" disabled={!!err} onClick={function() { onSave(Object.assign({}, f, { nominal: Number(f.nominal) || 0, uraian: String(f.uraian).trim() })); }}>{I.check} {err || 'Simpan baris'}</Btn></div>
+      <div className="flex-1"><Btn full kind="ghost" disabled={!!err || uploading} onClick={async function() { const out = await siapkanSimpan(); if (out) onSave(out); }}>{uploading ? I.spinner : I.check} {err || 'Simpan baris'}</Btn></div>
     </div>}
-    {bisaUbah && <div className="mt-2"><Btn full disabled={!!err || !f.tanggal || !f.penerima_id || lewat(f.tanggal) || busy}
-      onClick={function() { onAjukan(Object.assign({}, f, { nominal: Number(f.nominal) || 0, uraian: String(f.uraian).trim() })); }}>{I.file} Ajukan baris ini</Btn>
-      {(!f.tanggal || !f.penerima_id) && <div className="text-xs mt-1" style={{ color: COLORS.muted }}>Pilih tanggal dan penerima untuk mengajukan.</div>}</div>}
+    {bisaUbah && <div className="mt-2"><Btn full disabled={!!ajuErr || busy || uploading}
+      onClick={async function() { const out = await siapkanSimpan(); if (out) onAjukan(out); }}>{uploading ? I.spinner : I.file} Ajukan baris ini</Btn>
+      {ajuErr && <div className="text-xs mt-1" style={{ color: COLORS.muted }}>{ajuErr} untuk mengajukan.</div>}</div>}
   </Modal>;
 }
 
@@ -3476,7 +3568,7 @@ function Riwayat({ session, scope, toast, refreshKey }) {
         <ConfirmModal title="Hapus Transaksi"
           message={'Hapus transaksi "' + confirmDel.uraian + '" (' + fmt(confirmDel.riil) + ')? Tidak bisa dibatalkan.' +
             (isFeeTx(confirmDel) ? ' Hanya biaya admin yang dihapus; realisasinya tetap.' :
-             isLinkedTx(confirmDel) ? ' Baris pengajuannya akan kembali berstatus Disetujui (belum terealisasi). Biaya admin terkait ikut terhapus.' : '')}
+             isLinkedTx(confirmDel) ? ' Baris pengajuannya akan berstatus Dibatalkan. Biaya admin terkait ikut terhapus.' : '')}
           onConfirm={doDelete} onClose={function(){setConfirmDel(null);}} confirmLabel="Hapus" danger/>
       )}
     </div>
@@ -4130,7 +4222,6 @@ function RupiahInput({ value, onChange, disabled, label }) {
 }
 function isLinkedTx(tx) { const l = String((tx && tx.pengajuan_item_id) || ''); return !!l && l.indexOf('DARURAT') !== 0; }
 function isFeeTx(tx) { return String((tx && tx.pengajuan_item_id) || '').indexOf('ADMIN:') === 0; }
-const BIAYA_ADMIN_DEFAULT = 6500;
 function TxSourceBadge({ tx }) {
   const l = String(tx.pengajuan_item_id || '');
   if (!l) return null;
@@ -4247,11 +4338,16 @@ function rincianError(rinc) {
   return null;
 }
 function rincianKirim(rinc) { return (rinc || []).map(function(x) { return { nama: String(x.nama).trim(), kategori: x.kategori, volume: angkaDesimal(x.volume), satuan: String(x.satuan).trim(), harga: Number(x.harga) }; }); }
-function emptyRow() { return { key: Math.random().toString(36).slice(2), jenis: '', kategori: '', uraian: '', nominal: '', penerima_id: '', susulan: false, rincian: [], nota_url: '', notaFile: null, nota_no: '' }; }
+function emptyRow() { return { key: Math.random().toString(36).slice(2), jenis: '', kategori: '', uraian: '', nominal: '', rencana_riil: '', penerima_id: '', susulan: false, rincian: [], nota_url: '', notaFile: null, nota_no: '', adaAdmin: false, biaya_admin: String(BIAYA_ADMIN_DEFAULT), adminDiatur: false }; }
 function rowError(r) {
   if (!r.jenis) return 'jenis'; if (!r.kategori) return 'kategori'; if (!String(r.uraian).trim()) return 'uraian';
-  if (r.jenis === 'Bahan Baku') { const e = rincianError(r.rincian); if (e) return e; if (!r.notaFile && !r.nota_url) return 'foto nota'; if (/^[\s\-\u2013\u2014_.\/]+$/.test(r.nota_no || '')) return 'nomor nota (tidak boleh "-")'; }
-  if (!(Number(r.nominal) > 0)) return 'nominal'; if (!r.penerima_id) return 'penerima'; return null;
+  if (r.jenis === 'Bahan Baku') { const e = rincianError(r.rincian); if (e) return e; }
+  if (!(Number(r.nominal) > 0)) return 'nominal';
+  if (butuhRencanaRealisasi(r.jenis, r.kategori) && !(Number(r.rencana_riil) > 0)) return 'nilai rencana realisasi (aktual)';
+  if (!pakaiKuitansi(r) && !r.notaFile && !r.nota_url) return 'bukti / nota';
+  if (/^[\s\-\u2013\u2014_.\/]+$/.test(r.nota_no || '')) return 'nomor nota (tidak boleh "-")';
+  if (r.adaAdmin && !(Number(r.biaya_admin) > 0 && Number(r.biaya_admin) <= 50000)) return 'biaya admin (Rp 1 – Rp 50.000)';
+  if (!r.penerima_id) return 'penerima'; return null;
 }
 function RincianBahan({ rows, onChange }) {
   function ubah(i, k, v) { onChange(rows.map(function(x, j) { return j === i ? Object.assign({}, x, { [k]: v }) : x; })); }
@@ -4284,17 +4380,43 @@ function RincianBahan({ rows, onChange }) {
 }
 async function unggahNota(file, tanggal, uraian) {
   const ext = (String(file.name).split('.').pop() || 'jpg').toLowerCase();
-  const nama = 'NOTA_' + tanggal + '_' + String(uraian || 'bahan').replace(/[^a-zA-Z0-9_-]+/g, '-').slice(0, 40) + '.' + ext;
+  const nama = 'NOTA_' + tanggal + '_' + String(uraian || 'bukti').replace(/[^a-zA-Z0-9_-]+/g, '-').slice(0, 40) + '.' + ext;
   const up = await apiUpload('uploadBukti', { fileData: await fileToBase64(file), fileName: nama, mimeType: file.type });
-  if (!up.ok) throw new Error('Gagal unggah nota: ' + up.error);
+  if (!up.ok) throw new Error('Gagal unggah bukti/nota: ' + up.error);
   return up.data.url;
 }
 function ItemFields({ row, onChange, kategoriMap, penerima, upsertPenerima, toast, bankVA }) {
   const isBB = row.jenis === 'Bahan Baku';
+  const butuhRiil = butuhRencanaRealisasi(row.jenis, row.kategori);
+  const kuitansi = !!row.jenis && !!row.kategori && pakaiKuitansi(row);
+  useEffect(function() {
+    if (bankVA === null || bankVA === undefined || !row.penerima_id || row.adminDiatur) return;
+    const pn = (penerima || []).find(function(x) { return x.id === row.penerima_id; });
+    const rk = rekomAdmin(pn && pn.bank, bankVA);
+    if (!rk || rk.fee === null) return;
+    const nextAda = rk.fee > 0;
+    const nextBiaya = String(rk.fee > 0 ? rk.fee : BIAYA_ADMIN_DEFAULT);
+    if (!!row.adaAdmin !== nextAda || (nextAda && String(row.biaya_admin) !== nextBiaya)) {
+      onChange(Object.assign({}, row, { adaAdmin: nextAda, biaya_admin: nextBiaya }));
+    }
+  }, [bankVA, row.penerima_id]);
   function set(k, v) {
     const n = Object.assign({}, row, { [k]: v });
-    if (k === 'jenis') { n.kategori = (kategoriMap[v] || []).length === 1 ? kategoriMap[v][0] : ''; if (v === 'Bahan Baku' && !(n.rincian || []).length) n.rincian = [{ nama: '', kategori: '', volume: '', satuan: '', harga: '' }]; }
+    if (k === 'jenis') {
+      n.kategori = (kategoriMap[v] || []).length === 1 ? kategoriMap[v][0] : '';
+      if (v === 'Bahan Baku' && !(n.rincian || []).length) n.rincian = [{ nama: '', kategori: '', volume: '', satuan: '', harga: '' }];
+      if (!butuhRencanaRealisasi(v, n.kategori)) n.rencana_riil = '';
+    }
+    if (k === 'kategori' && !butuhRencanaRealisasi(n.jenis, v)) n.rencana_riil = '';
     if (k === 'rincian') n.nominal = String(Math.round(rincianTotal(v)) || '');
+    if (k === 'penerima_id') {
+      n.adminDiatur = false;
+      if (bankVA !== null && bankVA !== undefined && v) {
+        const pn = (penerima || []).find(function(x) { return x.id === v; });
+        const rk = rekomAdmin(pn && pn.bank, bankVA);
+        if (rk && rk.fee !== null) { n.adaAdmin = rk.fee > 0; n.biaya_admin = String(rk.fee > 0 ? rk.fee : BIAYA_ADMIN_DEFAULT); }
+      }
+    }
     onChange(n);
   }
   return <div className="grid sm:grid-cols-2 gap-x-3">
@@ -4310,21 +4432,39 @@ function ItemFields({ row, onChange, kategoriMap, penerima, upsertPenerima, toas
         {(kategoriMap[row.jenis] || []).map(function(k){ return <option key={k} value={k}>{k}</option>; })}
       </select>
     </Field>
-    <Field label="Uraian *"><input value={row.uraian} onChange={function(e){ set('uraian', e.target.value); }} style={inputStyle} placeholder={isBB ? 'cth. Belanja sayur menu Kamis' : 'cth. Beras 50 kg'}/></Field>
-    <Field label="Nominal *" hint={isBB ? 'Otomatis = jumlah rincian bahan' : null}><RupiahInput value={row.nominal} onChange={function(v){ set('nominal', v); }} disabled={isBB}/></Field>
+    <Field label="Uraian *"><input value={row.uraian} onChange={function(e){ set('uraian', e.target.value); }} style={inputStyle} placeholder={isBB ? 'cth. Belanja sayur menu Kamis' : 'cth. Isi gas 12 kg 8 tabung'}/></Field>
+    <Field label={butuhRiil ? 'Anggaran pengajuan *' : 'Nominal *'} hint={isBB ? 'Otomatis = jumlah rincian bahan' : butuhRiil ? 'Nilai anggaran yang diajukan & memotong saldo VA' : (row.jenis && row.kategori ? 'Nilai realisasi otomatis sama dengan nominal pengajuan' : null)}>
+      <RupiahInput value={row.nominal} onChange={function(v){ set('nominal', v); }} disabled={isBB} label={butuhRiil ? 'Anggaran pengajuan' : 'Nominal'}/>
+    </Field>
+    {butuhRiil && <div className="sm:col-span-2"><Field label="Nilai rencana realisasi (aktual) *" hint="Nilai aktual yang benar-benar akan dibayarkan. Dicatat sebagai nilai riil saat pengajuan disetujui.">
+      <RupiahInput value={row.rencana_riil || ''} onChange={function(v){ set('rencana_riil', v); }} label="Rencana realisasi"/>
+    </Field></div>}
     {isBB && <RincianBahan rows={row.rincian && row.rincian.length ? row.rincian : [{ nama: '', kategori: '', volume: '', satuan: '', harga: '' }]} onChange={function(v){ set('rincian', v); }}/>}
-    {isBB && <div className="sm:col-span-2"><Field label="Nomor nota" hint='Sesuai yang tertulis di nota; wajib unik. Nota tak bernomor → kosongkan (dibuat otomatis). Nomor sama dari toko lain → tambahkan kode toko, cth. 001/2026-TMB'>
-      <input value={row.nota_no || ''} onChange={function(e){ set('nota_no', e.target.value); }} style={inputStyle} placeholder="cth. NT-0012" aria-label="Nomor nota"/>
-    </Field></div>}
-    {isBB && <div className="sm:col-span-2"><Field label="Nota / bukti belanja *" hint="Foto nota dari toko. Menjadi bukti realisasi (akuntan tinggal klik) dan bukti autentik di LPDH.">
-      <BuktiPicker bukti={row.notaFile} setBukti={function(f){ set('notaFile', f); }} existing={row.nota_url}/>
-    </Field></div>}
+    {row.jenis && row.kategori && !kuitansi && <>
+      <div className="sm:col-span-2"><Field label="Nomor nota / bukti" hint='Sesuai yang tertulis di nota; wajib unik. Nota tak bernomor → kosongkan (dibuat otomatis). Nomor sama dari toko lain → tambahkan kode toko, cth. 001/2026-TMB'>
+        <input value={row.nota_no || ''} onChange={function(e){ set('nota_no', e.target.value); }} style={inputStyle} placeholder="cth. NT-0012 (kosong = otomatis)" aria-label="Nomor nota"/>
+      </Field></div>
+      <div className="sm:col-span-2"><Field label="Bukti / nota *" hint="Wajib diunggah saat pengajuan. Menjadi bukti transaksi otomatis saat disetujui dan bukti autentik di LPDH.">
+        <BuktiPicker bukti={row.notaFile} setBukti={function(f){ set('notaFile', f); }} existing={row.nota_url}/>
+      </Field></div>
+    </>}
+    {kuitansi && <div className="sm:col-span-2 rounded-lg p-3 mb-3 text-xs" style={{ background: '#E8F1EC', color: COLORS.deep }}>
+      {I.check} <b>Kuitansi / bukti pembayaran dibuat otomatis</b> (PDF, berisi penerima, nominal, terbilang, kolom tanda tangan) saat pengajuan disetujui.
+      <details className="mt-1.5"><summary style={{ cursor: 'pointer', color: COLORS.muted }}>Atau unggah bukti sendiri (opsional)?</summary><div className="mt-2"><BuktiPicker bukti={row.notaFile} setBukti={function(f){ set('notaFile', f); }} existing={row.nota_url}/></div></details>
+    </div>}
     <div className="sm:col-span-2">
       <Field label="Ditransfer ke *" hint="Bank & nomor rekening terisi otomatis dari daftar penerima">
         <PenerimaSelect list={penerima} value={row.penerima_id} onChange={function(v){ set('penerima_id', v); }} onListChange={upsertPenerima} toast={toast}/>
       </Field>
       {row.penerima_id && bankVA !== undefined && bankVA !== null && (function() { const pn = (penerima || []).find(function(x) { return x.id === row.penerima_id; }); const rk = rekomAdmin(pn && pn.bank, bankVA);
-        return rk.teks ? <div className="text-xs -mt-3 mb-3" style={{ color: rk.fee ? '#9A6A0B' : COLORS.green }} aria-label="Biaya admin baris">{rk.teks}{rk.fee ? ' (dicatat saat realisasi)' : ''}</div> : null; })()}
+        return rk.teks ? <div className="text-xs -mt-3 mb-3" style={{ color: rk.fee ? '#9A6A0B' : COLORS.green }} aria-label="Biaya admin baris">{rk.teks}</div> : null; })()}
+    </div>
+    <div className="sm:col-span-2">
+      <BiayaAdminField ada={!!row.adaAdmin} biaya={row.biaya_admin || String(BIAYA_ADMIN_DEFAULT)} onChange={function(patch){
+        onChange(Object.assign({}, row, { adminDiatur: true,
+          adaAdmin: patch.adaAdmin !== undefined ? patch.adaAdmin : row.adaAdmin,
+          biaya_admin: patch.biaya !== undefined ? patch.biaya : row.biaya_admin }));
+      }}/>
     </div>
     <label className="sm:col-span-2 flex items-start gap-2 text-sm mb-2 cursor-pointer" style={{ color: COLORS.ink }}>
       <input type="checkbox" checked={!!row.susulan} onChange={function(e){ set('susulan', e.target.checked); }} style={{ marginTop: 3 }}/>
@@ -4362,8 +4502,9 @@ function PengajuanForm({ kategoriMap, penerima, upsertPenerima, toast, onCreated
   const lockRef = useRef(false);   // kunci sinkron: klik ganda / ketuk ulang tidak bisa lolos sebelum render ulang
   const reqId = useRef('rq-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 10));   // satu ID per form; dikirim agar backend bisa menolak kiriman ulang
   const total = rows.reduce(function(s, r){ return s + (Number(r.nominal) || 0); }, 0);
+  const totalAdmin = rows.reduce(function(s, r){ return s + (r.adaAdmin ? (Number(r.biaya_admin) || 0) : 0); }, 0);
+  const totalVA = total + totalAdmin;
   const bankVA = useBankVA(needDapur ? dapur : '');   // bank VA dapur → rekomendasi biaya admin per baris
-  const adminRekom = bankVA ? rows.reduce(function(s, r) { const pn = (penerima || []).find(function(x) { return x.id === r.penerima_id; }); const k = pn ? rekomAdmin(pn.bank, bankVA) : null; return s + (k && k.fee ? k.fee : 0); }, 0) : 0;
   const firstErr = rows.map(rowError).findIndex(function(e){ return !!e; });
   // Pagu operasional harian (LPDH: Rp 3.000 × PM × indeks): peringatan sebelum mengirim
   const adaOps = rows.some(function(r) { return r.jenis === 'Operasional'; });
@@ -4374,27 +4515,30 @@ function PengajuanForm({ kategoriMap, penerima, upsertPenerima, toast, onCreated
     api('getPaguOps', { tanggal: tanggal, dapur: needDapur ? dapur : '' }).then(function(r) { if (hidup) setPagu(r.ok && r.data && typeof r.data.pagu === 'number' ? r.data : null); });
     return function() { hidup = false; };
   }, [tanggal, dapur, adaOps, !!tglErr]);
-  const pnMap = {}; (penerima || []).forEach(function(x) { pnMap[x.id] = x; });
-  const opsIni = rows.filter(function(r) { return r.jenis === 'Operasional'; }).reduce(function(a, r) { return a + (Number(r.nominal) || 0) + (r.penerima_id ? roFee({ penerima_id: r.penerima_id }, pnMap, pagu ? pagu.bankVA : '') : 0); }, 0);
+  const opsIni = rows.filter(function(r) { return r.jenis === 'Operasional'; }).reduce(function(a, r) { return a + (Number(r.nominal) || 0) + (r.adaAdmin ? (Number(r.biaya_admin) || 0) : 0); }, 0);
   const opsTot = pagu ? pagu.terpakai + pagu.diajukan + (pagu.cadanganBB || 0) + opsIni : 0;
   const lebihPagu = pagu && opsIni > 0 && opsTot > pagu.pagu ? opsTot - pagu.pagu : 0;
   const [catatanPagu, setCatatanPagu] = useState('');
   const catatanKirim = lebihPagu ? 'Melebihi pagu harian ' + fmt(lebihPagu) + ' (pagu ' + fmt(pagu.pagu) + ', PM ' + fmtNoRp(pagu.pm) + '). Alasan: ' + catatanPagu.trim() : '';
-  function update(i, n) { setRows(rows.map(function(r, j){ return j === i ? n : r; })); }
+  function update(i, n) { setRows(function(prev){ return prev.map(function(r, j){ return j === i ? n : r; }); }); }
   async function submit(force) {
     if (lockRef.current) return;
     lockRef.current = true; setSaving(true);
     try {
       if (lebihPagu && catatanPagu.trim().length < 10) { setConfirm(false); toast('Melebihi pagu harian — isi alasan untuk Yayasan dulu', 'error'); return; }
-      const items = rows.map(function(r){ return { jenis: r.jenis, kategori: r.kategori, uraian: r.uraian.trim(), nominal: Number(r.nominal), penerima_id: r.penerima_id, susulan: !!r.susulan,
+      const items = rows.map(function(r){ return { jenis: r.jenis, kategori: r.kategori, uraian: r.uraian.trim(), nominal: Number(r.nominal),
+        rencana_riil: butuhRencanaRealisasi(r.jenis, r.kategori) ? Number(r.rencana_riil) : Number(r.nominal),
+        biaya_admin: r.adaAdmin ? Number(r.biaya_admin) : 0,
+        penerima_id: r.penerima_id, susulan: !!r.susulan,
         catatan: r.jenis === 'Operasional' ? catatanKirim : '',
-        rincian: r.jenis === 'Bahan Baku' ? rincianKirim(r.rincian) : undefined, nota_no: r.jenis === 'Bahan Baku' ? String(r.nota_no || '').trim() : undefined }; });
+        rincian: r.jenis === 'Bahan Baku' ? rincianKirim(r.rincian) : undefined,
+        nota_url: r.nota_url || '', nota_no: String(r.nota_no || '').trim() }; });
       if (!force) {
         const d = await cariDuplikatPengajuan(items, needDapur ? dapur : ownDapur, tanggal);
         if (d) { setConfirm(false); setDup(d); return; }
       }
       for (let i = 0; i < rows.length; i++) {
-        if (rows[i].jenis === 'Bahan Baku' && rows[i].notaFile) {
+        if (rows[i].notaFile) {
           try { items[i].nota_url = await unggahNota(rows[i].notaFile, tanggal, rows[i].uraian); }
           catch (e) { setConfirm(false); toast('Baris ' + (i + 1) + ': ' + e.message, 'error'); return; }
         }
@@ -4416,7 +4560,7 @@ function PengajuanForm({ kategoriMap, penerima, upsertPenerima, toast, onCreated
     <div className="flex items-start justify-between gap-2 mb-3">
       <div>
         <Eyebrow>Pengajuan baru</Eyebrow>
-        <div className="text-sm" style={{ color: COLORS.muted }}>Semua baris dibayar dari VA. Satu nomor Berita Acara per dapur per tanggal pengajuan — pengajuan lain (susulan / dari asisten) dengan tanggal yang sama ikut nomor itu.</div>
+        <div className="text-sm" style={{ color: COLORS.muted }}>Semua baris dibayar dari VA dan <b>otomatis terealisasi</b> saat disetujui Yayasan/PIC. Satu nomor Berita Acara per dapur per tanggal pengajuan.</div>
       </div>
       <button onClick={onCancel} style={{ color: COLORS.muted }}>{I.x}</button>
     </div>
@@ -4463,7 +4607,7 @@ function PengajuanForm({ kategoriMap, penerima, upsertPenerima, toast, onCreated
         <div>
           <div className="text-xs" style={{ color: COLORS.muted }}>Total {rows.length} baris</div>
           <div className="text-lg font-bold num leading-tight" style={{ color: COLORS.ink }}>{fmt(total)}</div>
-          {adminRekom > 0 && <div className="text-[11px]" style={{ color: '#9A6A0B' }} aria-label="Perkiraan biaya admin">+ biaya admin antarbank {fmt(adminRekom)} (VA {roKodeBank(bankVA)})</div>}
+          {totalAdmin > 0 && <div className="text-[11px]" style={{ color: '#9A6A0B' }} aria-label="Perkiraan biaya admin">+ biaya admin {fmt(totalAdmin)} · total potong VA {fmt(totalVA)}</div>}
         </div>
         <div className="text-[11px] text-right" style={{ color: COLORS.amber }}>Belum terkirim sebelum<br/>tombol Kirim ditekan</div>
       </div>
@@ -4473,7 +4617,7 @@ function PengajuanForm({ kategoriMap, penerima, upsertPenerima, toast, onCreated
       <div className="mt-2"><Btn full disabled={firstErr >= 0 || saving || (needDapur && !dapur) || !!tglErr} onClick={function(){ setConfirm(true); }}>{saving ? I.spinner : I.arrowR} Kirim untuk persetujuan</Btn></div>
     </div>
     {confirm && <ConfirmModal title="Kirim pengajuan?" confirmLabel={saving ? 'Mengirim…' : 'Kirim'}
-      message={'Pengajuan tanggal ' + fmtDDMMYYYY(tanggal) + ': ' + rows.length + ' baris senilai ' + fmt(total) + (needDapur ? ' untuk ' + ((dapurOptions.find(function(d){ return d.id === dapur; }) || {}).nama || '') : '') + ' untuk persetujuan. Setelah dikirim, baris hanya bisa diedit sampai diputuskan.'}
+      message={'Pengajuan tanggal ' + fmtDDMMYYYY(tanggal) + ': ' + rows.length + ' baris senilai ' + fmt(total) + (totalAdmin > 0 ? ' + biaya admin ' + fmt(totalAdmin) + ' (total potong VA ' + fmt(totalVA) + ')' : '') + (needDapur ? ' untuk ' + ((dapurOptions.find(function(d){ return d.id === dapur; }) || {}).nama || '') : '') + '. Setelah disetujui, baris langsung terealisasi menjadi transaksi.'}
       onConfirm={function(){ submit(false); }} onClose={function(){ setConfirm(false); }}/>}
     {dup && <ConfirmModal title="Kemungkinan pengajuan ganda" danger confirmLabel="Tetap kirim"
       message={'Sudah ada pengajuan ' + dup.nomor + ' (hari H ' + fmtDDMMYYYY(dup.tanggal) + ') dengan isi yang sama persis. Jika tadi koneksi sempat terputus, kemungkinan pengajuan itu sudah terkirim. Kirim lagi sebagai pengajuan baru?'}
@@ -4482,28 +4626,34 @@ function PengajuanForm({ kategoriMap, penerima, upsertPenerima, toast, onCreated
 }
 
 function ItemEditModal({ item, kategoriMap, penerima, upsertPenerima, toast, onClose, onSaved }) {
-  const [row, setRow] = useState({ jenis: item.jenis, kategori: item.kategori, uraian: item.uraian, nominal: String(item.nominal), penerima_id: item.penerima_id, susulan: item.susulan,
-    rincian: (item.rincian || []).map(function(x) { return { nama: x.nama, kategori: x.kategori, volume: String(x.volume), satuan: x.satuan, harga: String(x.harga) }; }), nota_url: item.nota_url || '', notaFile: null, nota_no: item.nota_no || '' });
+  const bankVA = useBankVA(item.dapur || '');
+  const [row, setRow] = useState({ jenis: item.jenis, kategori: item.kategori, uraian: item.uraian, nominal: String(item.nominal),
+    rencana_riil: item.rencana_riil ? String(item.rencana_riil) : '', penerima_id: item.penerima_id, susulan: item.susulan,
+    rincian: (item.rincian || []).map(function(x) { return { nama: x.nama, kategori: x.kategori, volume: String(x.volume), satuan: x.satuan, harga: String(x.harga) }; }),
+    nota_url: item.nota_url || '', notaFile: null, nota_no: item.nota_no || '',
+    adaAdmin: (item.biaya_admin || 0) > 0, biaya_admin: String(item.biaya_admin > 0 ? item.biaya_admin : BIAYA_ADMIN_DEFAULT), adminDiatur: true });
   const [saving, setSaving] = useState(false);
   const err = rowError(row);
   const revisi = item.status === 'REVISI';
   async function submit() {
     setSaving(true);
     let nota = row.nota_url;
-    if (row.jenis === 'Bahan Baku' && row.notaFile) {
+    if (row.notaFile) {
       try { nota = await unggahNota(row.notaFile, item.tanggal_pengajuan || todayISO(), row.uraian); }
       catch (e) { setSaving(false); toast(e.message, 'error'); return; }
     }
     const res = await apiPost('updatePengajuanItem', { item_id: item.id, jenis: row.jenis, kategori: row.kategori, uraian: row.uraian.trim(),
-      nominal: row.nominal, penerima_id: row.penerima_id, susulan: row.susulan ? 'true' : 'false',
-      rincian: row.jenis === 'Bahan Baku' ? rincianKirim(row.rincian) : undefined, nota_url: nota, nota_no: row.jenis === 'Bahan Baku' ? String(row.nota_no || '').trim() : undefined });
+      nominal: row.nominal, rencana_riil: butuhRencanaRealisasi(row.jenis, row.kategori) ? row.rencana_riil : row.nominal,
+      biaya_admin: row.adaAdmin ? Number(row.biaya_admin) : 0,
+      penerima_id: row.penerima_id, susulan: row.susulan ? 'true' : 'false',
+      rincian: row.jenis === 'Bahan Baku' ? rincianKirim(row.rincian) : undefined, nota_url: nota, nota_no: String(row.nota_no || '').trim() });
     setSaving(false);
     if (res.ok) { toast(revisi ? 'Baris diajukan ulang' : 'Baris diperbarui'); onSaved(); onClose(); }
     else toast(res.error || 'Gagal menyimpan', 'error');
   }
   return <Modal title={(revisi ? 'Perbaiki & ajukan ulang' : 'Edit baris') + ' · #' + item.urut} size="lg" onClose={onClose}>
     {revisi && item.catatan && <div className="text-sm rounded-lg p-2.5 mb-3" style={{ background: '#EAF0F8', color: COLORS.blue }}>Catatan Yayasan: {item.catatan}</div>}
-    <ItemFields row={row} onChange={setRow} kategoriMap={kategoriMap} penerima={penerima} upsertPenerima={upsertPenerima} toast={toast}/>
+    <ItemFields row={row} onChange={setRow} kategoriMap={kategoriMap} penerima={penerima} upsertPenerima={upsertPenerima} toast={toast} bankVA={bankVA}/>
     <div className="flex gap-2 justify-end"><Btn kind="ghost" onClick={onClose}>Batal</Btn>
       <Btn onClick={submit} disabled={!!err || saving}>{saving ? I.spinner : I.check} {revisi ? 'Ajukan ulang' : 'Simpan'}</Btn></div>
   </Modal>;
@@ -4542,6 +4692,7 @@ function ItemFlags({ it }) {
 }
 
 function ItemRow({ it, actions, children }) {
+  const butuhRiil = butuhRencanaRealisasi(it.jenis, it.kategori);
   return <div className="px-3 sm:px-4 py-3" style={{ borderTop: '1px solid ' + COLORS.line }}>
     <div className="flex items-start justify-between gap-3">
       <div className="min-w-0 flex-1">
@@ -4551,7 +4702,7 @@ function ItemRow({ it, actions, children }) {
         <div className="text-[11px] mt-0.5" style={{ color: COLORS.muted }}>{it.jenis} · {it.kategori}</div>
         {(it.rincian || []).length > 0 && <div className="text-[11px] mt-1" style={{ color: COLORS.ink }}>
           {it.rincian.map(function(x, i) { return <span key={i}>{i ? ' · ' : ''}{x.nama} {String(x.volume).replace('.', ',')} {x.satuan} × {fmtNoRp(x.harga)}</span>; })}</div>}
-        {it.nota_url && <a href={it.nota_url} target="_blank" rel="noopener" className="text-[11px] underline" style={{ color: COLORS.blue }}>Lihat nota{it.nota_no ? ' ' + it.nota_no : ''}</a>}
+        {it.nota_url && <a href={it.nota_url} target="_blank" rel="noopener" className="text-[11px] underline" style={{ color: COLORS.blue }}>Lihat bukti/nota{it.nota_no ? ' ' + it.nota_no : ''}</a>}
         <div className="text-xs mt-1" style={{ color: COLORS.ink }}>→ <b>{it.penerima_nama}</b> <span style={{ color: COLORS.muted }}>· {it.bank} {it.no_rek}</span></div>
         <div className="flex flex-wrap gap-1 mt-1.5"><StatusBadge status={it.status}/><ItemFlags it={it}/>{it.putaran > 1 && <MiniBadge bg={COLORS.paper} fg={COLORS.muted}>Putaran {it.putaran}</MiniBadge>}</div>
         {pendingSt(it) && it.rek_berubah && <div className="text-[11px] mt-1.5 rounded p-1.5" style={{ background: '#F8E9E5', color: COLORS.danger }}>
@@ -4562,7 +4713,13 @@ function ItemRow({ it, actions, children }) {
           <div className="text-[11px] mt-1.5" style={{ color: it.status === 'DIBATALKAN' ? COLORS.muted : (it.status === 'REVISI' ? COLORS.blue : COLORS.danger) }}>Catatan: {it.catatan}</div>}
       </div>
       <div className="text-right shrink-0">
-        <div className="text-sm font-bold num" style={{ color: COLORS.ink }}>{fmt(it.nominal)}</div>
+        {butuhRiil ? <>
+          <div className="text-[10px]" style={{ color: COLORS.muted }}>Anggaran</div>
+          <div className="text-sm font-bold num" style={{ color: COLORS.ink }}>{fmt(it.nominal)}</div>
+          <div className="text-[10px] mt-1" style={{ color: COLORS.muted }}>Rencana realisasi</div>
+          <div className="text-xs font-semibold num" style={{ color: COLORS.green }}>{fmt(it.rencana_riil || it.nominal)}</div>
+        </> : <div className="text-sm font-bold num" style={{ color: COLORS.ink }}>{fmt(it.nominal)}</div>}
+        {(it.biaya_admin || 0) > 0 && <div className="text-[11px] num mt-0.5" style={{ color: '#9A6A0B' }}>+ admin {fmt(it.biaya_admin)}</div>}
         {actions && <div className="flex gap-1 justify-end mt-1.5 flex-wrap">{actions}</div>}
       </div>
     </div>
@@ -4709,7 +4866,7 @@ function PengajuanPage({ session, scope, dapurList, toast }) {
   return <div>
     {isAkuntan && vaKeys.length === 1 && <VACard va={data.va[vaKeys[0]]}/>}
     {noPeriode && <Card className="mb-3"><div className="text-sm" style={{ color: COLORS.danger }}>Belum ada periode aktif. {isAkuntan ? 'Buat periode di menu Setup dulu.' : isAsisten ? 'Akuntan dapur perlu membuat periode dulu.' : ''}</div></Card>}
-    {isAsisten && <Card className="mb-3"><div className="text-sm" style={{ color: COLORS.muted }}>Akun asisten: mengajukan <b>Bahan Baku</b> untuk semua dapur. Realisasi (transfer & bukti) dilakukan oleh akuntan masing-masing dapur.</div></Card>}
+    {isAsisten && <Card className="mb-3"><div className="text-sm" style={{ color: COLORS.muted }}>Akun asisten: mengajukan <b>Bahan Baku</b> untuk semua dapur. Setelah disetujui Yayasan/PIC, pengajuan otomatis terealisasi menjadi transaksi.</div></Card>}
 
     {canCreate && !noPeriode && <div className="grid grid-cols-2 gap-2 mb-3">
       {[['buat', 'Buat pengajuan', null], ['daftar', 'Sudah diajukan', data.pengajuan.length]].map(function(t){
@@ -5846,8 +6003,10 @@ function MutasiDaftar({ judul, n, nilai, isi }) {
   </div>;
 }
 function RealisasiMassalPage({ session, dapurList, toast }) {
-  const [dapur, setDapur] = useState('');
+  const [mode, setMode] = useState('langsung');   // 'langsung' (tunggakan lama tanpa mutasi) | 'mutasi' (cocokkan PDF BNI)
+  const [dapur, setDapur] = useState('ALL');
   const [tutup, setTutup] = useState(false);
+  const [catatAdmin, setCatatAdmin] = useState(true);
   const [sim, setSim] = useState(null);
   const [busy, setBusy] = useState(false);
   const [konfirm, setKonfirm] = useState('');
@@ -5855,6 +6014,11 @@ function RealisasiMassalPage({ session, dapurList, toast }) {
   const [mutasi, setMutasi] = useState(null);
   const [baca, setBaca] = useState(false);
   function reset() { setSim(null); setHasil(null); setKonfirm(''); }
+  function gantiMode(m) {
+    setMode(m); reset();
+    if (m === 'langsung' && !dapur) setDapur('ALL');
+    if (m === 'mutasi' && dapur === 'ALL') setDapur('');
+  }
   async function unggahMutasi(e) {
     const files = Array.from(e.target.files || []); e.target.value = '';
     if (!files.length) return;
@@ -5863,46 +6027,73 @@ function RealisasiMassalPage({ session, dapurList, toast }) {
     catch (err) { setMutasi(null); toast('Gagal membaca mutasi: ' + err.message, 'error'); }
     setBaca(false);
   }
-  const kirimMutasi = mutasi ? { debit: mutasi.debit, saldoAwal: mutasi.saldoAwal, saldoAkhir: mutasi.saldoAkhir, dari: mutasi.dari, sampai: mutasi.sampai } : null;
+  const kirimMutasi = mode === 'mutasi' && mutasi ? { debit: mutasi.debit, saldoAwal: mutasi.saldoAwal, saldoAkhir: mutasi.saldoAkhir, dari: mutasi.dari, sampai: mutasi.sampai } : null;
+  function payloadDasar() {
+    if (mode === 'langsung') return { dapur: dapur, sertakan_tutup: tutup, tanpa_mutasi: true, catat_admin: catatAdmin };
+    return { dapur: dapur, sertakan_tutup: tutup, mutasi: kirimMutasi };
+  }
   async function simulasi() {
     setBusy(true); setHasil(null); setKonfirm('');
-    const r = await apiPost('realisasiMassal', { dapur: dapur, sertakan_tutup: tutup, mutasi: kirimMutasi });
+    const r = await apiPost('realisasiMassal', payloadDasar());
     setBusy(false);
     if (r.ok) setSim(r.data); else { setSim(null); toast(r.error, 'error'); }
   }
   async function jalankan() {
     setBusy(true);
-    const r = await apiPost('realisasiMassal', { dapur: dapur, sertakan_tutup: tutup, eksekusi: true, jumlah_konfirmasi: Number(konfirm), mutasi: kirimMutasi });
+    const r = await apiPost('realisasiMassal', Object.assign(payloadDasar(), { eksekusi: true, jumlah_konfirmasi: Number(konfirm) }));
     setBusy(false);
     if (r.ok) { setHasil(r.data); setSim(null); setKonfirm(''); toast(r.data.dibuat + ' transaksi dibuat'); } else toast(r.error, 'error');
   }
-  const namaDapur = (dapurList.find(function(d) { return d.id === dapur; }) || {}).nama || '';
+  const namaDapur = dapur === 'ALL' ? 'Semua dapur' : ((dapurList.find(function(d) { return d.id === dapur; }) || {}).nama || '');
+  const bisaSim = !!dapur && !busy && (mode === 'langsung' || !!mutasi);
   return <div>
     <div className="mb-3"><Eyebrow>Realisasi Massal</Eyebrow>
-      <div className="text-xs" style={{ color: COLORS.muted }}>Hanya pengajuan DISETUJUI yang transfernya <b>ada di mutasi rekening</b> yang direalisasi (nominal sama, rekening tujuan sama, tanggal bank paling dekat). Tanggal transaksi = tanggal pengajuan, biaya admin = potongan nyata di mutasi, bukti dikosongkan (kecuali nota bahan baku). Selalu simulasi dulu.</div></div>
+      <div className="text-xs" style={{ color: COLORS.muted }}>{mode === 'langsung'
+        ? <>Realisasikan langsung seluruh tunggakan lama berstatus <b>DISETUJUI</b> (sebelum fitur realisasi otomatis saat persetujuan) menjadi transaksi tanpa unggah mutasi PDF. Tanggal &amp; nominal mengikuti pengajuan. Selalu simulasi dulu.</>
+        : <>Hanya pengajuan DISETUJUI yang transfernya <b>ada di mutasi rekening</b> yang direalisasi (nominal sama, rekening tujuan sama, tanggal bank paling dekat). Tanggal transaksi = tanggal pengajuan, biaya admin = potongan nyata di mutasi, bukti dikosongkan (kecuali nota bahan baku). Selalu simulasi dulu.</>}</div></div>
+    <div className="grid grid-cols-2 gap-2 mb-3">
+      {[['langsung', 'Realisasi langsung (tunggakan lama)'], ['mutasi', 'Cocokkan mutasi BNI (PDF)']].map(function(t) {
+        const on = mode === t[0];
+        return <button key={t[0]} type="button" onClick={function() { gantiMode(t[0]); }} className="rounded-xl px-3 py-2.5 text-xs sm:text-sm font-semibold"
+          style={{ background: on ? COLORS.green : '#fff', color: on ? '#fff' : COLORS.ink, border: '1px solid ' + (on ? COLORS.green : COLORS.line) }}>{t[1]}</button>;
+      })}
+    </div>
     <Card className="mb-3">
       <Field label="Dapur"><select value={dapur} onChange={function(e) { setDapur(e.target.value); reset(); }} style={inputStyle} aria-label="Dapur realisasi massal">
-        <option value="">Pilih dapur…</option>{dapurList.map(function(d) { return <option key={d.id} value={d.id}>{d.nama}</option>; })}</select></Field>
-      <Field label="Mutasi rekening VA (PDF Mutasi Transaksi SPPG — BNI, boleh beberapa file)" hint="Unduh dari Dashboard BGN untuk rentang tanggal pengajuan yang akan direalisasi.">
-        <input type="file" accept="application/pdf" multiple onChange={unggahMutasi} aria-label="File mutasi" className="text-sm"/>
-      </Field>
-      {baca && <div className="text-sm mb-3 flex items-center gap-2" style={{ color: COLORS.muted }}>{I.spinner} Membaca mutasi…</div>}
-      {mutasi && <div className="text-xs rounded-lg p-2.5 mb-3" style={{ background: mutasi.putus ? '#FBF3E2' : '#E8F1EC', color: mutasi.putus ? '#7A5408' : COLORS.deep }} aria-label="Ringkasan mutasi">
-        {mutasi.baris} baris mutasi · {fmtDDMMYYYY(mutasi.dari)} s.d. {fmtDDMMYYYY(mutasi.sampai)} · {mutasi.debit.length} transfer keluar · {mutasi.kredit.length} dana masuk ({fmt(mutasi.kredit.reduce(function(a, k) { return a + k.nom; }, 0))})<br/>
-        Saldo {fmt(mutasi.saldoAwal)} → {fmt(mutasi.saldoAkhir)}{mutasi.putus ? ' · ⚠️ saldo tidak bersambung di ' + mutasi.putus + ' tempat (ada halaman/file yang hilang?)' : ' · saldo bersambung ✓'}</div>}
+        {mode === 'langsung' ? <option value="ALL">Semua dapur (realisasi semua tunggakan lama)</option> : <option value="">Pilih dapur…</option>}
+        {dapurList.map(function(d) { return <option key={d.id} value={d.id}>{d.nama}</option>; })}</select></Field>
+      {mode === 'mutasi' && <>
+        <Field label="Mutasi rekening VA (PDF Mutasi Transaksi SPPG — BNI, boleh beberapa file)" hint="Unduh dari Dashboard BGN untuk rentang tanggal pengajuan yang akan direalisasi.">
+          <input type="file" accept="application/pdf" multiple onChange={unggahMutasi} aria-label="File mutasi" className="text-sm"/>
+        </Field>
+        {baca && <div className="text-sm mb-3 flex items-center gap-2" style={{ color: COLORS.muted }}>{I.spinner} Membaca mutasi…</div>}
+        {mutasi && <div className="text-xs rounded-lg p-2.5 mb-3" style={{ background: mutasi.putus ? '#FBF3E2' : '#E8F1EC', color: mutasi.putus ? '#7A5408' : COLORS.deep }} aria-label="Ringkasan mutasi">
+          {mutasi.baris} baris mutasi · {fmtDDMMYYYY(mutasi.dari)} s.d. {fmtDDMMYYYY(mutasi.sampai)} · {mutasi.debit.length} transfer keluar · {mutasi.kredit.length} dana masuk ({fmt(mutasi.kredit.reduce(function(a, k) { return a + k.nom; }, 0))})<br/>
+          Saldo {fmt(mutasi.saldoAwal)} → {fmt(mutasi.saldoAkhir)}{mutasi.putus ? ' · ⚠️ saldo tidak bersambung di ' + mutasi.putus + ' tempat (ada halaman/file yang hilang?)' : ' · saldo bersambung ✓'}</div>}
+      </>}
+      {mode === 'langsung' && <label className="flex items-center gap-2 mb-2 text-sm" style={{ color: COLORS.ink }}>
+        <input type="checkbox" checked={catatAdmin} onChange={function(e) { setCatatAdmin(e.target.checked); reset(); }} style={{ width: 20, height: 20 }} aria-label="Hitung biaya admin otomatis"/>
+        Hitung biaya admin transfer antarbank otomatis (Rp 6.500 bila bank penerima ≠ bank VA)
+      </label>}
       <label className="flex items-center gap-2 mb-3 text-sm" style={{ color: COLORS.ink }}><input type="checkbox" checked={tutup} onChange={function(e) { setTutup(e.target.checked); reset(); }} style={{ width: 20, height: 20 }} aria-label="Sertakan periode ditutup"/> Sertakan periode yang sudah ditutup</label>
-      <Btn full disabled={!dapur || !mutasi || busy} onClick={simulasi}>{busy && !sim ? I.spinner : I.check} Simulasi (tidak mengubah data)</Btn>
+      <Btn full disabled={!bisaSim} onClick={simulasi}>{busy && !sim ? I.spinner : I.check} Simulasi (tidak mengubah data)</Btn>
     </Card>
     {sim && <Card className="mb-3">
       <div className="text-sm font-semibold mb-1" style={{ color: COLORS.ink }}>Hasil simulasi · {namaDapur}</div>
       <div className="text-sm mb-2" style={{ color: COLORS.ink }}><b aria-label="Jumlah baris akan dibuat">{sim.jumlah}</b> baris akan direalisasi · <b>{fmt(sim.nominal)}</b>{sim.sudahTertaut ? ' · ' + sim.sudahTertaut + ' sudah punya transaksi (hanya ditautkan)' : ''}
-        <div className="text-xs" style={{ color: sim.mutasi || sim.bankVA ? '#9A6A0B' : COLORS.danger }}>{sim.mutasi ? '+ biaya admin ' + fmt(sim.admin) + ' (potongan nyata di mutasi, ' + sim.nAdmin + ' transfer)' : sim.bankVA ? '+ biaya admin ' + fmt(sim.admin) + ' (' + sim.nAdmin + ' transfer antarbank × ' + fmt(RO_FEE) + '; sesama ' + roKodeBank(sim.bankVA) + ' gratis)' : 'Bank VA dapur belum diisi di Identitas LPDH — biaya admin TIDAK dicatat'}</div></div>
-      {sim.perPeriode.map(function(x) { return <div key={x.periode_no} className="text-xs rounded-lg p-2 mb-1.5" style={{ border: '1px solid ' + COLORS.line, color: COLORS.ink }}>
-        <b>Periode {x.periode_no}</b> ({x.status === 'AKTIF' ? 'aktif' : 'ditutup'}) · {x.baris} baris · {fmt(x.nominal)} · {fmtDDMMYYYY(x.dari)} s.d. {fmtDDMMYYYY(x.sampai)}
+        <div className="text-xs" style={{ color: sim.mutasi || sim.bankVA || dapur === 'ALL' || !catatAdmin ? '#9A6A0B' : COLORS.danger }}>
+          {sim.mutasi ? '+ biaya admin ' + fmt(sim.admin) + ' (potongan nyata di mutasi, ' + sim.nAdmin + ' transfer)'
+            : !catatAdmin ? 'Biaya admin transfer tidak dicatat (sesuai pilihan)'
+            : dapur === 'ALL' ? '+ biaya admin ' + fmt(sim.admin) + ' (' + sim.nAdmin + ' transfer antarbank sesuai bank VA masing-masing dapur)'
+            : sim.bankVA ? '+ biaya admin ' + fmt(sim.admin) + ' (' + sim.nAdmin + ' transfer antarbank × ' + fmt(RO_FEE) + '; sesama ' + roKodeBank(sim.bankVA) + ' gratis)'
+            : 'Bank VA dapur belum diisi di Identitas LPDH — biaya admin TIDAK dicatat'}
+        </div></div>
+      {sim.perPeriode.map(function(x) { return <div key={(x.dapur_id || '') + '-' + x.periode_no} className="text-xs rounded-lg p-2 mb-1.5" style={{ border: '1px solid ' + COLORS.line, color: COLORS.ink }}>
+        <b>{dapur === 'ALL' && x.dapur_nama ? x.dapur_nama + ' · ' : ''}Periode {x.periode_no}</b> ({x.status === 'AKTIF' ? 'aktif' : 'ditutup'}) · {x.baris} baris · {fmt(x.nominal)} · {fmtDDMMYYYY(x.dari)} s.d. {fmtDDMMYYYY(x.sampai)}
         <div style={{ color: COLORS.muted }}>{Object.keys(x.jenis).map(function(j) { return j + ' ' + fmt(x.jenis[j]); }).join(' · ')}</div></div>; })}
-      {sim.saldo.length > 0 && <div className="text-xs mt-2" style={{ color: COLORS.ink }}>{sim.saldo.map(function(x) { return <div key={x.periode_no} style={{ color: x.saldo_sesudah < 0 ? COLORS.danger : COLORS.ink }}>Saldo VA periode {x.periode_no} menurut aplikasi: {fmt(x.saldo_sekarang)} → <b>{fmt(x.saldo_sesudah)}</b>{x.saldo_sesudah < 0 ? ' (NEGATIF — periksa)' : ''}</div>; })}
-        <div className="mt-1" style={{ color: COLORS.muted }}>Cocokkan dengan mutasi rekening sebelum melanjutkan.</div></div>}
-      {sim.contoh.length > 0 && <div className="text-[11px] mt-2" style={{ color: COLORS.muted }}>Contoh: {sim.contoh.map(function(c) { return fmtDDMMYYYY(c.tanggal) + ' · ' + c.no_bukti + ' · ' + c.uraian.slice(0, 28) + ' ' + fmt(c.nominal); }).join(' | ')}</div>}
+      {sim.saldo.length > 0 && <div className="text-xs mt-2" style={{ color: COLORS.ink }}>{sim.saldo.map(function(x) { return <div key={(x.dapur_id || '') + '-' + x.periode_no} style={{ color: x.saldo_sesudah < 0 ? COLORS.danger : COLORS.ink }}>{dapur === 'ALL' && x.dapur_nama ? x.dapur_nama + ' · ' : ''}Saldo VA periode {x.periode_no} menurut aplikasi: {fmt(x.saldo_sekarang)} → <b>{fmt(x.saldo_sesudah)}</b>{x.saldo_sesudah < 0 ? ' (NEGATIF — periksa)' : ''}</div>; })}
+        <div className="mt-1" style={{ color: COLORS.muted }}>{sim.tanpaMutasi ? 'Periksa ringkasan di atas sebelum melanjutkan.' : 'Cocokkan dengan mutasi rekening sebelum melanjutkan.'}</div></div>}
+      {sim.contoh.length > 0 && <div className="text-[11px] mt-2" style={{ color: COLORS.muted }}>Contoh: {sim.contoh.map(function(c) { return (dapur === 'ALL' && c.dapur_nama ? c.dapur_nama + ' · ' : '') + fmtDDMMYYYY(c.tanggal) + ' · ' + c.no_bukti + ' · ' + c.uraian.slice(0, 28) + ' ' + fmt(c.nominal); }).join(' | ')}</div>}
       {sim.cekSaldo && <div className="text-xs mt-2 rounded-lg p-2" style={{ background: Math.abs(sim.cekSaldo.selisih) < 1 ? '#E8F1EC' : '#F8E9E5', color: Math.abs(sim.cekSaldo.selisih) < 1 ? COLORS.deep : COLORS.danger }} aria-label="Cek saldo mutasi">
         Saldo {fmtDDMMYYYY(sim.cekSaldo.tanggal)} (periode {sim.cekSaldo.periode_no}) setelah realisasi — aplikasi {fmt(sim.cekSaldo.aplikasi)} · mutasi {fmt(sim.cekSaldo.bank)}{Math.abs(sim.cekSaldo.selisih) < 1 ? ' ✓ sama' : ' · selisih ' + fmt(sim.cekSaldo.selisih) + ' (cek top up/saldo awal periode & daftar di bawah)'}</div>}
       {sim.mutasi && <MutasiDaftar judul="Pengajuan tanpa transfer di mutasi (tidak direalisasi)" n={sim.mutasi.nTanpaMutasi} nilai={sim.mutasi.nilaiTanpaMutasi} isi={sim.mutasi.tanpaMutasi.map(function(x) { return fmtDDMMYYYY(x.tanggal) + ' · ' + x.uraian + ' · ' + fmt(x.nominal) + ' · ' + x.penerima + ' (' + x.bank + ')'; })}/>}
@@ -5917,8 +6108,8 @@ function RealisasiMassalPage({ session, dapurList, toast }) {
       </div> : <div className="text-sm mt-3" style={{ color: COLORS.muted }}>Tidak ada baris yang perlu direalisasi.</div>}
     </Card>}
     {hasil && <Card><div className="text-sm font-semibold" style={{ color: COLORS.green }} aria-label="Hasil eksekusi">Selesai: {hasil.dibuat} transaksi dibuat ({fmt(hasil.nominal)}){hasil.nAdmin ? ' + ' + hasil.nAdmin + ' biaya admin (' + fmt(hasil.admin) + ')' : ''}{hasil.ditautkanUlang ? ' · ' + hasil.ditautkanUlang + ' ditautkan ulang' : ''}.</div>
-      {hasil.saldo.map(function(x) { return <div key={x.periode_no} className="text-xs" style={{ color: COLORS.muted }}>Saldo VA periode {x.periode_no}: {fmt(x.saldo_sesudah)}</div>; })}
-      <div className="text-xs mt-2" style={{ color: COLORS.muted }}>Bukti transfer masih kosong untuk sebagian besar baris — lengkapi lewat menu Riwayat (edit transaksi) bila diperlukan.</div></Card>}
+      {hasil.saldo.map(function(x) { return <div key={(x.dapur_id || '') + '-' + x.periode_no} className="text-xs" style={{ color: COLORS.muted }}>{dapur === 'ALL' && x.dapur_nama ? x.dapur_nama + ' · ' : ''}Saldo VA periode {x.periode_no}: {fmt(x.saldo_sesudah)}</div>; })}
+      <div className="text-xs mt-2" style={{ color: COLORS.muted }}>Bukti transfer masih kosong untuk sebagian besar baris lama — lengkapi lewat menu Riwayat (edit transaksi) bila diperlukan.</div></Card>}
   </div>;
 }
 
@@ -5940,7 +6131,14 @@ function PersetujuanCard({ h, va, dapurNama, toast, onDone }) {
   const [saving, setSaving] = useState(false);
   const [confirm, setConfirm] = useState(false);
   function setD(id, patch) { setDec(function(d){ return Object.assign({}, d, { [id]: Object.assign({}, d[id] || {}, patch) }); }); }
-  const totalSetuju = pending.reduce(function(s, i){ return s + ((dec[i.id] || {}).status === 'DISETUJUI' ? i.nominal : 0); }, 0);
+  const totalAnggaran = pending.reduce(function(s, i){ return s + ((dec[i.id] || {}).status === 'DISETUJUI' ? i.nominal : 0); }, 0);
+  const totalAdmin = pending.reduce(function(s, i){ return s + ((dec[i.id] || {}).status === 'DISETUJUI' ? (i.biaya_admin || 0) : 0); }, 0);
+  const totalSetuju = totalAnggaran + totalAdmin;
+  const adaBedaRiil = pending.some(function(i){ return butuhRencanaRealisasi(i.jenis, i.kategori); });
+  const totalRencanaRiil = pending.reduce(function(s, i){
+    if ((dec[i.id] || {}).status !== 'DISETUJUI') return s;
+    return s + (butuhRencanaRealisasi(i.jenis, i.kategori) ? (i.rencana_riil || i.nominal) : i.nominal);
+  }, 0);
   const missing = pending.filter(function(i){ const d = dec[i.id]; return !d || !d.status || ((d.status === 'REVISI' || d.status === 'DITOLAK') && !String(d.catatan || '').trim()); });
   const over = va && totalSetuju > va.tersedia;
   const count = function(st){ return pending.filter(function(i){ return (dec[i.id] || {}).status === st; }).length; };
@@ -5977,14 +6175,16 @@ function PersetujuanCard({ h, va, dapurNama, toast, onDone }) {
       </ItemRow>;
     })}
     <div className="p-3 sm:p-4" style={{ borderTop: '1px solid ' + COLORS.line }}>
-      <div className="flex justify-between text-sm mb-1"><span style={{ color: COLORS.muted }}>Total disetujui</span><b className="num" style={{ color: over ? COLORS.danger : COLORS.green }}>{fmt(totalSetuju)}</b></div>
+      <div className="flex justify-between text-sm mb-0.5"><span style={{ color: COLORS.muted }}>Total disetujui (potong VA)</span><b className="num" style={{ color: over ? COLORS.danger : COLORS.green }}>{fmt(totalSetuju)}</b></div>
+      {totalAdmin > 0 && <div className="flex justify-between text-xs mb-1"><span style={{ color: COLORS.muted }}>Rincian potong VA</span><span className="num" style={{ color: COLORS.muted }}>anggaran {fmt(totalAnggaran)} + biaya admin {fmt(totalAdmin)}</span></div>}
+      {adaBedaRiil && <div className="flex justify-between text-xs mb-1"><span style={{ color: COLORS.muted }}>Total rencana realisasi (aktual)</span><b className="num" style={{ color: COLORS.green }}>{fmt(totalRencanaRiil)}</b></div>}
       {va && <div className="flex justify-between text-xs mb-3"><span style={{ color: COLORS.muted }}>VA tersedia {dapurNama}</span><span className="num" style={{ color: COLORS.ink }}>{fmt(va.tersedia)}</span></div>}
-      {over && <div className="text-xs rounded-lg p-2 mb-2" style={{ background: '#F8E9E5', color: COLORS.danger }}>Total disetujui melebihi VA tersedia. Kurangi baris yang disetujui.</div>}
+      {over && <div className="text-xs rounded-lg p-2 mb-2" style={{ background: '#F8E9E5', color: COLORS.danger }}>Total disetujui (anggaran + biaya admin) melebihi VA tersedia. Kurangi baris yang disetujui.</div>}
       {missing.length > 0 && <div className="text-xs mb-2" style={{ color: COLORS.muted }}>{missing.length} baris belum diputuskan / catatan belum diisi</div>}
       <Btn full disabled={missing.length > 0 || over || saving} onClick={function(){ setConfirm(true); }}>{I.check} Kirim keputusan</Btn>
     </div>
     {confirm && <ConfirmModal title={'Kirim keputusan ' + h.nomor + '?'} confirmLabel={saving ? 'Menyimpan…' : 'Kirim'}
-      message={count('DISETUJUI') + ' disetujui (' + fmt(totalSetuju) + '), ' + count('REVISI') + ' revisi, ' + count('DITOLAK') + ' ditolak. Keputusan tidak bisa diubah setelah dikirim.'}
+      message={count('DISETUJUI') + ' disetujui & otomatis terealisasi (potong VA ' + fmt(totalSetuju) + (totalAdmin > 0 ? ': anggaran ' + fmt(totalAnggaran) + ' + admin ' + fmt(totalAdmin) : '') + '), ' + count('REVISI') + ' revisi, ' + count('DITOLAK') + ' ditolak. Keputusan tidak bisa diubah setelah dikirim.'}
       onConfirm={function(){ if (!saving) submit(); }} onClose={function(){ setConfirm(false); }}/>}
   </Card>;
 }
@@ -6051,10 +6251,7 @@ function PersetujuanPage({ session, scope, dapurList, toast }) {
   </div>;
 }
 
-// ---------- Realisasi (akuntan) ----------
-// Kategori yang bukti pembayarannya (kuitansi) dibuat otomatis oleh server saat realisasi
-const KATEGORI_KUITANSI = ['Insentif Guru/PIC Sekolah', 'Insentif Kader Posyandu', 'Sewa Kendaraan'];
-function pakaiKuitansi(it) { return it.jenis === 'Fasilitas SPPG' || (it.jenis === 'Operasional' && KATEGORI_KUITANSI.indexOf(it.kategori) >= 0); }
+// ---------- Helper biaya admin & sub-kategori BHP ----------
 // Rekomendasi biaya admin transfer menurut bank VA dapur: sesama bank gratis, antarbank Rp 6.500
 function rekomAdmin(bankPenerima, bankVA) {
   const a = roKodeBank(bankPenerima), b = roKodeBank(bankVA);
@@ -6066,87 +6263,6 @@ function useBankVA(dapur) {
   const [b, setB] = useState(null);
   useEffect(function() { let hidup = true; api('getBankVA', { dapur: dapur || '' }).then(function(r) { if (hidup) setB(r.ok && r.data ? r.data.bank : ''); }); return function() { hidup = false; }; }, [dapur || '']);
   return b;
-}
-function RealisasiForm({ item, periode, toast, onClose, onSaved }) {
-  const isOps = item.jenis === 'Operasional';
-  const viaNota = item.jenis === 'Bahan Baku' && !!item.nota_url;
-  const viaKuitansi = pakaiKuitansi(item);
-  const otomatis = viaNota || viaKuitansi;
-  const today = todayISO();
-  const perluSub = item.kategori === 'Barang Habis Pakai';
-  const tglAju = /^\d{4}-\d{2}-\d{2}$/.test(String(item.tanggal_pengajuan || '')) ? item.tanggal_pengajuan : '';   // realisasi hanya pada tanggal pengajuan
-  const [f, setF] = useState({ tanggal: tglAju || (periode && today >= periode.tanggal_mulai && today <= periode.tanggal_akhir ? today : (periode ? periode.tanggal_mulai : today)), no_bukti: '', riil: isOps && !viaKuitansi ? '' : String(item.nominal), adaAdmin: false, biaya: String(BIAYA_ADMIN_DEFAULT),
-    sub: '' });
-  const [bukti, setBukti] = useState(null);
-  const [saving, setSaving] = useState(false);
-  const bankVA = useBankVA('');
-  const rek = bankVA === null ? null : rekomAdmin(item.bank, bankVA);
-  const [adminDiatur, setAdminDiatur] = useState(false);
-  useEffect(function() { if (rek && rek.fee !== null && !adminDiatur) setF(function(o) { return Object.assign({}, o, { adaAdmin: rek.fee > 0, biaya: String(rek.fee > 0 ? rek.fee : BIAYA_ADMIN_DEFAULT) }); }); }, [bankVA]);
-  const outRange = periode && (f.tanggal < periode.tanggal_mulai || f.tanggal > periode.tanggal_akhir);
-  const err = !f.tanggal ? 'Tanggal wajib' : outRange ? 'Tanggal di luar periode' : /^[\s\-\u2013\u2014_.\/]+$/.test(f.no_bukti) ? 'No bukti tidak boleh "' + f.no_bukti.trim() + '" — kosongkan bila nota tidak bernomor' :
-    (isOps && !(Number(f.riil) > 0)) ? 'Realisasi aktual wajib' : (f.adaAdmin && !(Number(f.biaya) > 0 && Number(f.biaya) <= 50000)) ? 'Biaya admin Rp 1 – Rp 50.000' :
-    (!bukti && !otomatis) ? 'Bukti transfer wajib diunggah' : null;
-  const keluarVA = (isOps ? Number(f.riil || 0) : item.nominal) + (f.adaAdmin ? Number(f.biaya || 0) : 0);
-  // pagu operasional harian (LPDH memakai nominal anggaran pengajuan)
-  const [pagu, setPagu] = useState(null);
-  useEffect(function() { if (!isOps || !f.tanggal) return; let hidup = true;
-    api('getPaguOps', { tanggal: f.tanggal }).then(function(r) { if (hidup) setPagu(r.ok ? r.data : null); });
-    return function() { hidup = false; }; }, [f.tanggal]);
-  const opsBaru = pagu ? pagu.terpakai + item.nominal + (f.adaAdmin ? Number(f.biaya || 0) : 0) : 0;
-  async function submit() {
-    setSaving(true);
-    let url = '';
-    if (bukti) {
-      const b64 = await fileToBase64(bukti);
-      const up = await apiUpload('uploadBukti', { fileData: b64, fileName: buktiFileName(bukti, f.tanggal, f.no_bukti), mimeType: bukti.type });
-      if (!up.ok) { setSaving(false); toast('Gagal upload bukti: ' + up.error, 'error'); return; }
-      url = up.data.url;
-    }
-    const res = await api('realisasiItem', { item_id: item.id, tanggal: f.tanggal, no_bukti: f.no_bukti.trim(), riil: isOps ? f.riil : item.nominal, bukti_url: url,
-      biaya_admin: f.adaAdmin ? f.biaya : 0, sub_kategori: perluSub ? f.sub : '' });
-    setSaving(false);
-    if (res.ok) {
-      const ket = res.data && res.data.bukti === 'kuitansi' ? ' · kuitansi dibuat otomatis' : res.data && res.data.bukti === 'nota' ? ' · bukti: nota pengajuan' : '';
-      toast('Realisasi tersimpan' + (!f.no_bukti.trim() && res.data && res.data.no_bukti ? ' · nomor ' + res.data.no_bukti : '') + ket); onSaved(); onClose();
-    } else toast(res.error || 'Gagal menyimpan', 'error');
-  }
-  return <Modal title={'Realisasi #' + item.urut + ' · ' + item.uraian} size="lg" onClose={onClose}>
-    <div className="rounded-lg p-3 mb-3 text-sm" style={{ background: COLORS.paper }}>
-      <div className="font-mono text-[11px]" style={{ color: COLORS.muted }}>{item.nomor}</div>
-      <div style={{ color: COLORS.ink }}>{item.jenis} · {item.kategori}</div>
-      <div style={{ color: COLORS.ink }}>→ <b>{item.penerima_nama}</b> · {item.bank} {item.no_rek}</div>
-      <div className="mt-1">Nominal disetujui: <b className="num">{fmt(item.nominal)}</b></div>
-    </div>
-    <div className="grid sm:grid-cols-2 gap-x-4">
-      <Field label="Tanggal transfer *" hint={tglAju ? 'Mengikuti tanggal pengajuan — realisasi tidak boleh di luar tanggal pengajuan' : outRange ? '⚠️ Di luar periode' : null} hintColor={tglAju ? COLORS.muted : COLORS.danger}>
-        <input type="date" value={f.tanggal} min={periode && periode.tanggal_mulai} max={periode && periode.tanggal_akhir} disabled={!!tglAju} aria-label="Tanggal transfer"
-          onChange={function(e){ setF(Object.assign({}, f, { tanggal: e.target.value })); }} style={Object.assign({}, inputStyle, tglAju ? { background: COLORS.paper } : {})}/>
-      </Field>
-      {otomatis ? <Field label="No Bukti"><div className="text-sm py-2.5" style={{ color: COLORS.ink }}>{viaNota ? (item.nota_no || 'dibuat otomatis (nota tak bernomor)') : 'dibuat otomatis (nomor kuitansi)'}</div></Field>
-      : <Field label="No Bukti / Nota" hint='Wajib unik (syarat LPDH). Kosongkan bila nota tidak bernomor → nomor dibuat otomatis. Nomor sama dari toko lain? tambahkan kode toko, cth. 001/2026-TMB'>
-        <input value={f.no_bukti} onChange={function(e){ setF(Object.assign({}, f, { no_bukti: e.target.value })); }} style={inputStyle} placeholder="kosong = otomatis"/>
-      </Field>}
-      {isOps ? <>
-        <Field label="Realisasi Anggaran" hint="Terkunci = nominal disetujui"><RupiahInput value={String(item.nominal)} onChange={function(){}} disabled/></Field>
-        <Field label="Realisasi Aktual *" hint="Yang benar-benar ditransfer"><RupiahInput value={f.riil} onChange={function(v){ setF(Object.assign({}, f, { riil: v })); }}/></Field>
-      </> : <Field label="Nominal" hint="Terkunci = nominal disetujui"><RupiahInput value={String(item.nominal)} onChange={function(){}} disabled/></Field>}
-    </div>
-    {perluSub && <SubBHPField value={f.sub} uraian={item.uraian} onChange={function(v){ setF(Object.assign({}, f, { sub: v })); }}/>}
-    {rek && rek.teks && <div className="text-xs mb-1" style={{ color: rek.fee ? '#9A6A0B' : COLORS.green }} aria-label="Rekomendasi biaya admin">Rekomendasi: {rek.teks}</div>}
-    <BiayaAdminField ada={f.adaAdmin} biaya={f.biaya} onChange={function(patch){ setAdminDiatur(true); setF(Object.assign({}, f, patch)); }}/>
-    {otomatis ? <div className="rounded-lg p-3 mb-3 text-sm" style={{ background: '#E8F1EC', color: COLORS.deep }}>
-      {viaNota ? <>{I.check} Bukti memakai <a href={item.nota_url} target="_blank" rel="noopener" className="underline font-semibold">nota dari pengajuan</a> — tidak perlu unggah.</>
-        : <>{I.check} <b>Kuitansi / bukti pembayaran dibuat otomatis</b> (PDF, berisi penerima, nominal, terbilang, kolom tanda tangan). Cetak & mintakan tanda tangan penerima.</>}
-      <details className="mt-1.5 text-xs"><summary style={{ cursor: 'pointer', color: COLORS.muted }}>Tetap ingin unggah bukti transfer?</summary><div className="mt-2"><BuktiPicker bukti={bukti} setBukti={setBukti}/></div></details>
-    </div>
-    : <Field label="Bukti transfer *" hint="Nama file otomatis: {Tanggal}_{No Bukti}"><BuktiPicker bukti={bukti} setBukti={setBukti}/></Field>}
-    {isOps && pagu && opsBaru > pagu.pagu && <div className="rounded-lg p-2.5 mb-2 text-xs" style={{ background: '#F8E9E5', color: COLORS.danger }}>
-      ⚠️ Operasional {fmtDate(f.tanggal)} menjadi <b>{fmt(opsBaru)}</b>, melebihi pagu harian <b>{fmt(pagu.pagu)}</b>{pagu.libur ? ' (bukan HPE)' : ' (PM ' + fmtNoRp(pagu.pm) + ')'} sebesar {fmt(opsBaru - pagu.pagu)}. Pagu LPDH mutlak — cek Rencana Ops sebelum menyimpan.</div>}
-    {f.adaAdmin && <div className="text-xs mb-2" style={{ color: COLORS.muted }}>Total keluar dari VA: <b className="num" style={{ color: COLORS.ink }}>{fmt(keluarVA)}</b> (transfer + biaya admin, dicatat sebagai 2 transaksi)</div>}
-    {err && <div className="text-xs mb-2" style={{ color: COLORS.danger }}>• {err}</div>}
-    <Btn full disabled={!!err || saving} onClick={submit}>{saving ? I.spinner : I.check} {saving ? 'Menyimpan…' : 'Simpan realisasi'}</Btn>
-  </Modal>;
 }
 
 // Sub-kategori pengganti "Barang Habis Pakai" = baris LPDH C_Operasional
@@ -6174,52 +6290,11 @@ function BiayaAdminField({ ada, biaya, onChange }) {
   </div>;
 }
 
-function RealisasiPage({ session, toast, onSaved }) {
-  const [items, setItems] = useState([]);
-  const [periode, setPeriode] = useState(null);
-  const [loading, setLoading] = useState(true);
-  const [sel, setSel] = useState(null);
-  const load = useCallback(async function() {
-    setLoading(true);
-    const [r, p] = await Promise.all([api('getRealisasiList'), api('getActivePeriode', { dapur: session.user.dapur })]);
-    setLoading(false);
-    if (r.ok) setItems(r.data); else toast(r.error || 'Gagal memuat', 'error');
-    if (p.ok) setPeriode(p.data);
-  }, []);
-  useEffect(function(){ load(); }, [load]);
-  const total = items.reduce(function(s, i){ return s + i.nominal; }, 0);
-  if (loading) return <Card><div className="flex items-center gap-2 text-sm" style={{ color: COLORS.muted }}>{I.spinner} Memuat…</div></Card>;
-  return <div>
-    <Card className="mb-3">
-      <Eyebrow>Siap direalisasikan</Eyebrow>
-      <div className="text-sm" style={{ color: COLORS.muted }}>Baris yang sudah disetujui Yayasan. Pilih satu, isi tanggal transfer dan unggah bukti.</div>
-      <div className="text-lg font-bold num mt-1" style={{ color: COLORS.ink }}>{items.length} baris · {fmt(total)}</div>
-    </Card>
-    {items.length === 0 ? <Card><div className="text-sm text-center py-6" style={{ color: COLORS.muted }}>Tidak ada baris yang menunggu realisasi.</div></Card> :
-      <Card pad={false}>
-        {items.map(function(it, idx){
-          return <button key={it.id} onClick={function(){ setSel(it); }} className="w-full text-left block hover:bg-gray-50"
-            style={{ borderTop: idx ? '1px solid ' + COLORS.line : 'none' }}>
-            <div className="px-3 sm:px-4 py-3 flex items-start justify-between gap-3">
-              <div className="min-w-0">
-                <div className="text-sm font-semibold" style={{ color: COLORS.ink }}>{it.uraian}</div>
-                <div className="text-[11px]" style={{ color: COLORS.muted }}>{it.jenis} · {it.kategori} · <span className="font-mono">{it.nomor}</span></div>
-                <div className="text-xs mt-0.5" style={{ color: COLORS.ink }}>→ {it.penerima_nama} <span style={{ color: COLORS.muted }}>· {it.bank} {it.no_rek}</span></div>
-              </div>
-              <div className="text-right shrink-0"><div className="text-sm font-bold num">{fmt(it.nominal)}</div>
-                <div className="text-[11px] font-semibold mt-1 inline-flex items-center gap-1" style={{ color: COLORS.green }}>Realisasi {I.arrowR}</div></div>
-            </div>
-          </button>;
-        })}
-      </Card>}
-    {sel && <RealisasiForm item={sel} periode={periode} toast={toast} onClose={function(){ setSel(null); }} onSaved={function(){ load(); onSaved && onSaved(); }}/>}
-  </div>;
-}
-
-// Edit transaksi hasil realisasi (field pengajuan terkunci)
+// Edit transaksi hasil pengajuan/realisasi (field pengajuan terkunci)
 function EditRealisasiModal({ trx, periode, session, toast, onClose, onSaved, requestMode, hasFee }) {
   const isOps = trx.jenis === 'Operasional';
   const isFee = isFeeTx(trx);
+  const bolehEditRiil = isFee || butuhRencanaRealisasi(trx.jenis, trx.kategori);
   const [tambahFee, setTambahFee] = useState({ adaAdmin: false, biaya: String(BIAYA_ADMIN_DEFAULT) });
   const canAddFee = !requestMode && !isFee && !hasFee;
   const [alasan, setAlasan] = useState('');
@@ -6227,7 +6302,7 @@ function EditRealisasiModal({ trx, periode, session, toast, onClose, onSaved, re
   const [f, setF] = useState({ tanggal: trx.tanggal, no_bukti: trx.no_bukti || '', riil: String(trx.riil || ''), sub: '' });
   const [bukti, setBukti] = useState(null);
   const [saving, setSaving] = useState(false);
-  const err = !f.tanggal ? 'Tanggal wajib' : !f.no_bukti.trim() ? 'No bukti wajib' : (isOps && !(Number(f.riil) > 0)) ? (isFee ? 'Biaya admin wajib' : 'Realisasi aktual wajib') :
+  const err = !f.tanggal ? 'Tanggal wajib' : !f.no_bukti.trim() ? 'No bukti wajib' : (bolehEditRiil && !(Number(f.riil) > 0)) ? (isFee ? 'Biaya admin wajib' : 'Realisasi aktual wajib') :
     (isFee && Number(f.riil) > 50000) ? 'Biaya admin maksimal Rp 50.000' :
     (tambahFee.adaAdmin && !(Number(tambahFee.biaya) > 0 && Number(tambahFee.biaya) <= 50000)) ? 'Biaya admin Rp 1 – Rp 50.000' :
     (requestMode && !alasan.trim()) ? 'Alasan perubahan wajib' : null;
@@ -6240,7 +6315,7 @@ function EditRealisasiModal({ trx, periode, session, toast, onClose, onSaved, re
       bukti_url = up.data.url;
     }
     const payload = { role: session.user.role, user_id: session.user.id, dapur: session.user.dapur, id: trx.id, tanggal: f.tanggal, no_bukti: f.no_bukti.trim() };
-    if (isOps) payload.riil = f.riil;
+    if (bolehEditRiil) payload.riil = f.riil;
     if (perluSub && f.sub) payload.kategori = f.sub;
     if (bukti_url) payload.bukti_url = bukti_url;
     let res;
@@ -6262,7 +6337,7 @@ function EditRealisasiModal({ trx, periode, session, toast, onClose, onSaved, re
     <div className="grid sm:grid-cols-2 gap-x-4">
       <Field label="Tanggal transfer *"><input type="date" value={f.tanggal} min={periode && periode.tanggal_mulai} max={periode && periode.tanggal_akhir} onChange={function(e){ setF(Object.assign({}, f, { tanggal: e.target.value })); }} style={inputStyle}/></Field>
       <Field label="No Bukti *"><input value={f.no_bukti} onChange={function(e){ setF(Object.assign({}, f, { no_bukti: e.target.value })); }} style={inputStyle}/></Field>
-      {isOps && <Field label={isFee ? 'Biaya admin *' : 'Realisasi Aktual *'}><RupiahInput value={f.riil} onChange={function(v){ setF(Object.assign({}, f, { riil: v })); }}/></Field>}
+      {bolehEditRiil && <Field label={isFee ? 'Biaya admin *' : 'Realisasi Aktual *'}><RupiahInput value={f.riil} onChange={function(v){ setF(Object.assign({}, f, { riil: v })); }}/></Field>}
     </div>
     {perluSub && <SubBHPField value={f.sub} uraian={trx.uraian} onChange={function(v){ setF(Object.assign({}, f, { sub: v })); }}/>}
     {canAddFee && <BiayaAdminField ada={tambahFee.adaAdmin} biaya={tambahFee.biaya} onChange={function(patch){ setTambahFee(Object.assign({}, tambahFee, patch)); }}/>}
@@ -6488,14 +6563,13 @@ function App() {
   </>);
 
   const role = session.user.role;
-  // Nav v6: akuntan Pengajuan + Realisasi (input bebas dihapus); yayasan Persetujuan; admin Input Darurat
+  // Nav: akuntan Pengajuan (realisasi otomatis saat disetujui Yayasan/PIC); yayasan Persetujuan; admin Input Darurat
   const navItems = ({
     akuntan: [
       ['setup','Setup',I.settings],
       ['dash','Dashboard',I.dash],
       ['rencana','Rencana Ops',I.calendar],
       ['pengajuan','Pengajuan',I.file],
-      ['realisasi','Realisasi',I.plus],
       ['beritaacara','Berita Acara',I.download],
       ['laporan','Laporan',I.report],
       ['lpdh','LPDH Harian',I.download],
@@ -6619,8 +6693,6 @@ function App() {
           {view === 'dash'    && <Dashboard key={'d'+refreshKey} session={session} scope={effScope} toast={toast} onGoSetup={function(){ setView('setup'); }}/>}
           {view === 'pengajuan' && <PengajuanPage session={session} scope={effScope} dapurList={dapurList} toast={toast}/>}
           {view === 'beritaacara' && <BeritaAcaraPage session={session} scope={effScope} dapurList={dapurList} toast={toast}/>}
-          {view === 'realisasi' && <RealisasiPage session={session} toast={toast}
-            onSaved={function(){ setRefreshKey(function(k){return k+1;}); }}/>}
           {view === 'persetujuan' && <PersetujuanPage session={session} scope={effScope} dapurList={dapurList} toast={toast}/>}
           {view === 'perubahan' && <PerubahanAdminPage session={session} dapurList={dapurList} toast={toast}/>}
           {view === 'darurat' && <DaruratPage session={session} dapurList={dapurList} toast={toast}
