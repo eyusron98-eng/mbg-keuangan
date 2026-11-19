@@ -256,13 +256,19 @@ const ok = (c, m) => { console.log((c ? 'PASS ' : 'FAIL ') + m); if (!c) fails++
   ok(e6.__book.PengajuanItem.find(x => x[0] === 'PAGAN-1')[14] === 'DITOLAK', 'status baris menjadi DITOLAK');
   ok(e6.__book.Pengajuan.find(x => x[0] === 'PAGAN')[5] === 'SELESAI', 'status header menjadi SELESAI');
 
-  // 12. getPenandatangan: nama akuntan dapur, akses dibatasi
+  // 12. getPenandatangan: nama & TTD akuntan dapur, Perwakilan Mitra/Yayasan, dan Kepala SPPG dari LPDH
+  call(e6, 'POST', { action: 'saveIdentitasLPDH', token: tok6('adm'), dapur: 'D001', kepala_nama: 'Drs. Hendra Kepala', wakil_nama: 'H. Ahmad Yayasan' });
+  call(e6, 'POST', { action: 'saveTtd', token: tok6('akn'), fileData: 'data:image/png;base64,QUFB' });
+  call(e6, 'POST', { action: 'saveTtd', token: tok6('adm'), untuk: 'wakil', dapur: 'D001', fileData: 'data:image/png;base64,QkJC' });
+  call(e6, 'POST', { action: 'saveTtd', token: tok6('adm'), untuk: 'kepala', dapur: 'D001', fileData: 'data:image/png;base64,Q0ND' });
   const pt = (u, d) => call(e6, 'POST', { action: 'getPenandatangan', token: tok6(u), dapur: d });
-  r = pt('adm', 'D001'); ok(r.ok && r.data.akuntan === 'Akuntan', 'admin mendapat nama akuntan D001: ' + JSON.stringify(r.data));
-  ok(Object.keys(r.data).join(',') === 'akuntan', 'hanya nama yang dikirim (tanpa data lain)');
-  r = pt('yay', 'D001'); ok(r.ok && r.data.akuntan === 'Akuntan', 'yayasan mendapat nama akuntan');
-  r = pt('pic1', 'D001'); ok(r.ok && r.data.akuntan === 'Akuntan', 'PIC dapur sendiri mendapat nama akuntan');
-  r = pt('pic2', 'D001'); ok(r.ok && r.data.akuntan === '', 'PIC dapur lain: dapur dipaksa ke dapurnya sendiri (D002, tanpa akuntan) → kosong, bukan nama akuntan D001');
+  r = pt('adm', 'D001');
+  ok(r.ok && r.data.akuntan === 'Akuntan' && r.data.wakil === 'H. Ahmad Yayasan' && r.data.kepala === 'Drs. Hendra Kepala', 'admin mendapat nama akuntan, wakil yayasan & kepala SPPG D001: ' + JSON.stringify(r.data));
+  ok(r.data.ttd && r.data.ttd.akuntan === 'data:image/png;base64,QUFB' && r.data.ttd.wakil === 'data:image/png;base64,QkJC' && r.data.ttd.kepala === 'data:image/png;base64,Q0ND', 'getPenandatangan menyertakan TTD akuntan, wakil yayasan & kepala SPPG dari LPDH');
+  ok(Object.keys(r.data).join(',') === 'akuntan,wakil,kepala,ttd', 'hanya nama & ttd penanda tangan yang dikirim (tanpa password/NIK/data lain)');
+  r = pt('yay', 'D001'); ok(r.ok && r.data.akuntan === 'Akuntan' && r.data.wakil === 'H. Ahmad Yayasan', 'yayasan mendapat nama penanda tangan');
+  r = pt('pic1', 'D001'); ok(r.ok && r.data.akuntan === 'Akuntan' && r.data.kepala === 'Drs. Hendra Kepala', 'PIC dapur sendiri mendapat nama penanda tangan');
+  r = pt('pic2', 'D001'); ok(r.ok && r.data.akuntan === '' && r.data.wakil === '' && r.data.kepala === '', 'PIC dapur lain: dapur dipaksa ke dapurnya sendiri (D002, tanpa akuntan) → kosong, bukan D001');
   r = pt('adm', 'D002'); ok(r.ok && r.data.akuntan === '', 'dapur tanpa akuntan aktif → kosong');
   r = pt('adm', ''); ok(!r.ok, 'dapur kosong ditolak');
   e6.__book.Users.forEach(u => { if (u[0] === 'U3') u[6] = 'TIDAK'; });

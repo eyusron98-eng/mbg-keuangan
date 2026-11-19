@@ -179,9 +179,43 @@ async function kirimDenganSesi(kirim) {
   }
   return checkSession(j, tok);
 }
+// Cache memori & deduplikasi permintaan baca agar pindah menu/tab instan dan tidak memanggil Apps Script berulang.
+// Otomatis dibersihkan setiap kali ada aksi tulis/ubah data atau ganti sesi/peran.
+const READ_CACHE_TTL = {
+  getDapur: 300000, getKategori: 300000, getLogoKop: 300000, getBankVA: 300000,
+  getPenandatangan: 180000, getTtd: 180000, getTtdPengesahan: 180000,
+  getPenerima: 120000, getDataPenerima: 120000,
+  getPeriodeList: 60000, getActivePeriode: 60000, getVATopups: 60000, getPettyTopups: 60000,
+  getDashboard: 45000, getTransaksi: 45000, getTxChanges: 45000,
+  getPengajuan: 30000, getBADaftar: 45000, getBeritaAcara: 60000,
+  getRencanaOps: 45000, getPaguOps: 45000,
+  getDataLPDH: 45000, getHarianLPDH: 45000, getRelawanTetap: 60000, getRelawanBayar: 60000,
+  getKwitansiHarian: 30000, getTugasHarian: 30000, getUsers: 60000,
+};
+const _apiCache = {};
+const _apiInflight = {};
+function clearApiCache() {
+  Object.keys(_apiCache).forEach(function(k) { delete _apiCache[k]; });
+}
+function apiCacheKey(action, params) {
+  const sb = paramSebagai();
+  const ks = Object.keys(params || {}).sort();
+  const norm = {};
+  ks.forEach(function(k) { if (params[k] !== undefined && params[k] !== null) norm[k] = params[k]; });
+  return [AUTH_TOKEN || '', sb.sebagai || '', sb.sebagai_dapur || '', action, JSON.stringify(norm)].join('|');
+}
 async function api(action, params) {
   params = params || {};
-  return kirimDenganSesi(async function(tok) {
+  const ttl = READ_CACHE_TTL[action] || 0;
+  const key = ttl ? apiCacheKey(action, params) : '';
+  if (ttl) {
+    const hit = _apiCache[key];
+    if (hit && (Date.now() - hit.t < ttl)) return hit.v;
+    if (_apiInflight[key]) return _apiInflight[key];
+  } else {
+    clearApiCache();
+  }
+  const req = kirimDenganSesi(async function(tok) {
     const url = new URL(API_URL);
     url.searchParams.set('action', action);
     if (tok && !params.token) url.searchParams.set('token', tok);
@@ -194,10 +228,21 @@ async function api(action, params) {
     try { const res = await fetch(url.toString(), { method: 'GET', redirect: 'follow' }); return await res.json(); }
     catch (e) { return { ok: false, error: 'Koneksi gagal: ' + e.message }; }
   });
+  if (ttl) {
+    _apiInflight[key] = req;
+    const out = await req;
+    delete _apiInflight[key];
+    if (out && out.ok) _apiCache[key] = { t: Date.now(), v: out };
+    return out;
+  }
+  const out = await req;
+  clearApiCache();
+  return out;
 }
 // POST untuk payload besar (tabel pengajuan, keputusan)
 async function apiPost(action, params) {
-  return kirimDenganSesi(async function(tok) {
+  clearApiCache();
+  const out = await kirimDenganSesi(async function(tok) {
     try {
       const res = await fetch(API_URL, { method: 'POST', redirect: 'follow',
         headers: { 'Content-Type': 'text/plain;charset=utf-8' },
@@ -205,9 +250,12 @@ async function apiPost(action, params) {
       return await res.json();
     } catch (e) { return { ok: false, error: 'Koneksi gagal: ' + e.message }; }
   });
+  clearApiCache();
+  return out;
 }
 async function apiUpload(action, params) {
-  return kirimDenganSesi(async function(tok) {
+  clearApiCache();
+  const out = await kirimDenganSesi(async function(tok) {
     try {
       const res = await fetch(API_URL, { method: 'POST', redirect: 'follow',
         headers: { 'Content-Type': 'text/plain;charset=utf-8' },
@@ -215,6 +263,8 @@ async function apiUpload(action, params) {
       return await res.json();
     } catch (e) { return { ok: false, error: 'Upload gagal: ' + e.message }; }
   });
+  clearApiCache();
+  return out;
 }
 
 // Kredensial (password) jangan lewat query string GET: URL tercatat di log proxy/Google & riwayat browser.
@@ -3062,18 +3112,21 @@ function Laporan({ session, scope, toast }) {
     if (main && txToLampiranNo[main.id]) txToLampiranNo[t.id] = txToLampiranNo[main.id];
   });
 
-  // Penanda tangan "Dibuat oleh": akuntan dapur pemilik laporan, bukan siapa pun yang sedang login
-  const [akuntanDapur, setAkuntanDapur] = useState(null);
+  // Penanda tangan Laporan: Akuntan dapur, Perwakilan Mitra/Yayasan (dari LPDH), dan Kepala SPPG (dari LPDH) + gambar TTD
+  const [penandatangan, setPenandatangan] = useState(null);
   const dapurLaporan = periode ? periode.dapur : '';
   useEffect(function() {
     if (!dapurLaporan) return;
     let live = true;
-    setAkuntanDapur(null);
-    api('getPenandatangan', { dapur: dapurLaporan }).then(function(r){ if (live) setAkuntanDapur(r.ok && r.data && r.data.akuntan ? r.data.akuntan : ''); });
+    setPenandatangan(null);
+    api('getPenandatangan', { dapur: dapurLaporan }).then(function(r){ if (live) setPenandatangan(r.ok && r.data ? r.data : {}); });
     return function(){ live = false; };
   }, [dapurLaporan]);
   // Cadangan bila backend belum diperbarui: pakai nama sendiri hanya kalau yang login memang akuntan dapur ini; selain itu dikosongkan untuk ditulis tangan
-  const namaAkuntan = akuntanDapur || (session.user.role === 'akuntan' && session.user.dapur === dapurLaporan ? session.user.nama : '');
+  const namaAkuntan = (penandatangan && penandatangan.akuntan) || (session.user.role === 'akuntan' && session.user.dapur === dapurLaporan ? session.user.nama : '');
+  const namaWakil = (penandatangan && penandatangan.wakil) || '';
+  const namaKepala = (penandatangan && penandatangan.kepala) || '';
+  const ttdLap = (penandatangan && penandatangan.ttd) || {};
 
   function doPrint() { window.print(); }
   if (loading) return <Card>{I.spinner}</Card>;
@@ -3174,27 +3227,36 @@ function Laporan({ session, scope, toast }) {
               </table>
             </div>
 
-            {/* TANDA TANGAN — 3 kolom */}
-            <div style={{ marginTop: 48, display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 16, fontSize: 11 }}>
+            {/* TANDA TANGAN — 3 kolom: Akuntan, Perwakilan Mitra/Yayasan (dari LPDH), Kepala SPPG (dari LPDH) */}
+            <div style={{ marginTop: 36, display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 16, fontSize: 11 }}>
               <div style={{ textAlign: 'center' }}>
                 <div style={{ color: COLORS.muted }}>Dibuat oleh,</div>
-                <div style={{ marginTop: 60, paddingTop: 4, color: COLORS.ink }}>
+                <div style={{ height: 60, display: 'flex', alignItems: 'center', justifyContent: 'center', marginTop: 4 }}>
+                  {ttdLap.akuntan && <img src={ttdLap.akuntan} alt="TTD Akuntan" style={{ maxHeight: 54, maxWidth: 160, objectFit: 'contain' }}/>}
+                </div>
+                <div style={{ paddingTop: 4, color: COLORS.ink }}>
                   <div style={{ fontWeight: 700, borderTop: '1px solid ' + COLORS.ink, paddingTop: 4 }}>({namaAkuntan || '.................................'})</div>
                   <div style={{ color: COLORS.muted, fontSize: 10 }}>Akuntan</div>
                 </div>
               </div>
               <div style={{ textAlign: 'center' }}>
                 <div style={{ color: COLORS.muted }}>Mengetahui,</div>
-                <div style={{ marginTop: 60, paddingTop: 4, color: COLORS.ink }}>
-                  <div style={{ fontWeight: 700, borderTop: '1px solid ' + COLORS.ink, paddingTop: 4 }}>(.................................)</div>
-                  <div style={{ color: COLORS.muted, fontSize: 10 }}>Perwakilan Yayasan</div>
+                <div style={{ height: 60, display: 'flex', alignItems: 'center', justifyContent: 'center', marginTop: 4 }}>
+                  {ttdLap.wakil && <img src={ttdLap.wakil} alt="TTD Mitra/Yayasan" style={{ maxHeight: 54, maxWidth: 160, objectFit: 'contain' }}/>}
+                </div>
+                <div style={{ paddingTop: 4, color: COLORS.ink }}>
+                  <div style={{ fontWeight: 700, borderTop: '1px solid ' + COLORS.ink, paddingTop: 4 }}>({namaWakil || '.................................'})</div>
+                  <div style={{ color: COLORS.muted, fontSize: 10 }}>Perwakilan Mitra/Yayasan</div>
                 </div>
               </div>
               <div style={{ textAlign: 'center' }}>
                 <div style={{ color: COLORS.muted }}>Mengetahui,</div>
-                <div style={{ marginTop: 60, paddingTop: 4, color: COLORS.ink }}>
-                  <div style={{ fontWeight: 700, borderTop: '1px solid ' + COLORS.ink, paddingTop: 4 }}>(.................................)</div>
-                  <div style={{ color: COLORS.muted, fontSize: 10 }}>Kepala Dapur {dapurNama}</div>
+                <div style={{ height: 60, display: 'flex', alignItems: 'center', justifyContent: 'center', marginTop: 4 }}>
+                  {ttdLap.kepala && <img src={ttdLap.kepala} alt="TTD Kepala SPPG" style={{ maxHeight: 54, maxWidth: 160, objectFit: 'contain' }}/>}
+                </div>
+                <div style={{ paddingTop: 4, color: COLORS.ink }}>
+                  <div style={{ fontWeight: 700, borderTop: '1px solid ' + COLORS.ink, paddingTop: 4 }}>({namaKepala || '.................................'})</div>
+                  <div style={{ color: COLORS.muted, fontSize: 10 }}>Kepala SPPG {dapurNama}</div>
                 </div>
               </div>
             </div>
@@ -3279,9 +3341,8 @@ function Riwayat({ session, scope, toast, refreshKey }) {
   const [hapusReq, setHapusReq] = useState(null);
 
   const loadPeriode = useCallback(async function() {
-    const dapurId = scope && scope !== 'ALL' ? scope : (session.user.dapur || '');
     const [pl, dp, kat] = await Promise.all([
-      api('getPeriodeList', { role: session.user.role, dapur: dapurId, scope: scope }),
+      api('getPeriodeList', { role: session.user.role, dapur: scope, scope: scope }),
       api('getDapur'),
       api('getKategori'),
     ]);
@@ -3305,14 +3366,15 @@ function Riwayat({ session, scope, toast, refreshKey }) {
     setLoading(true);
     const selObj = periodeList.find(function(p){return p.id === selPeriode;});
     const dapurId = selObj ? selObj.dapur : (scope && scope !== 'ALL' ? scope : (session.user.dapur || ''));
-    const [tx, va] = await Promise.all([
+    const [tx, va, ch] = await Promise.all([
       api('getTransaksi', { role: session.user.role, dapur: session.user.dapur || '', scope: scope || 'ALL', periode_id: selPeriode }),
       api('getVATopups', { dapur: dapurId, periode_id: selPeriode }),
+      canEdit ? api('getTxChanges', { periode_id: selPeriode }) : Promise.resolve(null),
     ]);
     setLoading(false);
     if (tx.ok) setTransaksi(tx.data);
     if (va.ok) setVaTopups(va.data);
-    if (canEdit) { const ch = await api('getTxChanges', { periode_id: selPeriode }); if (ch.ok) setChanges(ch.data); }
+    if (ch && ch.ok) setChanges(ch.data);
   }, [selPeriode, scope, refreshKey, periodeList]);
 
   useEffect(function() { loadPeriode(); }, [loadPeriode]);
@@ -4743,10 +4805,11 @@ function PengajuanPage({ session, scope, dapurList, toast }) {
 
   const load = useCallback(async function() {
     setLoading(true);
+    const pBa = !isAsisten ? api('getBADaftar', { mode: 'aktif' }) : null;
     const res = await api('getPengajuan', { scope: scope || 'ALL' });
     setLoading(false);
     if (res.ok) setData(res.data); else toast(res.error || 'Gagal memuat pengajuan', 'error');
-    if (!isAsisten) { const b = await api('getBADaftar', { mode: 'aktif' }); if (b.ok) setBaList(b.data.filter(function(g){ return g.periode_status === 'AKTIF'; })); }
+    if (pBa) { const b = await pBa; if (b.ok) setBaList(b.data.filter(function(g){ return g.periode_status === 'AKTIF'; })); }
   }, [scope]);
   useEffect(function() {
     setDataLalu(null);
@@ -5790,7 +5853,8 @@ function DataPenerimaPage({ session, scope, toast }) {
   useEffect(load, [dapurId]);
   if (!dapurId) return <Card><div className="text-sm" style={{ color: COLORS.muted }}>Pilih satu dapur di atas untuk mengelola data penerima.</div></Card>;
   const j = JENIS_DP.find(function(x) { return x[0] === jenis; });
-  const rows = data ? data.rows.filter(function(x) { return x.jenis === jenis; }) : [];
+  const allRows = data && Array.isArray(data.rows) ? data.rows : [];
+  const rows = allRows.filter(function(x) { return x.jenis === jenis; });
   const bisa = data && data.bisaUbah;
   const tanpaTtd = rows.filter(function(x) { return x.aktif && !x.ada_ttd; }).length;
   async function del() {
@@ -5801,7 +5865,7 @@ function DataPenerimaPage({ session, scope, toast }) {
     <div className="mb-3"><Eyebrow>Data Penerima</Eyebrow>
       <div className="text-xs" style={{ color: COLORS.muted }}>Diisi sekali, dipakai berulang untuk kwitansi harian (1 orang 1 kwitansi). Tanda tangan penerima disimpan sekali dan ditempel otomatis.</div></div>
     <div className="grid grid-cols-3 gap-1.5 mb-3">
-      {JENIS_DP.map(function(x) { const on = x[0] === jenis, n = data ? data.rows.filter(function(r) { return r.jenis === x[0]; }).length : 0;
+      {JENIS_DP.map(function(x) { const on = x[0] === jenis, n = allRows.filter(function(r) { return r.jenis === x[0]; }).length;
         return <button key={x[0]} onClick={function() { setJenis(x[0]); }} className="rounded-lg py-2 text-xs font-semibold"
           style={{ border: '1.5px solid ' + (on ? COLORS.green : COLORS.line), background: on ? COLORS.green : '#fff', color: on ? '#fff' : COLORS.ink }}>{x[1]}{data ? ' (' + n + ')' : ''}</button>; })}
     </div>
@@ -6458,6 +6522,37 @@ function ModePeranModal({ dapurList, nilai, onPilih, onClose }) {
   </Modal>;
 }
 
+// Pengelompokan seluruh fitur ke dalam 6 kategori utama + sub-tab di dalam tiap kategori
+const KATEGORI_FITUR = [
+  { id: 'utama', label: 'Utama', judul: 'Ringkasan & Utama', icon: I.dash, views: ['tugas', 'dash', 'setup'] },
+  { id: 'pengajuan', label: 'Pengajuan', judul: 'Pengajuan & Operasional', icon: I.file, views: ['rencana', 'pengajuan', 'persetujuan', 'realmassal'] },
+  { id: 'dokumen', label: 'Dokumen', judul: 'Berita Acara & Kwitansi', icon: I.download, views: ['beritaacara', 'kwitansi'] },
+  { id: 'kas', label: 'Buku Kas', judul: 'Riwayat & Buku Kas', icon: I.list, views: ['riwayat', 'bukubesar', 'perubahan'] },
+  { id: 'laporan', label: 'Laporan', judul: 'Laporan Periode & LPDH', icon: I.report, views: ['laporan', 'lpdh'] },
+  { id: 'pengaturan', label: 'Master & Akun', judul: 'Master & Akun', icon: I.settings, views: ['penerima', 'periode', 'users', 'dapur', 'profil'] },
+];
+const SUB_LABEL_FITUR = {
+  laporan: 'Laporan Periode',
+  lpdh: 'Laporan LPDH Harian',
+  riwayat: 'Riwayat Transaksi',
+  bukubesar: 'Buku Besar (Kas)',
+  perubahan: 'Persetujuan Edit',
+  beritaacara: 'Berita Acara',
+  kwitansi: 'Kwitansi Harian',
+  rencana: 'Rencana Ops',
+  pengajuan: 'Pengajuan Anggaran',
+  persetujuan: 'Persetujuan',
+  realmassal: 'Realisasi Massal',
+  dash: 'Dashboard',
+  tugas: 'Tugas Harian',
+  setup: 'Setup Periode',
+  penerima: 'Data Penerima',
+  periode: 'Periode',
+  users: 'Pengguna',
+  dapur: 'Dapur',
+  profil: 'Profil & TTD',
+};
+
 function App() {
   const [authSession, setSession] = useState(loadSession);
   const [actAs, setActAsState] = useState(loadActAs);
@@ -6474,23 +6569,30 @@ function App() {
 
   function toast(msg, type) { setToastData({ msg: msg, type: type || 'ok' }); }
   AUTH_TOKEN = authSession ? authSession.token : null;
-  function setActAs(v) { saveActAs(v); setActAsState(v); setView('dash'); setRefreshKey(function(k) { return k + 1; }); }
-  ON_SESSION_INVALID = function(msg) { clearSession(); setSession(null); toast(msg || 'Sesi berakhir, silakan masuk lagi', 'error'); };
+  function setActAs(v) { clearApiCache(); saveActAs(v); setActAsState(v); setView('dash'); setRefreshKey(function(k) { return k + 1; }); }
+  ON_SESSION_INVALID = function(msg) { clearApiCache(); clearSession(); setSession(null); toast(msg || 'Sesi berakhir, silakan masuk lagi', 'error'); };
 
   useEffect(function() {
     if (session) {
-      setScope(session.user.dapur || 'ALL');
+      const sc = session.user.dapur || 'ALL';
+      setScope(sc);
       api('getDapur').then(function(r){ if (r.ok) setDapurList(r.data); });
+      // Pra-muat daftar periode & kategori di latar belakang agar perpindahan ke Laporan / Buku Kas / Pengajuan langsung cepat
+      const t = setTimeout(function() {
+        api('getKategori');
+        if (session.user.role !== 'asisten') api('getPeriodeList', { role: session.user.role, dapur: sc, scope: sc });
+      }, 400);
+      return function() { clearTimeout(t); };
     }
   }, [authSession, actAs]);
 
   if (!session) return (<>
-    <Login onLogin={function(s){ saveSession(s); setSession(s); setView(s.user && s.user.role === 'pic' ? 'tugas' : 'dash'); }} toast={toast} />
+    <Login onLogin={function(s){ clearApiCache(); saveSession(s); setSession(s); setView(s.user && s.user.role === 'pic' ? 'tugas' : 'dash'); }} toast={toast} />
     {toastData && <Toast msg={toastData.msg} type={toastData.type} onClose={function(){setToastData(null);}}/>}
   </>);
 
   const role = session.user.role;
-  // Nav: akuntan Pengajuan (realisasi otomatis saat disetujui Yayasan/PIC); yayasan Persetujuan; admin Input Darurat
+  // Nav: akuntan Pengajuan (realisasi otomatis saat disetujui Yayasan/PIC); yayasan Persetujuan
   const navItems = ({
     akuntan: [
       ['setup','Setup',I.settings],
@@ -6558,10 +6660,18 @@ function App() {
     ],
   })[role] || [];
 
+  const kategoriGroups = KATEGORI_FITUR.map(function(kat) {
+    const items = navItems.filter(function(it) { return kat.views.indexOf(it[0]) >= 0; });
+    return items.length ? Object.assign({}, kat, { items: items }) : null;
+  }).filter(Boolean);
+  const activeKat = kategoriGroups.find(function(kat) {
+    return kat.items.some(function(it) { return it[0] === view; });
+  }) || kategoriGroups[0] || null;
+
   const canPickScope = role === 'yayasan' || role === 'admin';
   if (navItems.length && !navItems.some(function(n){ return n[0] === view; })) setTimeout(function(){ setView(navItems[0][0]); }, 0);
   const effScope = canPickScope ? scope : session.user.dapur;
-  function logout() { saveActAs(null); setActAsState(null); clearSession(); setSession(null); }
+  function logout() { clearApiCache(); saveActAs(null); setActAsState(null); clearSession(); setSession(null); }
 
   function onProfileUpdated(patch) {
     const newSession = Object.assign({}, authSession, { user: Object.assign({}, authSession.user, patch) });
@@ -6603,53 +6713,89 @@ function App() {
       {modePeran && <ModePeranModal dapurList={dapurList} nilai={aktifSebagai} onClose={function() { setModePeran(false); }} onPilih={function(v) { setModePeran(false); setActAs(v); }}/>}
 
       <div className="flex flex-1">
-        <nav className="hidden md:flex flex-col gap-1 p-3 w-56 shrink-0 no-print" style={{ borderRight: '1px solid ' + COLORS.line }}>
-          {navItems.map(function(item){
-            const k = item[0], label = item[1], icon = item[2];
-            return <button key={k} onClick={function(){setView(k);}}
-              className="flex items-center gap-2.5 rounded-lg px-3 py-2.5 text-sm font-medium text-left transition"
-              style={{ background: view===k?COLORS.green:'transparent', color: view===k?'#fff':COLORS.ink }}>
-              {icon} {label}
-            </button>;
+        <nav className="hidden md:flex flex-col gap-3 p-3 w-60 shrink-0 no-print" style={{ borderRight: '1px solid ' + COLORS.line }}>
+          {kategoriGroups.map(function(kat) {
+            return <div key={kat.id} className="flex flex-col gap-0.5">
+              <div className="px-2.5 pt-1 pb-0.5 text-[11px] font-bold uppercase tracking-wider" style={{ color: COLORS.muted }}>{kat.judul}</div>
+              {kat.items.map(function(item) {
+                const k = item[0], label = item[1], icon = item[2];
+                return <button key={k} onClick={function(){setView(k);}}
+                  className="flex items-center gap-2.5 rounded-lg px-3 py-2 text-sm font-medium text-left transition"
+                  style={{ background: view===k?COLORS.green:'transparent', color: view===k?'#fff':COLORS.ink }}>
+                  {icon} {label}
+                </button>;
+              })}
+            </div>;
           })}
         </nav>
 
-        <main className="app-main flex-1 p-4 sm:p-6 md:!pb-6" style={{ paddingBottom: 'calc(env(safe-area-inset-bottom, 0px) + 88px)' }}>
-          {view === 'setup'   && <SetupPeriode session={session} toast={toast}/>}
-          {view === 'dash'    && <Dashboard key={'d'+refreshKey} session={session} scope={effScope} toast={toast} onGoSetup={function(){ setView('setup'); }}/>}
-          {view === 'pengajuan' && <PengajuanPage session={session} scope={effScope} dapurList={dapurList} toast={toast}/>}
-          {view === 'beritaacara' && <BeritaAcaraPage session={session} scope={effScope} dapurList={dapurList} toast={toast}/>}
-          {view === 'persetujuan' && <PersetujuanPage session={session} scope={effScope} dapurList={dapurList} toast={toast}/>}
-          {view === 'perubahan' && <PerubahanAdminPage session={session} dapurList={dapurList} toast={toast}/>}
-          {view === 'laporan' && <Laporan session={session} scope={effScope} toast={toast}/>}
-          {view === 'lpdh' && <LpdhPage session={session} scope={effScope} toast={toast}/>}
-          {view === 'rencana' && <RencanaOpsPage session={session} scope={effScope} toast={toast}/>}
-          {view === 'riwayat' && <Riwayat session={session} scope={effScope} toast={toast} refreshKey={refreshKey}/>}
-          {view === 'bukubesar' && <BukuBesar session={session} scope={effScope} toast={toast}/>}
-          {view === 'periode' && <PeriodeAdmin session={session} toast={toast}/>}
-          {view === 'realmassal' && <RealisasiMassalPage session={session} dapurList={dapurList} toast={toast}/>}
-          {view === 'tugas' && <TugasHarianPage session={session} scope={effScope} toast={toast} onBuka={setView}/>}
-          {view === 'kwitansi' && <KwitansiPage session={session} scope={effScope} toast={toast}/>}
-          {view === 'penerima' && <DataPenerimaPage session={session} scope={effScope} toast={toast}/>}
-          {view === 'profil'  && <Profil session={session} toast={toast} onUpdated={onProfileUpdated}/>}
-          {view === 'users'   && <Pengguna session={session} toast={toast}/>}
-          {view === 'dapur'   && <DapurPage session={session} toast={toast}/>}
-        </main>
+        <div className="flex-1 flex flex-col min-w-0">
+          {activeKat && <div className="no-print px-4 sm:px-6 pt-3 pb-0">
+            <div className="rounded-xl p-2 sm:p-2.5 flex flex-col gap-2" style={{ background: COLORS.surface, border: '1px solid ' + COLORS.line }}>
+              <div className="flex items-center gap-1.5 overflow-x-auto pb-0.5">
+                {kategoriGroups.map(function(kat) {
+                  const isKat = kat.id === activeKat.id;
+                  return <button key={kat.id} onClick={function() { if (!isKat && kat.items[0]) setView(kat.items[0][0]); }}
+                    className="inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-semibold whitespace-nowrap transition shrink-0"
+                    style={{ background: isKat ? '#E8F1EC' : 'transparent', color: isKat ? COLORS.green : COLORS.muted, border: '1px solid ' + (isKat ? COLORS.green : 'transparent') }}>
+                    {kat.icon} <span>{kat.judul}</span>
+                  </button>;
+                })}
+              </div>
+              {activeKat.items.length > 1 && <div className="flex flex-wrap gap-1.5 pt-1.5" style={{ borderTop: '1px solid ' + COLORS.line }}>
+                {activeKat.items.map(function(item) {
+                  const k = item[0], label = SUB_LABEL_FITUR[k] || item[1], icon = item[2], on = view === k;
+                  return <button key={k} onClick={function() { setView(k); }}
+                    className="inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold transition"
+                    style={{ background: on ? COLORS.green : COLORS.paper, color: on ? '#fff' : COLORS.ink, border: '1px solid ' + (on ? COLORS.green : COLORS.line) }}>
+                    {icon} <span>{label}</span>
+                  </button>;
+                })}
+              </div>}
+            </div>
+          </div>}
+
+          <main className="app-main flex-1 p-4 sm:p-6 md:!pb-6" style={{ paddingBottom: 'calc(env(safe-area-inset-bottom, 0px) + 88px)' }}>
+            {view === 'setup'   && <SetupPeriode session={session} toast={toast}/>}
+            {view === 'dash'    && <Dashboard key={'d'+refreshKey} session={session} scope={effScope} toast={toast} onGoSetup={function(){ setView('setup'); }}/>}
+            {view === 'pengajuan' && <PengajuanPage session={session} scope={effScope} dapurList={dapurList} toast={toast}/>}
+            {view === 'beritaacara' && <BeritaAcaraPage session={session} scope={effScope} dapurList={dapurList} toast={toast}/>}
+            {view === 'persetujuan' && <PersetujuanPage session={session} scope={effScope} dapurList={dapurList} toast={toast}/>}
+            {view === 'perubahan' && <PerubahanAdminPage session={session} dapurList={dapurList} toast={toast}/>}
+            {view === 'laporan' && <Laporan session={session} scope={effScope} toast={toast}/>}
+            {view === 'lpdh' && <LpdhPage session={session} scope={effScope} toast={toast}/>}
+            {view === 'rencana' && <RencanaOpsPage session={session} scope={effScope} toast={toast}/>}
+            {view === 'riwayat' && <Riwayat session={session} scope={effScope} toast={toast} refreshKey={refreshKey}/>}
+            {view === 'bukubesar' && <BukuBesar session={session} scope={effScope} toast={toast}/>}
+            {view === 'periode' && <PeriodeAdmin session={session} toast={toast}/>}
+            {view === 'realmassal' && <RealisasiMassalPage session={session} dapurList={dapurList} toast={toast}/>}
+            {view === 'tugas' && <TugasHarianPage session={session} scope={effScope} toast={toast} onBuka={setView}/>}
+            {view === 'kwitansi' && <KwitansiPage session={session} scope={effScope} toast={toast}/>}
+            {view === 'penerima' && <DataPenerimaPage session={session} scope={effScope} toast={toast}/>}
+            {view === 'profil'  && <Profil session={session} toast={toast} onUpdated={onProfileUpdated}/>}
+            {view === 'users'   && <Pengguna session={session} toast={toast}/>}
+            {view === 'dapur'   && <DapurPage session={session} toast={toast}/>}
+          </main>
+        </div>
       </div>
 
       <nav id="nav-bawah" className="vv-bawah md:hidden fixed bottom-0 left-0 right-0 z-30 flex no-print"
         style={{ background: COLORS.surface, borderTop: '1px solid ' + COLORS.line, paddingBottom: 'env(safe-area-inset-bottom, 0px)', overflowX: 'auto', overflowY: 'hidden', WebkitOverflowScrolling: 'touch' }}>
         <div className="flex" style={{ width: navItems.length > 5 ? 'max-content' : '100%', minWidth: '100%' }}>
-          {navItems.map(function(item){
-            const k = item[0], label = item[1], icon = item[2];
-            const active = view === k;
-            return <button key={k} onClick={function(){setView(k);}}
-              className="flex flex-col items-center justify-center gap-0.5 py-2 shrink-0"
-              style={{ color: active?COLORS.green:COLORS.muted, flex: navItems.length > 5 ? '0 0 auto' : '1 1 0',
-                       width: navItems.length > 5 ? 68 : 'auto', minWidth: navItems.length > 5 ? 68 : 0,
-                       borderTop: active ? '2px solid ' + COLORS.green : '2px solid transparent' }}>
-              {icon}<span className="text-[11px] font-medium whitespace-nowrap leading-none mt-0.5">{label}</span>
-            </button>;
+          {kategoriGroups.map(function(kat, gi) {
+            return <div key={kat.id} className="flex items-stretch" style={{ borderLeft: gi > 0 ? '1px solid ' + COLORS.line : 'none' }}>
+              {kat.items.map(function(item){
+                const k = item[0], label = item[1], icon = item[2];
+                const active = view === k;
+                return <button key={k} onClick={function(){setView(k);}}
+                  className="flex flex-col items-center justify-center gap-0.5 py-2 shrink-0"
+                  style={{ color: active?COLORS.green:COLORS.muted, flex: navItems.length > 5 ? '0 0 auto' : '1 1 0',
+                           width: navItems.length > 5 ? 68 : 'auto', minWidth: navItems.length > 5 ? 68 : 0,
+                           borderTop: active ? '2px solid ' + COLORS.green : '2px solid transparent' }}>
+                  {icon}<span className="text-[11px] font-medium whitespace-nowrap leading-none mt-0.5">{label}</span>
+                </button>;
+              })}
+            </div>;
           })}
         </div>
       </nav>

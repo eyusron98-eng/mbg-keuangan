@@ -120,6 +120,7 @@ function doGet(e) { return handleRequest(e, 'GET'); }
 function doPost(e) { return handleRequest(e, 'POST'); }
 
 function handleRequest(e, method) {
+  resetReqCache();
   try {
     let params = {};
     if (method === 'GET') params = (e && e.parameter) || {};
@@ -2181,8 +2182,44 @@ function migrateV6() {
 // Buka spreadsheet SEKALI per permintaan (dulu dibuka ulang di tiap getSheet) dan coba ulang
 // bila Google gagal sesaat ("Anda tidak memiliki izin…" / "Layanan Spreadsheet gagal…").
 let _SS = null;
+let _reqVals = {};
+let _reqSheets = {};
+function resetReqCache() { _reqVals = {}; _reqSheets = {}; }
+function wrapSheet(name, sh) {
+  if (!sh || name === SHEETS.SESI) return sh;
+  if (_reqSheets[name]) return _reqSheets[name];
+  const inv = function() { delete _reqVals[name]; };
+  const w = {
+    getDataRange: function() {
+      return {
+        getValues: function() {
+          if (!_reqVals[name]) _reqVals[name] = sh.getDataRange().getValues();
+          return _reqVals[name].map(function(r) { return r.slice(); });
+        }
+      };
+    },
+    getRange: function(r, c, nr, nc) {
+      const rng = arguments.length === 2 ? sh.getRange(r, c) : arguments.length === 3 ? sh.getRange(r, c, nr) : sh.getRange(r, c, nr, nc);
+      return {
+        getValues: function() { return rng.getValues(); },
+        getDisplayValues: function() { return rng.getDisplayValues(); },
+        setValue: function(v) { inv(); return rng.setValue(v); },
+        setValues: function(v) { inv(); return rng.setValues(v); },
+        setFontWeight: function(v) { return rng.setFontWeight(v); },
+      };
+    },
+    appendRow: function(row) { inv(); return sh.appendRow(row); },
+    deleteRow: function(n) { inv(); return sh.deleteRow(n); },
+    getLastRow: function() { return _reqVals[name] ? _reqVals[name].length : sh.getLastRow(); },
+    getLastColumn: function() { return sh.getLastColumn(); },
+    clear: function() { inv(); return sh.clear(); },
+  };
+  _reqSheets[name] = w;
+  return w;
+}
 function getSS() {
   if (_SS) return _SS;
+  resetReqCache();
   let lastErr = null;
   for (let i = 0; i < 3; i++) {
     try { _SS = SpreadsheetApp.openById(SPREADSHEET_ID); return _SS; }
@@ -2199,7 +2236,7 @@ function getSheet(name) {
   const ss = getSS();
   let s = ss.getSheetByName(name);
   if (!s) throw new Error('Sheet "' + name + '" tidak ditemukan. Jalankan setupSheets() atau migrateV4() dulu.');
-  return s;
+  return wrapSheet(name, s);
 }
 
 // ── Nomor bukti: wajib unik (syarat LPDH PPK). Kosong → aplikasi membuat nomor unik; "-" ditolak. ──
@@ -2264,7 +2301,7 @@ function lpdhSheet() {
     s = ss.insertSheet(SHEETS.LPDH);
     s.appendRow(['dapur_id'].concat(LPDH_FIELDS, ['updated_at', 'updated_by']));
   }
-  return s;
+  return wrapSheet(SHEETS.LPDH, s);
 }
 // akuntan/pic hanya dapurnya sendiri; admin & yayasan memilih dapur
 function lpdhDapur(me, dapur) {
@@ -2328,7 +2365,7 @@ function sheetOtomatis(nama, header) {
   const ss = getSS();
   let s = ss.getSheetByName(nama);
   if (!s) { s = ss.insertSheet(nama); s.appendRow(header); }
-  return s;
+  return wrapSheet(nama, s);
 }
 function bacaJson(v) { try { return JSON.parse(v); } catch (e) { return null; } }
 function harianSheet() { return sheetOtomatis(SHEETS.LPDH_HARIAN, ['dapur_id', 'tanggal', 'data_json', 'updated_at', 'updated_by']); }
@@ -3734,8 +3771,8 @@ function getBADaftar(p) {
   return { ok: true, data: out };
 }
 
-// Nama akuntan aktif sebuah dapur, untuk kolom "Dibuat oleh" di Laporan Keuangan.
-// Akses sama dengan Berita Acara (akuntan/pic hanya dapurnya; admin/yayasan/asisten semua). Hanya nama yang dikirim.
+// Penanda tangan Laporan Keuangan Periode: Akuntan dapur, Perwakilan Mitra/Yayasan (dari LPDH), dan Kepala SPPG (dari LPDH) beserta gambar TTD.
+// Akses sama dengan Berita Acara (akuntan/pic hanya dapurnya; admin/yayasan/asisten semua).
 function getPenandatangan(p) {
   const me = authUser(p);
   if (!me) return { ok: false, error: SESI_ERR };
@@ -3744,7 +3781,21 @@ function getPenandatangan(p) {
   if (!baCanAccess(me, dapurId)) return { ok: false, error: 'Tidak berwenang' };
   const ak = getSheet(SHEETS.USERS).getDataRange().getValues().slice(1)
     .find(u => String(u[4]).toLowerCase() === 'akuntan' && u[5] === dapurId && String(u[6]).toUpperCase() === 'YA');
-  return { ok: true, data: { akuntan: ak ? String(ak[3] || '') : '' } };
+  const ident = readIdentitasLPDH(dapurId) || {};
+  const ttd = readTtdBatch([ak ? ak[0] : '', 'WAKIL_' + dapurId, 'KEPALA_' + dapurId]);
+  return {
+    ok: true,
+    data: {
+      akuntan: ak ? String(ak[3] || '') : String(ident.pengawas_nama || ''),
+      wakil: String(ident.wakil_nama || ''),
+      kepala: String(ident.kepala_nama || ''),
+      ttd: {
+        akuntan: (ak && ttd[ak[0]]) || null,
+        wakil: ttd['WAKIL_' + dapurId] || null,
+        kepala: ttd['KEPALA_' + dapurId] || null,
+      },
+    },
+  };
 }
 
 function getBeritaAcara(p) {

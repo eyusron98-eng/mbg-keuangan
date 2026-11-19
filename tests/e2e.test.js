@@ -1363,6 +1363,39 @@ async function isiBahanBaku(page, uraian, volume, harga) {
       assert(!c.larang || !body.includes(c.larang), 'tidak boleh memuat ' + c.larang);
     });
   }
+  all &= await run('Laporan: menampilkan TTD & nama Mitra/Yayasan dan Kepala SPPG dari LPDH + berpindah kategori & cache data instan', { role: 'akuntan', laporan: true,
+    override: (a) => a === 'getPenandatangan' ? { ok: true, data: {
+      akuntan: 'Wanda Azira Agustina', wakil: 'H. Ahmad Yayasan', kepala: 'Drs. Hendra Kepala',
+      ttd: {
+        akuntan: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==',
+        wakil: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==',
+        kepala: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==',
+      }
+    } } : null }, async (page, srv) => {
+    await login(page, 'siti');
+    await page.waitForSelector('header');
+    // Pindah lewat bar kategori atas: Laporan Periode & LPDH
+    await page.click('button:has-text("Laporan Periode & LPDH")');
+    await page.waitForSelector('text=Dibuat oleh,');
+    await page.waitForFunction(() => document.body.innerText.includes('(H. Ahmad Yayasan)'));
+    const body = await page.innerText('main');
+    assert(body.includes('(Wanda Azira Agustina)') && body.includes('(H. Ahmad Yayasan)') && body.includes('(Drs. Hendra Kepala)'), 'nama 3 penanda tangan harus tampil: ' + body);
+    assert(body.includes('Perwakilan Mitra/Yayasan') && body.includes('Kepala SPPG SPPG Satu'), 'jabatan Mitra/Yayasan & Kepala SPPG harus tampil');
+    assert(await page.isVisible('img[alt="TTD Akuntan"]') && await page.isVisible('img[alt="TTD Mitra/Yayasan"]') && await page.isVisible('img[alt="TTD Kepala SPPG"]'), 'ketiga gambar TTD harus tampil');
+    // Sub-tab di kategori Laporan: Laporan Periode <-> Laporan LPDH Harian
+    await page.click('button:has-text("Laporan LPDH Harian")');
+    await page.waitForSelector('text=Unduh LPDH');
+    // Pindah ke kategori Riwayat & Buku Kas, lalu cek perpindahan ke Buku Besar (Kas) & kembali ke Laporan Periode memakai cache (0 request getTransaksi baru)
+    await page.click('button:has-text("Riwayat & Buku Kas")');
+    await page.waitForSelector('text=Riwayat Transaksi');
+    const nTx0 = srv.log.urls.filter(u => u.includes('action=getTransaksi')).length;
+    await page.click('button:has-text("Buku Besar (Kas)")');
+    await page.waitForSelector('text=Total Kredit Aktual');
+    await page.click('button:has-text("Laporan Periode & LPDH")');
+    await page.waitForSelector('text=LAPORAN KEUANGAN');
+    const nTx1 = srv.log.urls.filter(u => u.includes('action=getTransaksi')).length;
+    assert(nTx1 === nTx0, 'pindah ke Buku Besar & Laporan Periode harus instan dari cache tanpa memanggil getTransaksi lagi (' + nTx0 + ' -> ' + nTx1 + ')');
+  });
 
   all &= await run('Riwayat: saldo tetap benar saat difilter (layar & Excel)', { role: 'akuntan', riwayat: true }, async (page, srv) => {
     await login(page, 'siti');
