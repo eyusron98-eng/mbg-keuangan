@@ -1309,7 +1309,8 @@ async function isiBahanBaku(page, uraian, volume, harga) {
     await page.waitForSelector('text=BA-LAMA-PJ');
     assert(!(await page.isVisible('main button:text-is("Edit")')) && !(await page.isVisible('main button:text-is("Batalkan")')), 'periode ditutup harus hanya-baca');
   });
-  all &= await run('Persetujuan PIC: tab Menunggu (dengan jumlah), Hari ini, Periode aktif, Periode ditutup hanya-baca', { role: 'pic', existing: true, tanggal: '2026-10-15' }, async (page, srv) => {
+  all &= await run('Persetujuan PIC: tab Menunggu (dengan jumlah), Hari ini, Periode aktif, Periode ditutup hanya bisa ditolak', { role: 'pic', existing: true, tanggal: '2026-10-15',
+    override: (a) => a === 'decidePengajuan' ? { ok: true, data: { totalSetuju: 0 } } : null }, async (page, srv) => {
     await login(page, 'siti');
     await page.waitForSelector('header');
     await page.click('nav:visible >> text=Persetujuan');
@@ -1322,7 +1323,27 @@ async function isiBahanBaku(page, uraian, volume, harga) {
     await page.click('button:has-text("Periode ditutup")');
     await page.selectOption('main select:visible', 'P1');
     await page.waitForSelector('text=BA-LAMA-PJ');
-    assert(!(await page.isVisible('text=Kirim keputusan')), 'periode ditutup: tidak bisa memutuskan');
+    await page.waitForSelector('text=hanya bisa');
+    assert(!(await page.isVisible('main button:text-is("Setuju")')) && !(await page.isVisible('main button:text-is("Revisi")')), 'periode ditutup: tidak ada tombol Setuju/Revisi');
+    assert(await page.isDisabled('button:has-text("Kirim keputusan")'), 'belum diputuskan → Kirim nonaktif');
+    await page.click('button:text-is("Tolak semua")');
+    assert(!(await page.isDisabled('button:has-text("Kirim keputusan")')), 'Tolak semua mengisi alasan bawaan → bisa dikirim');
+    await page.click('text=Kirim keputusan');
+    await page.click('.sheet button:text-is("Kirim")');
+    await page.waitForFunction(() => document.body.innerText.includes('tersimpan'));
+    const d = srv.log.posts.find(p => p.action === 'decidePengajuan');
+    assert(d && d.params.keputusan[0].status === 'DITOLAK' && /ganda/i.test(d.params.keputusan[0].catatan), 'keputusan tolak + alasan terkirim: ' + JSON.stringify(d && d.params.keputusan));
+  });
+  all &= await run('Persetujuan: tab Menunggu juga menampilkan baris tertinggal dari periode ditutup (hanya Tolak)', { role: 'pic',
+    override: (a, m, p) => a === 'getPengajuan' && p.filter === 'menunggu' ? { ok: true, data: { pengajuan: [{ id: 'gold', nomor: 'BA-LAMA-PJ', dapur: 'D1', tanggal: '2026-09-10', status: 'MENUNGGU', periode_tutup: true,
+      created_at: '2026-09-10T08:00:00', created_by_nama: 'Siti', total_diajukan: 600000, total_disetujui: 0, items: [Object.assign({}, ITEM, { id: 'iold', uraian: 'Gula lama' })] }],
+      va: { D1: { sisaVA: 7000000, komitmen: 0, tersedia: 7000000 } }, periodeAktif: { D1: 'P2' }, periodeRange: {} } } : null }, async (page) => {
+    await login(page, 'siti');
+    await page.waitForSelector('header');
+    await page.click('nav:visible >> text=Persetujuan');
+    await page.waitForSelector('text=BA-LAMA-PJ');
+    await page.waitForSelector('text=hanya bisa');
+    assert(!(await page.isVisible('main button:text-is("Setuju")')) && await page.isVisible('main button:text-is("Tolak")'), 'periode ditutup di tab Menunggu: hanya tombol Tolak');
   });
 
   for (const c of [

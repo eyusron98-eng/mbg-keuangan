@@ -6057,9 +6057,10 @@ function RealisasiMassalPage({ session, dapurList, toast }) {
 }
 
 // ---------- Persetujuan (Yayasan, PIC Dapur untuk dapurnya, Admin) ----------
-function DecisionButtons({ value, onChange }) {
-  const opts = [['DISETUJUI','Setuju',COLORS.green],['REVISI','Revisi',COLORS.blue],['DITOLAK','Tolak',COLORS.danger]];
-  return <div className="grid grid-cols-3 gap-1.5">
+function DecisionButtons({ value, onChange, hanyaTolak }) {
+  const semua = [['DISETUJUI','Setuju',COLORS.green],['REVISI','Revisi',COLORS.blue],['DITOLAK','Tolak',COLORS.danger]];
+  const opts = hanyaTolak ? semua.slice(2) : semua;
+  return <div className={'grid gap-1.5 ' + (hanyaTolak ? 'grid-cols-1' : 'grid-cols-3')}>
     {opts.map(function(o){
       const on = value === o[0];
       return <button key={o[0]} onClick={function(){ onChange(o[0]); }} className="rounded-lg py-2 text-xs font-semibold"
@@ -6068,7 +6069,7 @@ function DecisionButtons({ value, onChange }) {
   </div>;
 }
 
-function PersetujuanCard({ h, va, dapurNama, toast, onDone }) {
+function PersetujuanCard({ h, va, dapurNama, toast, onDone, tutup }) {
   const pending = h.items.filter(function(i){ return i.status === 'DIAJUKAN'; });
   const [dec, setDec] = useState({});
   const [saving, setSaving] = useState(false);
@@ -6077,13 +6078,13 @@ function PersetujuanCard({ h, va, dapurNama, toast, onDone }) {
   const totalAnggaran = pending.reduce(function(s, i){ return s + ((dec[i.id] || {}).status === 'DISETUJUI' ? i.nominal : 0); }, 0);
   const totalAdmin = pending.reduce(function(s, i){ return s + ((dec[i.id] || {}).status === 'DISETUJUI' ? (i.biaya_admin || 0) : 0); }, 0);
   const totalSetuju = totalAnggaran + totalAdmin;
-  const adaBedaRiil = pending.some(function(i){ return butuhRencanaRealisasi(i.jenis, i.kategori); });
+  const adaBedaRiil = !tutup && pending.some(function(i){ return butuhRencanaRealisasi(i.jenis, i.kategori); });
   const totalRencanaRiil = pending.reduce(function(s, i){
     if ((dec[i.id] || {}).status !== 'DISETUJUI') return s;
     return s + (butuhRencanaRealisasi(i.jenis, i.kategori) ? (i.rencana_riil || i.nominal) : i.nominal);
   }, 0);
   const missing = pending.filter(function(i){ const d = dec[i.id]; return !d || !d.status || ((d.status === 'REVISI' || d.status === 'DITOLAK') && !String(d.catatan || '').trim()); });
-  const over = va && totalSetuju > va.tersedia;
+  const over = !tutup && va && totalSetuju > va.tersedia;
   const count = function(st){ return pending.filter(function(i){ return (dec[i.id] || {}).status === st; }).length; };
 
   async function submit() {
@@ -6092,6 +6093,11 @@ function PersetujuanCard({ h, va, dapurNama, toast, onDone }) {
     const res = await apiPost('decidePengajuan', { pengajuan_id: h.id, keputusan: keputusan });
     setSaving(false); setConfirm(false);
     if (res.ok) { toast('Keputusan ' + h.nomor + ' tersimpan'); onDone(); } else toast(res.error || 'Gagal menyimpan', 'error');
+  }
+  function tolakSemua() {
+    const d = {};
+    pending.forEach(function(i){ const lama = dec[i.id] || {}; d[i.id] = Object.assign({}, lama, { status: 'DITOLAK', catatan: String(lama.catatan || '').trim() ? lama.catatan : 'Pengajuan ganda / periode sudah ditutup' }); });
+    setDec(d);
   }
 
   return <Card pad={false} className="mb-3">
@@ -6102,15 +6108,17 @@ function PersetujuanCard({ h, va, dapurNama, toast, onDone }) {
         <div className="text-xs" style={{ color: COLORS.muted }}>Hari H {fmtDDMMYYYY(h.tanggal)} · oleh {h.created_by_nama} · {pending.length} baris menunggu</div>
         <div className="mt-1"><TimingBadge h={h}/></div>
       </div>
-      {pending.length > 1 && <Btn size="sm" kind="ghost" onClick={function(){ const d = {}; pending.forEach(function(i){ d[i.id] = Object.assign({}, dec[i.id] || {}, { status: 'DISETUJUI' }); }); setDec(d); }}>{I.check} Setujui semua</Btn>}
+      {tutup ? <Btn size="sm" kind="ghost" onClick={tolakSemua}>Tolak semua</Btn>
+        : pending.length > 1 && <Btn size="sm" kind="ghost" onClick={function(){ const d = {}; pending.forEach(function(i){ d[i.id] = Object.assign({}, dec[i.id] || {}, { status: 'DISETUJUI' }); }); setDec(d); }}>{I.check} Setujui semua</Btn>}
     </div>
+    {tutup && <div className="px-3 sm:px-4 py-2 text-xs" style={{ background: '#F8E9E5', color: COLORS.danger }}>Periode pengajuan ini sudah ditutup — baris yang tertinggal tidak bisa disetujui, hanya bisa <b>ditolak</b> (mis. pengajuan ganda) agar tidak menggantung.</div>}
     {h.items.map(function(it){
       if (it.status !== 'DIAJUKAN') return <ItemRow key={it.id} it={it}/>;
       const d = dec[it.id] || {};
       const needNote = d.status === 'REVISI' || d.status === 'DITOLAK';
       return <ItemRow key={it.id} it={it}>
         <div className="mt-2.5">
-          <DecisionButtons value={d.status} onChange={function(v){ setD(it.id, { status: v }); }}/>
+          <DecisionButtons hanyaTolak={tutup} value={d.status} onChange={function(v){ setD(it.id, { status: v }); }}/>
           {needNote && <input value={d.catatan || ''} onChange={function(e){ setD(it.id, { catatan: e.target.value }); }}
             placeholder={d.status === 'REVISI' ? 'Catatan revisi (wajib) — apa yang harus diperbaiki?' : 'Alasan ditolak (wajib)'}
             style={Object.assign({}, inputStyle, { marginTop: 8, fontSize: 13, borderColor: String(d.catatan || '').trim() ? COLORS.line : COLORS.danger })}/>}
@@ -6121,7 +6129,7 @@ function PersetujuanCard({ h, va, dapurNama, toast, onDone }) {
       <div className="flex justify-between text-sm mb-0.5"><span style={{ color: COLORS.muted }}>Total disetujui (potong VA)</span><b className="num" style={{ color: over ? COLORS.danger : COLORS.green }}>{fmt(totalSetuju)}</b></div>
       {totalAdmin > 0 && <div className="flex justify-between text-xs mb-1"><span style={{ color: COLORS.muted }}>Rincian potong VA</span><span className="num" style={{ color: COLORS.muted }}>anggaran {fmt(totalAnggaran)} + biaya admin {fmt(totalAdmin)}</span></div>}
       {adaBedaRiil && <div className="flex justify-between text-xs mb-1"><span style={{ color: COLORS.muted }}>Total rencana realisasi (aktual)</span><b className="num" style={{ color: COLORS.green }}>{fmt(totalRencanaRiil)}</b></div>}
-      {va && <div className="flex justify-between text-xs mb-3"><span style={{ color: COLORS.muted }}>VA tersedia {dapurNama}</span><span className="num" style={{ color: COLORS.ink }}>{fmt(va.tersedia)}</span></div>}
+      {va && !tutup && <div className="flex justify-between text-xs mb-3"><span style={{ color: COLORS.muted }}>VA tersedia {dapurNama}</span><span className="num" style={{ color: COLORS.ink }}>{fmt(va.tersedia)}</span></div>}
       {over && <div className="text-xs rounded-lg p-2 mb-2" style={{ background: '#F8E9E5', color: COLORS.danger }}>Total disetujui (anggaran + biaya admin) melebihi VA tersedia. Kurangi baris yang disetujui.</div>}
       {missing.length > 0 && <div className="text-xs mb-2" style={{ color: COLORS.muted }}>{missing.length} baris belum diputuskan / catatan belum diisi</div>}
       <Btn full disabled={missing.length > 0 || over || saving} onClick={function(){ setConfirm(true); }}>{I.check} Kirim keputusan</Btn>
@@ -6162,8 +6170,11 @@ function PersetujuanPage({ session, scope, dapurList, toast }) {
     : mode === 'aktif' ? 'Belum ada pengajuan di periode aktif.'
     : !per ? 'Pilih periode yang sudah ditutup untuk melihat pengajuannya.' : 'Tidak ada pengajuan di periode ini.';
   function kartu(h) {
-    // Periode ditutup: hanya lihat, tidak bisa memutuskan
-    if (h.status === 'MENUNGGU' && mode !== 'lalu') return <PersetujuanCard key={h.id + '-' + h.items.length} h={h} va={data.va[h.dapur]} dapurNama={dapurMap[h.dapur] || h.dapur} toast={toast} onDone={load}/>;
+    // Periode ditutup: baris yang masih menunggu (mis. pengajuan ganda) hanya bisa ditolak
+    if (h.status === 'MENUNGGU') {
+      const tutup = mode === 'lalu' || !!h.periode_tutup;
+      return <PersetujuanCard key={h.id + '-' + h.items.length} h={h} va={tutup ? null : data.va[h.dapur]} tutup={tutup} dapurNama={dapurMap[h.dapur] || h.dapur} toast={toast} onDone={load}/>;
+    }
     return <Card key={h.id} pad={false} className="mb-3">
       <div className="p-3 sm:p-4 flex justify-between gap-2" style={{ background: COLORS.paper, borderRadius: '12px 12px 0 0' }}>
         <div className="min-w-0"><div className="text-sm font-bold" style={{ color: COLORS.ink }}>{dapurMap[h.dapur] || h.dapur}</div>

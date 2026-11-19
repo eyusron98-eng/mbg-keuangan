@@ -1519,9 +1519,17 @@ function getPengajuan(p) {
   const activeByDapur = {};
   target.forEach(d => { const a = readAllPeriode(d).find(r => r.status === 'AKTIF'); if (a) activeByDapur[d] = a; });
   const periodeFilter = p.periode_id ? [p.periode_id] : Object.keys(activeByDapur).map(d => activeByDapur[d].id);
+  // Tab "Menunggu" (tanpa periode tertentu): sertakan juga pengajuan menunggu dari periode yang sudah ditutup,
+  // agar baris yang tertinggal (mis. pengajuan ganda) tetap bisa ditolak.
+  const semuaPeriode = p.filter === 'menunggu' && !p.periode_id;
 
   const allItems = readAllItems();
-  let heads = readAllPengajuan().filter(h => target.indexOf(h.dapur) >= 0 && periodeFilter.indexOf(h.periode_id) >= 0);
+  let heads = readAllPengajuan().filter(h => target.indexOf(h.dapur) >= 0 && (semuaPeriode || periodeFilter.indexOf(h.periode_id) >= 0));
+  if (semuaPeriode) {
+    const adaMenunggu = {};
+    allItems.forEach(i => { if (i.status === 'DIAJUKAN') adaMenunggu[i.pengajuan_id] = 1; });
+    heads = heads.filter(h => adaMenunggu[h.id]);
+  }
   if (me.role === 'asisten') heads = heads.filter(h => h.created_by === me.id);
   const userNames = {}, userRoles = {};
   getSheet(SHEETS.USERS).getDataRange().getValues().slice(1).forEach(u => { userNames[u[0]] = u[3]; userRoles[u[0]] = String(u[4]).toLowerCase(); });
@@ -1532,6 +1540,7 @@ function getPengajuan(p) {
     const sum = st => items.filter(i => st.indexOf(i.status) >= 0).reduce((s, i) => s + i.nominal, 0);
     return Object.assign({}, h, {
       status: deriveHeaderStatus(items),
+      periode_tutup: !(activeByDapur[h.dapur] && activeByDapur[h.dapur].id === h.periode_id),
       created_by_nama: userNames[h.created_by] || h.created_by,
       decided_by_nama: userNames[h.decided_by] || h.decided_by,
       decided_by_role: userRoles[h.decided_by] || '',
@@ -1662,6 +1671,8 @@ function decidePengajuan(p) {
 
     const map = {};
     keputusan.forEach(k => { map[k.item_id] = k; });
+    const periodeHead = readAllPeriode(head.dapur).find(r => r.id === head.periode_id);
+    const periodeTutup = !periodeHead || periodeHead.status !== 'AKTIF';
     let totalSetuju = 0;
     const disetujuiList = [];
     for (let k = 0; k < pending.length; k++) {
@@ -1674,11 +1685,14 @@ function decidePengajuan(p) {
         totalSetuju += it.nominal + (it.biaya_admin || 0);
         disetujuiList.push(it);
       }
+      if (periodeTutup && d.status !== 'DITOLAK') {
+        return { ok: false, error: 'Baris ' + it.urut + ': periode pengajuan ini sudah ditutup — baris yang tertinggal hanya bisa ditolak' };
+      }
     }
 
     if (totalSetuju > 0) {
-      const periode = readAllPeriode(head.dapur).find(r => r.id === head.periode_id);
-      if (!periode || periode.status !== 'AKTIF') return { ok: false, error: 'Periode pengajuan ini sudah ditutup' };
+      const periode = periodeHead;
+      if (periodeTutup) return { ok: false, error: 'Periode pengajuan ini sudah ditutup' };
       const va = computeVA(head.dapur, periode, allItems);
       if (totalSetuju > va.tersedia) {
         return { ok: false, error: 'VA tersedia tidak cukup. Disetujui ' + rupiah(totalSetuju) + ', VA tersedia ' + rupiah(va.tersedia) +

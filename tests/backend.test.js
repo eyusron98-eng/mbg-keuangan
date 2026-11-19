@@ -241,6 +241,21 @@ const ok = (c, m) => { console.log((c ? 'PASS ' : 'FAIL ') + m); if (!c) fails++
   r = call(e6, 'POST', { action: 'getBeritaAcara', token: tok6('ast'), dapur: 'D001', tanggal: '2026-10-15' });
   ok(!/Tidak berwenang/.test(r.error || ''), 'asisten tidak ditolak saat mencetak (' + (r.ok ? 'ok' : r.error) + ')');
 
+  // 11b. Pengajuan yang tertinggal (masih menunggu) di periode yang sudah ditutup: tampil di tab Menunggu & hanya bisa ditolak
+  e6.__book.Pengajuan.push(['PAGAN', 'BA-PA/S1/2026/09/002', 'D001', 'P0', '2026-09-11', 'MENUNGGU', new Date(), 'U3', '', '']);
+  e6.__book.PengajuanItem.push(['PAGAN-1', 'PAGAN', 'D001', 'P0', 1, 'Bahan Baku', 'x', 'Ganda', 70000, 'pn1', 'Toko A', 'BCA', '123', 'TIDAK', 'DIAJUKAN', '', 1, '', '', '', new Date(), new Date()]);
+  r = call(e6, 'POST', { action: 'getPengajuan', token: tok6('pic1'), scope: 'ALL', filter: 'menunggu' });
+  const gan = r.ok && r.data.pengajuan.find(h => h.id === 'PAGAN');
+  ok(gan && gan.periode_tutup === true, 'tab Menunggu menampilkan pengajuan menunggu dari periode ditutup (periode_tutup)');
+  ok(r.ok && r.data.pengajuan.every(h => h.status === 'MENUNGGU'), 'tab Menunggu hanya berisi yang menunggu');
+  ok(!call(e6, 'POST', { action: 'getPengajuan', token: tok6('pic1'), scope: 'ALL' }).data.pengajuan.some(h => h.id === 'PAGAN'), 'tab periode aktif tidak ikut menampilkan periode ditutup');
+  const decG = (st, cat) => call(e6, 'POST', { action: 'decidePengajuan', token: tok6('pic1'), pengajuan_id: 'PAGAN', keputusan: [{ item_id: 'PAGAN-1', status: st, catatan: cat || '' }] });
+  r = decG('DISETUJUI'); ok(!r.ok && /ditutup/.test(r.error), 'periode ditutup: tidak bisa disetujui (' + r.error + ')');
+  r = decG('REVISI', 'perbaiki'); ok(!r.ok && /hanya bisa ditolak/.test(r.error), 'periode ditutup: tidak bisa direvisi');
+  r = decG('DITOLAK', 'Pengajuan ganda'); ok(r.ok, 'periode ditutup: baris tertinggal bisa ditolak (' + (r.error || 'ok') + ')');
+  ok(e6.__book.PengajuanItem.find(x => x[0] === 'PAGAN-1')[14] === 'DITOLAK', 'status baris menjadi DITOLAK');
+  ok(e6.__book.Pengajuan.find(x => x[0] === 'PAGAN')[5] === 'SELESAI', 'status header menjadi SELESAI');
+
   // 12. getPenandatangan: nama akuntan dapur, akses dibatasi
   const pt = (u, d) => call(e6, 'POST', { action: 'getPenandatangan', token: tok6(u), dapur: d });
   r = pt('adm', 'D001'); ok(r.ok && r.data.akuntan === 'Akuntan', 'admin mendapat nama akuntan D001: ' + JSON.stringify(r.data));
