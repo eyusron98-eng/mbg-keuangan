@@ -370,12 +370,14 @@ async function isiBahanBaku(page, uraian, volume, harga) {
       'kiriman Insentif PIC salah: ' + JSON.stringify(it));
   });
 
-  all &= await run('Persetujuan: menampilkan anggaran & rencana realisasi (aktual) + biaya admin; validasi VA = anggaran + admin', { role: 'yayasan',
+  all &= await run('Persetujuan: menampilkan anggaran & rencana realisasi (aktual) + biaya admin; melebihi pagu / VA tersedia tetap bisa disetujui dengan catatan wajib', { role: 'pic',
     override: (a, m, p) => a === 'getPengajuan' ? { ok: true, data: {
         pengajuan: [{ id: 'g1', nomor: 'BA-PA/S1/2026/10/010', dapur: 'D1', tanggal: '2026-10-30', status: 'MENUNGGU', created_at: '2026-10-30T08:00:00', created_by_nama: 'Siti',
           total_diajukan: 200000, total_disetujui: 0,
-          items: [{ id: 'it1', urut: 1, jenis: 'Operasional', kategori: 'Gas', uraian: 'Gas 12 kg', nominal: 200000, rencana_riil: 170000, biaya_admin: 6500, penerima_nama: 'Toko Gas', bank: 'BRI', no_rek: '456', status: 'DIAJUKAN', nota_url: 'https://drive.google.com/gas' }] }],
-        va: { D1: { sisaVA: 205000, komitmen: 0, tersedia: 205000 } }, periodeAktif: { D1: 'P2' }, periodeRange: { D1: { mulai: '2026-10-01', akhir: '2026-10-31' } } } } : null }, async (page) => {
+          items: [{ id: 'it1', urut: 1, jenis: 'Operasional', kategori: 'Gas', uraian: 'Gas 12 kg', nominal: 200000, rencana_riil: 170000, biaya_admin: 6500, penerima_nama: 'Toko Gas', bank: 'BRI', no_rek: '456', status: 'DIAJUKAN', nota_url: 'https://drive.google.com/gas',
+            catatan: 'Catatan akuntan: Melebihi pagu harian Rp 50.000. Alasan: belum merealisasikan pagu hari sebelumnya' }] }],
+        va: { D1: { sisaVA: 205000, komitmen: 0, tersedia: 205000 } }, periodeAktif: { D1: 'P2' }, periodeRange: { D1: { mulai: '2026-10-01', akhir: '2026-10-31' } } } }
+      : a === 'decidePengajuan' ? { ok: true, data: { totalSetuju: 206500, terealisasi: 1 } } : null }, async (page, srv) => {
     await login(page, 'siti');
     await page.waitForSelector('header');
     await page.click('nav:visible >> text=Persetujuan');
@@ -387,7 +389,14 @@ async function isiBahanBaku(page, uraian, volume, harga) {
     await page.waitForSelector('text=Total disetujui (potong VA)');
     await page.waitForSelector('text=Total rencana realisasi (aktual)');
     await page.waitForSelector('text=melebihi VA tersedia');
-    assert(await page.isDisabled('button:has-text("Kirim keputusan")'), 'keputusan harus diblokir karena anggaran (200k) + admin (6,5k) = 206,5k > VA (205k)');
+    assert(await page.isDisabled('button:has-text("Kirim keputusan")'), 'keputusan harus tertahan sebelum catatan persetujuan diisi');
+    await page.fill('[aria-label="Catatan keputusan"]', 'Disetujui PIC: rapel pagu hari sebelumnya');
+    assert(!(await page.isDisabled('button:has-text("Kirim keputusan")')), 'setelah catatan persetujuan diisi, tombol Kirim keputusan harus aktif');
+    await page.click('button:has-text("Kirim keputusan")');
+    await page.click('.sheet button:text-is("Kirim")');
+    await page.waitForFunction(() => document.body.innerText.includes('tersimpan'));
+    const sent = srv.log.posts.find(x => x.action === 'decidePengajuan');
+    assert(sent && sent.params.keputusan[0].status === 'DISETUJUI' && /rapel pagu/i.test(sent.params.keputusan[0].catatan), 'catatan persetujuan PIC harus terkirim: ' + JSON.stringify(sent));
   });
 
   all &= await run('Rencana Ops: usulan otomatis dari periode lalu, simpan, ajukan satu hari', { role: 'akuntan',

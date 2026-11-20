@@ -1717,6 +1717,9 @@ function decidePengajuan(p) {
         return { ok: false, error: 'Baris ' + it.urut + ': catatan wajib untuk ' + d.status };
       }
       if (d.status === 'DISETUJUI') {
+        if ((/melebihi pagu/i.test(String(it.catatan || '')) || String(it.catatan || '').indexOf(AWALAN_CATATAN_AKUNTAN) === 0) && !String(d.catatan || '').trim()) {
+          return { ok: false, error: 'Baris ' + it.urut + ' melebihi pagu: wajib isi catatan persetujuan' };
+        }
         totalSetuju += it.nominal + (it.biaya_admin || 0);
         disetujuiList.push(it);
       }
@@ -1729,9 +1732,10 @@ function decidePengajuan(p) {
       const periode = periodeHead;
       if (periodeTutup) return { ok: false, error: 'Periode pengajuan ini sudah ditutup' };
       const va = computeVA(head.dapur, periode, allItems);
-      if (totalSetuju > va.tersedia) {
+      const semuaAdaCatatan = disetujuiList.every(function(it) { return !!String((map[it.id] || {}).catatan || '').trim(); });
+      if (totalSetuju > va.tersedia && !semuaAdaCatatan) {
         return { ok: false, error: 'VA tersedia tidak cukup. Disetujui ' + rupiah(totalSetuju) + ', VA tersedia ' + rupiah(va.tersedia) +
-          ' (sisa VA ' + rupiah(va.sisaVA) + ' − tunggakan belum terealisasi ' + rupiah(va.komitmen) + ').' };
+          ' (sisa VA ' + rupiah(va.sisaVA) + ' − tunggakan belum terealisasi ' + rupiah(va.komitmen) + '). Wajib isi catatan persetujuan untuk tetap menyetujui.' };
       }
     }
 
@@ -1783,9 +1787,10 @@ function decidePengajuan(p) {
     const sh = getSheet(SHEETS.PITEM);
     pending.forEach(function(it) {
       const d = map[it.id];
-      // catatan akuntan tetap disimpan; catatan Yayasan (revisi/tolak) ditaruh di depan
+      // catatan akuntan tetap disimpan; catatan penyetuju (setuju/revisi/tolak) ditaruh di depan
       const lama = String(it.catatan || ''), dariAkuntan = lama.indexOf(AWALAN_CATATAN_AKUNTAN) === 0 ? lama : '';
-      const baru = String(d.catatan || '').trim();
+      const baruRaw = String(d.catatan || '').trim();
+      const baru = baruRaw && d.status === 'DISETUJUI' && !/^Catatan persetujuan:/i.test(baruRaw) ? 'Catatan persetujuan: ' + baruRaw : baruRaw;
       const statusAkhir = d.status === 'DISETUJUI' ? 'TEREALISASI' : d.status;
       sh.getRange(it._row, 15, 1, 2).setValues([[statusAkhir, baru && dariAkuntan ? baru + ' | ' + dariAkuntan : (baru || dariAkuntan)]]);
       sh.getRange(it._row, 18, 1, 2).setValues([[now, me.id]]);

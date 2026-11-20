@@ -751,7 +751,9 @@ const ok = (c, m) => { console.log((c ? 'PASS ' : 'FAIL ') + m); if (!c) fails++
     const it = B8.PengajuanItem.find(x => x[1] === r.data.id);
     ok(it && it[15] === 'Catatan akuntan: Melebihi pagu harian Rp 200.000. Alasan: stok gas habis', 'catatan tersimpan dengan awalan "Catatan akuntan:" (' + (it && it[15]) + ')');
     r = call(e8, 'POST', { action: 'decidePengajuan', token: tk8('adm'), pengajuan_id: it[1], keputusan: [{ item_id: it[0], status: 'DISETUJUI' }] });
-    ok(r.ok && it[14] === 'TEREALISASI' && /^Catatan akuntan: Melebihi pagu/.test(it[15]), 'disetujui tanpa catatan → otomatis terealisasi & catatan akuntan tetap ada: ' + (r.error || it[15]));
+    ok(!r.ok && /melebihi pagu: wajib isi catatan persetujuan/.test(r.error), 'melebihi pagu: wajib isi catatan persetujuan saat menyetujui');
+    r = call(e8, 'POST', { action: 'decidePengajuan', token: tk8('adm'), pengajuan_id: it[1], keputusan: [{ item_id: it[0], status: 'DISETUJUI', catatan: 'Disetujui karena stok habis' }] });
+    ok(r.ok && it[14] === 'TEREALISASI' && /Catatan persetujuan: Disetujui karena stok habis \| Catatan akuntan: Melebihi pagu/.test(it[15]), 'disetujui dengan catatan → otomatis terealisasi & catatan persetujuan + catatan akuntan tetap ada: ' + (r.error || it[15]));
   }
 
   // ── Rencana operasional per periode ──
@@ -1089,13 +1091,18 @@ const ok = (c, m) => { console.log((c ? 'PASS ' : 'FAIL ') + m); if (!c) fails++
     const dash = call(ea, 'GET', { action: 'getDashboard', token: tAkn, scope: 'D001' });
     ok(dash.ok && dash.data.kpi.sisaVA === 193500 && dash.data.kpi.vaTersedia === 193500, 'Dashboard sisaVA & vaTersedia memakai anggaran + biaya admin (193.500)');
 
-    // 5. Persetujuan ditolak bila anggaran + biaya_admin > va.tersedia walau rencana_riil <= va.tersedia
+    // 5. Persetujuan yang melebihi VA tersedia atau melebihi pagu: ditolak bila tanpa catatan, tetapi BISA disetujui bila diberi catatan persetujuan
     r = call(ea, 'POST', { action: 'createPengajuan', token: tAkn, tanggal: '2026-10-11', items: [
-      { jenis: 'Operasional', kategori: 'Gas', uraian: 'Gas besar', nominal: 190000, rencana_riil: 100000, biaya_admin: 6500, nota_url: 'https://drive.google.com/gas2', penerima_id: 'pn1' },
+      { jenis: 'Operasional', kategori: 'Gas', uraian: 'Gas besar', nominal: 190000, rencana_riil: 100000, biaya_admin: 6500, nota_url: 'https://drive.google.com/gas2', penerima_id: 'pn1',
+        catatan: 'Melebihi pagu harian Rp 50.000. Alasan: rapel' },
     ] });
-    const itOver = BA.PengajuanItem.find(x => x[1] === r.data.id);
-    r = call(ea, 'POST', { action: 'decidePengajuan', token: tYay, pengajuan_id: r.data.id, keputusan: [{ item_id: itOver[0], status: 'DISETUJUI' }] });
-    ok(!r.ok && /VA tersedia tidak cukup/.test(r.error), 'persetujuan ditolak karena anggaran (190k) + admin (6,5k) = 196,5k > VA tersedia (193,5k): ' + (r.error || ''));
+    const pjOverId = r.data.id;
+    const itOver = BA.PengajuanItem.find(x => x[1] === pjOverId);
+    r = call(ea, 'POST', { action: 'decidePengajuan', token: tYay, pengajuan_id: pjOverId, keputusan: [{ item_id: itOver[0], status: 'DISETUJUI' }] });
+    ok(!r.ok && /(melebihi pagu|VA tersedia tidak cukup)/.test(r.error), 'persetujuan tanpa catatan ditolak saat melebihi pagu / VA tersedia: ' + (r.error || ''));
+    r = call(ea, 'POST', { action: 'decidePengajuan', token: tYay, pengajuan_id: pjOverId, keputusan: [{ item_id: itOver[0], status: 'DISETUJUI', catatan: 'Disetujui PIC: rapel periode sebelumnya' }] });
+    ok(r.ok && itOver[14] === 'TEREALISASI' && /Catatan persetujuan: Disetujui PIC/.test(itOver[15]) && /Catatan akuntan: Melebihi pagu/.test(itOver[15]),
+      'persetujuan yang melebihi pagu / VA tersedia berhasil disetujui dengan catatan persetujuan: ' + itOver[15]);
 
     // 6. updateTransaksi: riil hanya bisa diedit untuk Operasional Lainnya & fee row, terkunci untuk Honor/Insentif/Sewa
     r = call(ea, 'POST', { action: 'updateTransaksi', token: tAkn, id: txHon[0], riil: 90000 });
