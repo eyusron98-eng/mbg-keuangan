@@ -3,6 +3,9 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+<meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
+<meta http-equiv="Pragma" content="no-cache" />
+<meta http-equiv="Expires" content="0" />
 <title>Keuangan MBG — Koperasi ISS</title>
 <script src="https://cdn.tailwindcss.com"></script>
 <style>
@@ -2054,7 +2057,7 @@ function butuhRencanaRealisasi(jenis, kategori) { return jenis === 'Operasional'
 const BIAYA_ADMIN_DEFAULT = 6500;
 function roSiapAjukan(x) {
   if (!x || !x.penerima_id) return false;
-  if (butuhRencanaRealisasi('Operasional', x.kategori) && !(Number(x.rencana_riil) > 0)) return false;
+  if (butuhRencanaRealisasi('Operasional', x.kategori) && !((Number(x.rencana_riil) || Number(x.nominal)) > 0)) return false;
   if (!pakaiKuitansi({ jenis: 'Operasional', kategori: x.kategori }) && !x.nota_url) return false;
   if (/^[\s\-\u2013\u2014_.\/]+$/.test(x.nota_no || '')) return false;
   return true;
@@ -2158,7 +2161,7 @@ function RencanaOpsPage({ session, scope, toast }) {
     if (daftar && !(await simpan(semua))) { setAjukanTgl(''); return; }
     const res = await apiPost('createPengajuan', { tanggal: t, request_id: 'RO-' + ctx.periode.id + '-' + t + '-' + roHash(baris.map(function(x) { return x.id + ':' + x.nominal + ':' + x.penerima_id; }).join(',') + '|' + Math.floor(Date.now() / 60000)).toString(36),   // kirim ulang dalam 1 menit = sama; ajukan ulang setelah dibatalkan = pengajuan baru
       items: baris.map(function(x) { return { jenis: 'Operasional', kategori: x.kategori, uraian: x.uraian + (x.bagian ? ' (bagian ' + x.bagian + ')' : ''), nominal: x.nominal,
-        rencana_riil: butuhRencanaRealisasi('Operasional', x.kategori) ? Number(x.rencana_riil) : x.nominal,
+        rencana_riil: butuhRencanaRealisasi('Operasional', x.kategori) ? (Number(x.rencana_riil) > 0 ? Number(x.rencana_riil) : Number(x.nominal)) : x.nominal,
         biaya_admin: roFee(x, pmap, ctx.bankVA), nota_url: x.nota_url || '', nota_no: String(x.nota_no || '').trim(),
         penerima_id: x.penerima_id, catatan: catatan }; }) });
     if (!res.ok) { setAjukanTgl(''); toast('Gagal mengajukan: ' + (res.error || ''), 'error'); return; }
@@ -2334,7 +2337,7 @@ function RencanaOpsPage({ session, scope, toast }) {
           return <div key={x.id} className="flex justify-between gap-2 py-1.5 text-sm" style={{ borderTop: '1px solid ' + COLORS.line }}>
             <div className="min-w-0 truncate">
               <div className="truncate">{x.uraian} · {(pmap[x.penerima_id] || {}).nama}</div>
-              {bRiil && <div className="text-xs" style={{ color: COLORS.green }}>Rencana realisasi (aktual): {fmt(x.rencana_riil)}</div>}
+              {bRiil && <div className="text-xs" style={{ color: COLORS.green }}>Rencana realisasi (aktual): {fmt(Number(x.rencana_riil) > 0 ? x.rencana_riil : x.nominal)}</div>}
               {fAdm > 0 && <div className="text-xs" style={{ color: '#9A6A0B' }}>+ biaya admin {fmt(fAdm)}</div>}
             </div>
             <b className="num shrink-0">{fmt(x.nominal)}</b>
@@ -2451,7 +2454,15 @@ function RencanaMatriks({ m, bisaUbah, ajukanTgl, onSel, onAjukan, terkunci, lew
   </Card>;
 }
 function RencanaItemModal({ x, ctx, hari, kategori, bisaUbah, pmap, onClose, onSave, onDelete, onAjukan, lewat, busy, toast, onPenerima, statusBaris, bisaBatal, onBatal, onWa }) {
-  const [f, setF] = useState(x);
+  const [f, setF] = useState(function() {
+    if (butuhRencanaRealisasi('Operasional', x.kategori) && !(Number(x.rencana_riil) > 0) && Number(x.nominal) > 0) {
+      return Object.assign({}, x, { rencana_riil: Number(x.nominal) });
+    }
+    return x;
+  });
+  const [riilDiatur, setRiilDiatur] = useState(function() {
+    return Number(x.rencana_riil) > 0 && Number(x.rencana_riil) !== Number(x.nominal);
+  });
   const [notaFile, setNotaFile] = useState(null);
   const [uploading, setUploading] = useState(false);
   const [adminDiatur, setAdminDiatur] = useState(x.biaya_admin !== undefined);
@@ -2463,6 +2474,16 @@ function RencanaItemModal({ x, ctx, hari, kategori, bisaUbah, pmap, onClose, onS
   const bolehBatal = bisaBatal && ['DIAJUKAN', 'REVISI', 'DISETUJUI'].indexOf(statusBaris) >= 0;
   const set = function(k, v) {
     const next = Object.assign({}, f, { [k]: v });
+    if (k === 'nominal' && !riilDiatur && butuhRencanaRealisasi('Operasional', next.kategori)) {
+      next.rencana_riil = Number(v) || 0;
+    }
+    if (k === 'rencana_riil') {
+      setRiilDiatur(true);
+    }
+    if (k === 'kategori') {
+      if (butuhRencanaRealisasi('Operasional', v) && !riilDiatur && Number(next.nominal) > 0) next.rencana_riil = Number(next.nominal);
+      else if (!butuhRencanaRealisasi('Operasional', v)) delete next.rencana_riil;
+    }
     if (k === 'penerima_id' && !adminDiatur) {
       const fAuto = roFee({ penerima_id: v }, pmap, ctx.bankVA);
       setAdaAdmin(fAuto > 0);
@@ -2472,6 +2493,7 @@ function RencanaItemModal({ x, ctx, hari, kategori, bisaUbah, pmap, onClose, onS
     setF(next);
   };
   const butuhRiil = butuhRencanaRealisasi('Operasional', f.kategori);
+  const riilAktif = Number(f.rencana_riil) > 0 ? Number(f.rencana_riil) : (Number(f.nominal) || 0);
   const kuitansi = !!f.kategori && pakaiKuitansi({ jenis: 'Operasional', kategori: f.kategori });
   const feeAktif = adaAdmin ? (Number(biayaAdmin) || 0) : 0;
   const h = hari.find(function(d) { return d.tanggal === f.tanggal; });
@@ -2481,7 +2503,7 @@ function RencanaItemModal({ x, ctx, hari, kategori, bisaUbah, pmap, onClose, onS
     : /^[\s\-\u2013\u2014_.\/]+$/.test(f.nota_no || '') ? 'Nomor nota tidak boleh "-"'
     : (adaAdmin && !(Number(biayaAdmin) > 0 && Number(biayaAdmin) <= 50000)) ? 'Biaya admin Rp 1 – Rp 50.000' : null;
   const ajuErr = err || (!f.tanggal ? 'Pilih tanggal' : !f.penerima_id ? 'Pilih penerima' : lewat(f.tanggal) ? 'Tanggal sudah lewat'
-    : (butuhRiil && !(Number(f.rencana_riil) > 0)) ? 'Isi nilai rencana realisasi (aktual)'
+    : (butuhRiil && !(riilAktif > 0)) ? 'Isi nilai rencana realisasi (aktual)'
     : (!kuitansi && !notaFile && !f.nota_url) ? 'Unggah bukti / nota dulu' : null);
   async function siapkanSimpan() {
     let url = f.nota_url || '';
@@ -2492,7 +2514,7 @@ function RencanaItemModal({ x, ctx, hari, kategori, bisaUbah, pmap, onClose, onS
       setUploading(false);
     }
     const out = Object.assign({}, f, { nominal: Number(f.nominal) || 0, uraian: String(f.uraian).trim(),
-      rencana_riil: butuhRiil ? (Number(f.rencana_riil) || 0) : undefined,
+      rencana_riil: butuhRiil ? riilAktif : undefined,
       nota_url: url, nota_no: String(f.nota_no || '').trim(),
       biaya_admin: adminDiatur ? feeAktif : undefined });
     return out;
@@ -2523,10 +2545,10 @@ function RencanaItemModal({ x, ctx, hari, kategori, bisaUbah, pmap, onClose, onS
     <Field label="Kategori"><select value={f.kategori} disabled={!bisaUbah} onChange={function(e) { set('kategori', e.target.value); }} style={inputStyle} aria-label="Kategori rencana">
       <option value="">Pilih…</option>{kategori.map(function(k) { return <option key={k} value={k}>{k}</option>; })}</select></Field>
     <Field label="Uraian"><input value={f.uraian} disabled={!bisaUbah} onChange={function(e) { set('uraian', e.target.value); }} style={inputStyle} aria-label="Uraian rencana" placeholder="cth. Isi gas 12 kg 8 tabung"/></Field>
-    <Field label={butuhRiil ? 'Anggaran pengajuan' : 'Nominal'} hint={butuhRiil ? 'Nilai anggaran yang diajukan & memotong saldo VA' : (f.kategori ? 'Nilai realisasi otomatis sama dengan nominal pengajuan' : null)}>
+    <Field label={butuhRiil ? 'Anggaran pengajuan (Nominal)' : 'Nominal'} hint={butuhRiil ? 'Nilai anggaran yang diajukan & memotong saldo VA' : (f.kategori ? 'Nilai realisasi otomatis sama dengan nominal pengajuan' : null)}>
       <RupiahInput value={String(f.nominal || '')} disabled={!bisaUbah} onChange={function(v) { set('nominal', Number(v) || 0); }} label="Nominal rencana"/></Field>
-    {butuhRiil && <Field label="Nilai rencana realisasi (aktual)" hint="Nilai aktual yang akan dibayarkan. Wajib diisi sebelum diajukan.">
-      <RupiahInput value={String(f.rencana_riil || '')} disabled={!bisaUbah} onChange={function(v) { set('rencana_riil', Number(v) || 0); }} label="Rencana realisasi"/></Field>}
+    {butuhRiil && <Field label="Nilai rencana realisasi (aktual)" hint="Otomatis mengikuti anggaran pengajuan; ubah bila nilai aktual yang dibayarkan berbeda.">
+      <RupiahInput value={String(riilAktif || '')} disabled={!bisaUbah} onChange={function(v) { set('rencana_riil', Number(v) || 0); }} label="Rencana realisasi"/></Field>}
     <Field label="Penerima / toko" hint={f.penerima_id && roFee({ penerima_id: f.penerima_id }, pmap, ctx.bankVA) ? 'Beda bank dengan VA → rekomendasi biaya transfer Rp 6.500' : f.penerima_id ? 'Sesama bank VA → tanpa biaya transfer' : 'Wajib diisi sebelum diajukan'}>
       {bisaUbah ? <div aria-label="Penerima rencana"><PenerimaSelect list={ctx.penerima} value={f.penerima_id} toast={toast} onChange={function(v) { set('penerima_id', v); }} onListChange={onPenerima}/></div>
         : <select value={f.penerima_id} disabled style={inputStyle}><option value="">—</option>{ctx.penerima.map(function(p) { return <option key={p.id} value={p.id}>{p.nama} · {roKodeBank(p.bank)} {p.no_rek}</option>; })}</select>}</Field>
@@ -4388,12 +4410,12 @@ function rincianError(rinc) {
   return null;
 }
 function rincianKirim(rinc) { return (rinc || []).map(function(x) { return { nama: String(x.nama).trim(), kategori: x.kategori, volume: angkaDesimal(x.volume), satuan: String(x.satuan).trim(), harga: Number(x.harga) }; }); }
-function emptyRow() { return { key: Math.random().toString(36).slice(2), jenis: '', kategori: '', uraian: '', nominal: '', rencana_riil: '', penerima_id: '', susulan: false, rincian: [], nota_url: '', notaFile: null, nota_no: '', adaAdmin: false, biaya_admin: String(BIAYA_ADMIN_DEFAULT), adminDiatur: false }; }
+function emptyRow() { return { key: Math.random().toString(36).slice(2), jenis: '', kategori: '', uraian: '', nominal: '', rencana_riil: '', riilDiatur: false, penerima_id: '', susulan: false, rincian: [], nota_url: '', notaFile: null, nota_no: '', adaAdmin: false, biaya_admin: String(BIAYA_ADMIN_DEFAULT), adminDiatur: false }; }
 function rowError(r) {
   if (!r.jenis) return 'jenis'; if (!r.kategori) return 'kategori'; if (!String(r.uraian).trim()) return 'uraian';
   if (r.jenis === 'Bahan Baku') { const e = rincianError(r.rincian); if (e) return e; }
   if (!(Number(r.nominal) > 0)) return 'nominal';
-  if (butuhRencanaRealisasi(r.jenis, r.kategori) && !(Number(r.rencana_riil) > 0)) return 'nilai rencana realisasi (aktual)';
+  if (butuhRencanaRealisasi(r.jenis, r.kategori) && !((Number(r.rencana_riil) || Number(r.nominal)) > 0)) return 'nilai rencana realisasi (aktual)';
   if (!pakaiKuitansi(r) && !r.notaFile && !r.nota_url) return 'bukti / nota';
   if (/^[\s\-\u2013\u2014_.\/]+$/.test(r.nota_no || '')) return 'nomor nota (tidak boleh "-")';
   if (r.adaAdmin && !(Number(r.biaya_admin) > 0 && Number(r.biaya_admin) <= 50000)) return 'biaya admin (Rp 1 – Rp 50.000)';
@@ -4438,6 +4460,7 @@ async function unggahNota(file, tanggal, uraian) {
 function ItemFields({ row, onChange, kategoriMap, penerima, upsertPenerima, toast, bankVA }) {
   const isBB = row.jenis === 'Bahan Baku';
   const butuhRiil = butuhRencanaRealisasi(row.jenis, row.kategori);
+  const riilTampil = row.rencana_riil !== undefined && row.rencana_riil !== '' ? row.rencana_riil : (row.nominal || '');
   const kuitansi = !!row.jenis && !!row.kategori && pakaiKuitansi(row);
   useEffect(function() {
     if (bankVA === null || bankVA === undefined || !row.penerima_id || row.adminDiatur) return;
@@ -4455,9 +4478,19 @@ function ItemFields({ row, onChange, kategoriMap, penerima, upsertPenerima, toas
     if (k === 'jenis') {
       n.kategori = (kategoriMap[v] || []).length === 1 ? kategoriMap[v][0] : '';
       if (v === 'Bahan Baku' && !(n.rincian || []).length) n.rincian = [{ nama: '', kategori: '', volume: '', satuan: '', harga: '' }];
-      if (!butuhRencanaRealisasi(v, n.kategori)) n.rencana_riil = '';
+      if (!butuhRencanaRealisasi(v, n.kategori)) { n.rencana_riil = ''; n.riilDiatur = false; }
+      else if (!n.riilDiatur && n.nominal) n.rencana_riil = n.nominal;
     }
-    if (k === 'kategori' && !butuhRencanaRealisasi(n.jenis, v)) n.rencana_riil = '';
+    if (k === 'kategori') {
+      if (!butuhRencanaRealisasi(n.jenis, v)) { n.rencana_riil = ''; n.riilDiatur = false; }
+      else if (!n.riilDiatur && n.nominal) n.rencana_riil = n.nominal;
+    }
+    if (k === 'nominal' && !n.riilDiatur && butuhRencanaRealisasi(n.jenis, n.kategori)) {
+      n.rencana_riil = v;
+    }
+    if (k === 'rencana_riil') {
+      n.riilDiatur = true;
+    }
     if (k === 'rincian') n.nominal = String(Math.round(rincianTotal(v)) || '');
     if (k === 'penerima_id') {
       n.adminDiatur = false;
@@ -4483,11 +4516,11 @@ function ItemFields({ row, onChange, kategoriMap, penerima, upsertPenerima, toas
       </select>
     </Field>
     <Field label="Uraian *"><input value={row.uraian} onChange={function(e){ set('uraian', e.target.value); }} style={inputStyle} placeholder={isBB ? 'cth. Belanja sayur menu Kamis' : 'cth. Isi gas 12 kg 8 tabung'}/></Field>
-    <Field label={butuhRiil ? 'Anggaran pengajuan *' : 'Nominal *'} hint={isBB ? 'Otomatis = jumlah rincian bahan' : butuhRiil ? 'Nilai anggaran yang diajukan & memotong saldo VA' : (row.jenis && row.kategori ? 'Nilai realisasi otomatis sama dengan nominal pengajuan' : null)}>
+    <Field label={butuhRiil ? 'Anggaran pengajuan (Nominal) *' : 'Nominal *'} hint={isBB ? 'Otomatis = jumlah rincian bahan' : butuhRiil ? 'Nilai anggaran yang diajukan & memotong saldo VA' : (row.jenis && row.kategori ? 'Nilai realisasi otomatis sama dengan nominal pengajuan' : null)}>
       <RupiahInput value={row.nominal} onChange={function(v){ set('nominal', v); }} disabled={isBB} label={butuhRiil ? 'Anggaran pengajuan' : 'Nominal'}/>
     </Field>
-    {butuhRiil && <div className="sm:col-span-2"><Field label="Nilai rencana realisasi (aktual) *" hint="Nilai aktual yang benar-benar akan dibayarkan. Dicatat sebagai nilai riil saat pengajuan disetujui.">
-      <RupiahInput value={row.rencana_riil || ''} onChange={function(v){ set('rencana_riil', v); }} label="Rencana realisasi"/>
+    {butuhRiil && <div className="sm:col-span-2"><Field label="Nilai rencana realisasi (aktual) *" hint="Otomatis mengikuti anggaran pengajuan; ubah bila nilai aktual yang benar-benar dibayarkan berbeda.">
+      <RupiahInput value={riilTampil} onChange={function(v){ set('rencana_riil', v); }} label="Rencana realisasi"/>
     </Field></div>}
     {isBB && <RincianBahan rows={row.rincian && row.rincian.length ? row.rincian : [{ nama: '', kategori: '', volume: '', satuan: '', harga: '' }]} onChange={function(v){ set('rincian', v); }}/>}
     {row.jenis && row.kategori && !kuitansi && <>
@@ -4577,7 +4610,7 @@ function PengajuanForm({ kategoriMap, penerima, upsertPenerima, toast, onCreated
     try {
       if (lebihPagu && catatanPagu.trim().length < 10) { setConfirm(false); toast('Melebihi pagu harian — isi alasan untuk Yayasan dulu', 'error'); return; }
       const items = rows.map(function(r){ return { jenis: r.jenis, kategori: r.kategori, uraian: r.uraian.trim(), nominal: Number(r.nominal),
-        rencana_riil: butuhRencanaRealisasi(r.jenis, r.kategori) ? Number(r.rencana_riil) : Number(r.nominal),
+        rencana_riil: butuhRencanaRealisasi(r.jenis, r.kategori) ? (Number(r.rencana_riil) > 0 ? Number(r.rencana_riil) : Number(r.nominal)) : Number(r.nominal),
         biaya_admin: r.adaAdmin ? Number(r.biaya_admin) : 0,
         penerima_id: r.penerima_id, susulan: !!r.susulan,
         catatan: r.jenis === 'Operasional' ? catatanKirim : '',
@@ -4678,7 +4711,9 @@ function PengajuanForm({ kategoriMap, penerima, upsertPenerima, toast, onCreated
 function ItemEditModal({ item, kategoriMap, penerima, upsertPenerima, toast, onClose, onSaved }) {
   const bankVA = useBankVA(item.dapur || '');
   const [row, setRow] = useState({ jenis: item.jenis, kategori: item.kategori, uraian: item.uraian, nominal: String(item.nominal),
-    rencana_riil: item.rencana_riil ? String(item.rencana_riil) : '', penerima_id: item.penerima_id, susulan: item.susulan,
+    rencana_riil: item.rencana_riil ? String(item.rencana_riil) : String(item.nominal || ''),
+    riilDiatur: !!(item.rencana_riil && Number(item.rencana_riil) !== Number(item.nominal)),
+    penerima_id: item.penerima_id, susulan: item.susulan,
     rincian: (item.rincian || []).map(function(x) { return { nama: x.nama, kategori: x.kategori, volume: String(x.volume), satuan: x.satuan, harga: String(x.harga) }; }),
     nota_url: item.nota_url || '', notaFile: null, nota_no: item.nota_no || '',
     adaAdmin: (item.biaya_admin || 0) > 0, biaya_admin: String(item.biaya_admin > 0 ? item.biaya_admin : BIAYA_ADMIN_DEFAULT), adminDiatur: true });
@@ -4693,7 +4728,7 @@ function ItemEditModal({ item, kategoriMap, penerima, upsertPenerima, toast, onC
       catch (e) { setSaving(false); toast(e.message, 'error'); return; }
     }
     const res = await apiPost('updatePengajuanItem', { item_id: item.id, jenis: row.jenis, kategori: row.kategori, uraian: row.uraian.trim(),
-      nominal: row.nominal, rencana_riil: butuhRencanaRealisasi(row.jenis, row.kategori) ? row.rencana_riil : row.nominal,
+      nominal: row.nominal, rencana_riil: butuhRencanaRealisasi(row.jenis, row.kategori) ? (Number(row.rencana_riil) > 0 ? row.rencana_riil : row.nominal) : row.nominal,
       biaya_admin: row.adaAdmin ? Number(row.biaya_admin) : 0,
       penerima_id: row.penerima_id, susulan: row.susulan ? 'true' : 'false',
       rincian: row.jenis === 'Bahan Baku' ? rincianKirim(row.rincian) : undefined, nota_url: nota, nota_no: String(row.nota_no || '').trim() });
