@@ -736,6 +736,40 @@ async function isiBahanBaku(page, uraian, volume, harga) {
     globalThis.__kw = null;
   });
 
+  all &= await run('Kwitansi per periode: hitung 1 hari insentif × hari efektif (5 hari), TTD basah penerima & TTD otomatis Akuntan+KSPPG, tidak menyentuh LPDH', { role: 'akuntan',
+    override: (a) => a === 'getKwitansiHarian' ? { ok: true, data: { sudahTerbit: 0, dariHonor: false, bisaUbah: true, rows: [] } }
+      : a === 'getDataPenerima' ? { ok: true, data: { rows: [
+          { id: 'R1', jenis: 'RELAWAN', nama: 'Siti Aminah', jabatan: 'Juru masak', lembaga: '', pm: 0, nominal: 150000, aktif: true, ada_ttd: true },
+          { id: 'PS1', jenis: 'PIC_SEKOLAH', nama: 'Pak Hendra', jabatan: '', lembaga: 'SDN 1 Cibodas', pm: 120, nominal: 60000, aktif: true, ada_ttd: true },
+          { id: 'K1', jenis: 'KADER', nama: 'Bu Rina', jabatan: '', lembaga: 'Posyandu Mawar', pm: 35, nominal: 50000, aktif: true, ada_ttd: true }] } }
+      : a === 'getTtdPengesahan' ? { ok: true, data: {
+          pengawas: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==',
+          kepala: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==' } }
+      : a === 'getIdentitasLPDH' ? { ok: true, data: { pengawas_nama: 'Wanda Azira, S.Ak', kepala_nama: 'Ners. Debbi, S.Kep', kepala_nip: '19900101' } }
+      : null }, async (page, srv) => {
+    await login(page, 'siti');
+    await page.waitForSelector('header');
+    await page.click('nav:visible >> text=Kwitansi');
+    await page.click('button:has-text("Kwitansi Per Periode (TTD Basah)")');
+    await page.waitForSelector('text=Kwitansi 1 Periode (TTD Basah Penerima)');
+    // Klik pintasan 5 hari efektif beroperasi → otomatis mengalikan tarif 1 hari × 5 hari untuk Relawan, PIC Sekolah, dan Kader Posyandu
+    await page.click('button:has-text("5 hari")');
+    await page.waitForSelector('text=3 kwitansi periode (5 hari efektif)');
+    // Total: (150.000 + 60.000 + 50.000) × 5 hari = 1.300.000
+    await page.waitForSelector('text=Rp 1.300.000');
+    const [dl] = await Promise.all([page.waitForEvent('download'), page.click('button:has-text("Unduh PDF Kwitansi 1 Periode (TTD Basah Penerima)")')]);
+    assert(/^Kwitansi_Periode_2_S1\.pdf$/.test(dl.suggestedFilename()), 'nama file salah: ' + dl.suggestedFilename());
+    const f = (process.env.SHOT || require('os').tmpdir()) + '/kwitansi_periode.pdf'; await dl.saveAs(f);
+    const isi = fs.readFileSync(f, 'latin1');
+    assert((isi.match(/\/Type \/Page\b/g) || []).length === 3, 'harus 3 halaman (Relawan, PIC Sekolah, Kader Posyandu)');
+    assert(isi.includes('5 \\(lima\\) hari efektif'), 'PDF harus mencantumkan 5 (lima) hari efektif');
+    assert(isi.includes('750.000') && isi.includes('300.000') && isi.includes('250.000'), 'PDF harus memuat hasil kali 1 hari insentif × 5 hari');
+    assert(isi.includes('Wanda Azira, S.Ak') && isi.includes('Ners. Debbi, S.Kep'), 'PDF harus memuat nama Akuntan & Kepala SPPG');
+    assert(/DCTDecode/.test(isi), 'TTD Akuntan & Kepala SPPG tetap ditempel otomatis di PDF');
+    // Pastikan tidak memanggil terbitkanKwitansi atau simpanKwitansiFile agar LPDH harian tidak terganggu
+    assert(!srv.log.posts.some(x => x.action === 'terbitkanKwitansi' || x.action === 'simpanKwitansiFile'), 'Kwitansi per periode tidak boleh mengubah data LPDH harian');
+  });
+
   all &= await run('LPDH: unduh membuat dulu kwitansi bertanda tangan yang belum ada, link-nya masuk Excel', { role: 'pic',
     override: (a, m, p) => a === 'getDataLPDH' ? { ok: true, data: { dapur: { id: 'D1', nama: 'SPPG Satu', kode: 'S1' }, identitas: { id_sppg: '32.04.01.0001' }, tanggal: p.tanggal,
         periode: { id: 'P2', periode_no: 2, tanggal_mulai: '2026-10-01', tanggal_akhir: '2026-10-31', status: 'AKTIF' }, saldoAwal: 7000000,
