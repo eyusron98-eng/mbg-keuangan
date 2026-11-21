@@ -1,0 +1,69 @@
+name: Auto-Deploy Apps Script
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'backend/Code.gs'
+      - 'backend/appsscript.json'
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Cek GitHub Secrets
+        env:
+          CLASPRC_JSON: ${{ secrets.CLASPRC_JSON }}
+          SCRIPT_ID: ${{ secrets.SCRIPT_ID }}
+          DEPLOYMENT_ID: ${{ secrets.DEPLOYMENT_ID }}
+          SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
+          DRIVE_FOLDER_ID: ${{ secrets.DRIVE_FOLDER_ID }}
+        run: |
+          missing=""
+          for k in CLASPRC_JSON SCRIPT_ID DEPLOYMENT_ID SPREADSHEET_ID DRIVE_FOLDER_ID; do
+            if [ -z "${!k}" ]; then missing="$missing $k"; fi
+          done
+          if [ -n "$missing" ]; then
+            echo "::error::GitHub Secrets berikut belum diisi:$missing"
+            exit 1
+          fi
+
+      - name: Install clasp
+        run: npm install -g @google/clasp@2.4.2
+
+      - name: Siapkan berkas Apps Script & kredensial
+        env:
+          CLASPRC_JSON: ${{ secrets.CLASPRC_JSON }}
+          SCRIPT_ID: ${{ secrets.SCRIPT_ID }}
+          SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
+          DRIVE_FOLDER_ID: ${{ secrets.DRIVE_FOLDER_ID }}
+        run: |
+          mkdir -p /tmp/gas-build
+          cp backend/appsscript.json /tmp/gas-build/appsscript.json
+          node -e "
+            const fs = require('fs');
+            let code = fs.readFileSync('backend/Code.gs', 'utf8');
+            code = code.replace(\"'ISI_ID_SPREADSHEET'\", JSON.stringify(process.env.SPREADSHEET_ID));
+            code = code.replace(\"'ISI_ID_FOLDER_DRIVE'\", JSON.stringify(process.env.DRIVE_FOLDER_ID));
+            fs.writeFileSync('/tmp/gas-build/Code.gs', code);
+            fs.writeFileSync('/tmp/gas-build/.clasp.json', JSON.stringify({ scriptId: process.env.SCRIPT_ID, rootDir: '/tmp/gas-build' }));
+            fs.writeFileSync(process.env.HOME + '/.clasprc.json', process.env.CLASPRC_JSON);
+          "
+
+      - name: Push & Deploy ke Apps Script
+        working-directory: /tmp/gas-build
+        env:
+          DEPLOYMENT_ID: ${{ secrets.DEPLOYMENT_ID }}
+        run: |
+          clasp push --force
+          SHORT_SHA="${GITHUB_SHA::7}"
+          clasp deploy -i "$DEPLOYMENT_ID" -d "Auto-deploy $SHORT_SHA"
