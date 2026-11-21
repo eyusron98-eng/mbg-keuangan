@@ -66,4 +66,5 @@ jobs:
         run: |
           clasp push --force
           SHORT_SHA="${GITHUB_SHA::7}"
-          clasp deploy -i "$DEPLOYMENT_ID" -d "Auto-deploy $SHORT_SHA"
+          DEP_ID=$(printf '%s' "$DEPLOYMENT_ID" | tr -d '[:space:]' | sed -E 's#^https?://.*/s/##; s#/exec.*$##')
+          clasp deploy -i "$DEP_ID" -d "Auto-deploy $SHORT_SHA"
