@@ -184,6 +184,7 @@ function handleRequest(e, method) {
       case 'updatePengajuanItem': result = updatePengajuanItem(params); break;
       case 'batalkanItem':      result = batalkanItem(params); break;
       case 'decidePengajuan':   result = decidePengajuan(params); break;
+      case 'decideBackdatePengajuan': result = decideBackdatePengajuan(params); break;
       case 'getRealisasiList':  result = getRealisasiList(params); break;
       case 'realisasiItem':     result = realisasiItem(params); break;
       case 'addBiayaAdmin':     result = addBiayaAdmin(params); break;
@@ -853,7 +854,7 @@ function getDashboard(p) {
     readAllItems().forEach(it => {
       if (targetDapur.indexOf(it.dapur) < 0 || periodeIds.indexOf(it.periode_id) < 0) return;
       if (it.status === 'DISETUJUI') { komitmen += it.nominal + (it.biaya_admin || 0); komitmenCount++; }
-      if (it.status === 'DIAJUKAN')  { menungguNominal += it.nominal + (it.biaya_admin || 0); menungguCount++; }
+      if (it.status === 'DIAJUKAN' || (role !== 'pic' && role !== 'yayasan' && it.status === 'MENUNGGU_ADMIN')) { menungguNominal += it.nominal + (it.biaya_admin || 0); menungguCount++; }
     });
   } catch (e) { /* sheet pengajuan belum ada */ }
   transaksi.forEach(r => { if (String(r.pengajuan_item_id).indexOf('DARURAT') === 0) daruratCount++; });
@@ -1340,6 +1341,7 @@ function readAllItems() {
 
 function deriveHeaderStatus(items) {
   const st = items.map(i => i.status);
+  if (st.indexOf('MENUNGGU_ADMIN') >= 0) return 'MENUNGGU_ADMIN';
   if (st.indexOf('DIAJUKAN') >= 0) return 'MENUNGGU';
   if (st.indexOf('REVISI') >= 0) return 'REVISI';
   return 'SELESAI';
@@ -1500,19 +1502,22 @@ function createPengajuan(p) {
     }
     const pid = idUnik('PA');
     const now = new Date();
-    getSheet(SHEETS.PENGAJUAN).appendRow([pid, nomor, dapurId, periode.id, tanggal, 'MENUNGGU', now, me.id, '', '']);
+    const isBackdate = tanggal < todayStr();
+    const initHeadStatus = isBackdate ? 'MENUNGGU_ADMIN' : 'MENUNGGU';
+    const initItemStatus = isBackdate ? 'MENUNGGU_ADMIN' : 'DIAJUKAN';
+    getSheet(SHEETS.PENGAJUAN).appendRow([pid, nomor, dapurId, periode.id, tanggal, initHeadStatus, now, me.id, '', '']);
 
     const rows = items.map(function(it, idx) {
       const pn = penerimaMap[it.penerima_id];
       return [pid + '-' + (idx + 1), pid, dapurId, periode.id, idx + 1, it.jenis, it.kategori, String(it.uraian).trim(),
-        Number(it.nominal), pn.id, pn.nama, pn.bank, "'" + pn.no_rek, it.susulan ? 'YA' : 'TIDAK', 'DIAJUKAN', catatanPengaju(it.catatan), 1,
+        Number(it.nominal), pn.id, pn.nama, pn.bank, "'" + pn.no_rek, it.susulan ? 'YA' : 'TIDAK', initItemStatus, catatanPengaju(it.catatan), 1,
         '', '', '', now, now].concat(tambahan[idx]);
     });
     const sh = getSheet(SHEETS.PITEM);
     sh.getRange(1, 23, 1, 5).setValues([['rincian_bahan', 'nota_url', 'nota_no', 'rencana_riil', 'biaya_admin']]);
     sh.getRange(sh.getLastRow() + 1, 1, rows.length, rows[0].length).setValues(rows);
-    logActivity(me.id, 'createPengajuan', nomor + ' (' + rows.length + ' baris)');
-    const hasil = { ok: true, data: { id: pid, nomor: nomor } };
+    logActivity(me.id, 'createPengajuan', nomor + ' (' + rows.length + ' baris' + (isBackdate ? ', backdate menunggu ACC Admin' : '') + ')');
+    const hasil = { ok: true, data: { id: pid, nomor: nomor, backdate: isBackdate } };
     if (reqKey) CacheService.getScriptCache().put(reqKey, JSON.stringify(hasil), 21600);   // 6 jam
     return hasil;
   });
@@ -1557,7 +1562,7 @@ function getPengajuan(p) {
   let heads = readAllPengajuan().filter(h => target.indexOf(h.dapur) >= 0 && (semuaPeriode || periodeFilter.indexOf(h.periode_id) >= 0));
   if (semuaPeriode) {
     const adaMenunggu = {};
-    allItems.forEach(i => { if (i.status === 'DIAJUKAN') adaMenunggu[i.pengajuan_id] = 1; });
+    allItems.forEach(i => { if (i.status === 'DIAJUKAN' || (me.role === 'admin' && i.status === 'MENUNGGU_ADMIN')) adaMenunggu[i.pengajuan_id] = 1; });
     heads = heads.filter(h => adaMenunggu[h.id]);
   }
   if (me.role === 'asisten') heads = heads.filter(h => h.created_by === me.id);
@@ -1575,11 +1580,11 @@ function getPengajuan(p) {
       decided_by_nama: userNames[h.decided_by] || h.decided_by,
       decided_by_role: userRoles[h.decided_by] || '',
       items: items.map(i => Object.assign({}, i, { decided_by_nama: userNames[i.decided_by] || i.decided_by })),
-      total_diajukan: sum(['DIAJUKAN', 'DISETUJUI', 'REVISI', 'DITOLAK', 'TEREALISASI']),
+      total_diajukan: sum(['MENUNGGU_ADMIN', 'DIAJUKAN', 'DISETUJUI', 'REVISI', 'DITOLAK', 'TEREALISASI']),
       total_disetujui: sum(['DISETUJUI', 'TEREALISASI']),
     });
   });
-  if (p.filter === 'menunggu') out = out.filter(h => h.status === 'MENUNGGU');
+  if (p.filter === 'menunggu') out = out.filter(h => h.status === 'MENUNGGU' || (me.role === 'admin' && h.status === 'MENUNGGU_ADMIN'));
   out.sort((a, b) => (a.tanggal !== b.tanggal ? (a.tanggal < b.tanggal ? 1 : -1) : (a.seq < b.seq ? 1 : -1)));
 
   const va = {};
@@ -1608,7 +1613,7 @@ function canModifyItem(me, it) {
   if (me.role === 'asisten') {
     const head = readAllPengajuan().find(h => h.id === it.pengajuan_id);
     if (!head || head.created_by !== me.id) return 'Bukan pengajuan Anda';
-    if (it.status !== 'DIAJUKAN' && it.status !== 'REVISI') return 'Baris yang sudah disetujui hanya bisa diubah akuntan';
+    if (it.status !== 'MENUNGGU_ADMIN' && it.status !== 'DIAJUKAN' && it.status !== 'REVISI') return 'Baris yang sudah disetujui hanya bisa diubah akuntan';
     return null;
   }
   return 'Tidak berwenang';
@@ -1622,7 +1627,7 @@ function updatePengajuanItem(p) {
     if (!it) return { ok: false, error: 'Baris tidak ditemukan' };
     const deny = canModifyItem(me, it);
     if (deny) return { ok: false, error: deny };
-    if (it.status !== 'DIAJUKAN' && it.status !== 'REVISI') return { ok: false, error: 'Baris berstatus ' + it.status + ', tidak bisa diedit' };
+    if (it.status !== 'MENUNGGU_ADMIN' && it.status !== 'DIAJUKAN' && it.status !== 'REVISI') return { ok: false, error: 'Baris berstatus ' + it.status + ', tidak bisa diedit' };
     if (me.role === 'asisten' && p.jenis !== 'Bahan Baku') return { ok: false, error: 'Asisten hanya dapat mengajukan Bahan Baku' };
     const penerimaMap = {};
     readPenerima().forEach(r => { penerimaMap[r.id] = r; });
@@ -1656,11 +1661,12 @@ function updatePengajuanItem(p) {
     const pn = penerimaMap[p.penerima_id];
     const sh = getSheet(SHEETS.PITEM);
     const wasRevisi = it.status === 'REVISI';
+    const nextStatus = it.status === 'MENUNGGU_ADMIN' ? 'MENUNGGU_ADMIN' : 'DIAJUKAN';
     sh.getRange(1, 23, 1, 5).setValues([['rincian_bahan', 'nota_url', 'nota_no', 'rencana_riil', 'biaya_admin']]);
     sh.getRange(it._row, 23, 1, 5).setValues([[rinc, nota, notaNo ? teksSel(notaNo) : '', rencanaRiil, fee]]);
     sh.getRange(it._row, 6, 1, 12).setValues([[p.jenis, p.kategori, String(p.uraian).trim(), Number(p.nominal),
       pn.id, pn.nama, pn.bank, "'" + pn.no_rek, String(p.susulan) === 'true' || p.susulan === true ? 'YA' : 'TIDAK',
-      'DIAJUKAN', it.catatan, wasRevisi ? it.putaran + 1 : it.putaran]]);
+      nextStatus, it.catatan, wasRevisi ? it.putaran + 1 : it.putaran]]);
     if (wasRevisi) sh.getRange(it._row, 18, 1, 2).setValues([['', '']]);
     sh.getRange(it._row, 22).setValue(new Date());
     refreshHeaderStatus(it.pengajuan_id);
@@ -1677,7 +1683,7 @@ function batalkanItem(p) {
     if (!it) return { ok: false, error: 'Baris tidak ditemukan' };
     const deny = canModifyItem(me, it);
     if (deny) return { ok: false, error: deny };
-    if (['DIAJUKAN', 'REVISI', 'DISETUJUI'].indexOf(it.status) < 0) return { ok: false, error: 'Baris berstatus ' + it.status + ', tidak bisa dibatalkan' };
+    if (['MENUNGGU_ADMIN', 'DIAJUKAN', 'REVISI', 'DISETUJUI'].indexOf(it.status) < 0) return { ok: false, error: 'Baris berstatus ' + it.status + ', tidak bisa dibatalkan' };
     const sh = getSheet(SHEETS.PITEM);
     const alasan = String(p.alasan || '').trim();
     sh.getRange(it._row, 15, 1, 2).setValues([['DIBATALKAN', 'Dibatalkan akuntan' + (alasan ? ': ' + alasan : '') + (it.catatan ? ' | ' + it.catatan : '')]]);
@@ -1702,7 +1708,12 @@ function decidePengajuan(p) {
     if (me.role === 'pic' && head.dapur !== me.dapur) return { ok: false, error: 'PIC hanya dapat memutuskan pengajuan dapurnya sendiri' };
     const allItems = readAllItems();
     const pending = allItems.filter(i => i.pengajuan_id === head.id && i.status === 'DIAJUKAN');
-    if (!pending.length) return { ok: false, error: 'Tidak ada baris yang menunggu keputusan (mungkin sudah diputuskan)' };
+    if (!pending.length) {
+      if (allItems.some(i => i.pengajuan_id === head.id && i.status === 'MENUNGGU_ADMIN')) {
+        return { ok: false, error: 'Pengajuan backdate ini masih menunggu ACC Admin sebelum dapat diputuskan PIC/Yayasan' };
+      }
+      return { ok: false, error: 'Tidak ada baris yang menunggu keputusan (mungkin sudah diputuskan)' };
+    }
 
     const map = {};
     keputusan.forEach(k => { map[k.item_id] = k; });
@@ -1787,12 +1798,12 @@ function decidePengajuan(p) {
     const sh = getSheet(SHEETS.PITEM);
     pending.forEach(function(it) {
       const d = map[it.id];
-      // catatan akuntan tetap disimpan; catatan penyetuju (setuju/revisi/tolak) ditaruh di depan
-      const lama = String(it.catatan || ''), dariAkuntan = lama.indexOf(AWALAN_CATATAN_AKUNTAN) === 0 ? lama : '';
+      // catatan akuntan & ACC backdate admin tetap disimpan; catatan penyetuju (setuju/revisi/tolak) ditaruh di depan
+      const lama = String(it.catatan || ''), catatanLama = (lama.indexOf(AWALAN_CATATAN_AKUNTAN) === 0 || /^ACC backdate Admin/i.test(lama)) ? lama : '';
       const baruRaw = String(d.catatan || '').trim();
       const baru = baruRaw && d.status === 'DISETUJUI' && !/^Catatan persetujuan:/i.test(baruRaw) ? 'Catatan persetujuan: ' + baruRaw : baruRaw;
       const statusAkhir = d.status === 'DISETUJUI' ? 'TEREALISASI' : d.status;
-      sh.getRange(it._row, 15, 1, 2).setValues([[statusAkhir, baru && dariAkuntan ? baru + ' | ' + dariAkuntan : (baru || dariAkuntan)]]);
+      sh.getRange(it._row, 15, 1, 2).setValues([[statusAkhir, baru && catatanLama ? baru + ' | ' + catatanLama : (baru || catatanLama)]]);
       sh.getRange(it._row, 18, 1, 2).setValues([[now, me.id]]);
       if (txByItem[it.id]) sh.getRange(it._row, 20).setValue(txByItem[it.id]);
       sh.getRange(it._row, 22).setValue(now);
@@ -1802,6 +1813,57 @@ function decidePengajuan(p) {
     refreshHeaderStatus(head.id);
     logActivity(me.id, 'decidePengajuan', head.nomor + ' (setuju & terealisasi ' + rupiah(totalSetuju) + ')');
     return { ok: true, data: { totalSetuju: totalSetuju, terealisasi: disetujuiList.length } };
+  });
+}
+
+// ACC / Tolak pengajuan backdate oleh Admin sebelum diteruskan ke persetujuan PIC/Yayasan
+function decideBackdatePengajuan(p) {
+  const me = authUser(p);
+  if (!me) return { ok: false, error: SESI_ERR };
+  if (me.role !== 'admin') return { ok: false, error: 'Hanya Admin yang dapat menyetujui/menolak pengajuan backdate' };
+  const rawSt = String(p.status || '').toUpperCase();
+  const st = rawSt === 'ACC' ? 'DISETUJUI' : rawSt;
+  if (st !== 'DISETUJUI' && st !== 'DITOLAK') return { ok: false, error: 'Status keputusan tidak valid' };
+  const catatan = String(p.catatan || '').replace(/\s+/g, ' ').trim().substring(0, 400);
+  if (st === 'DITOLAK' && !catatan) return { ok: false, error: 'Alasan penolakan backdate wajib diisi' };
+
+  return withLock(function() {
+    const head = readAllPengajuan().find(h => h.id === p.pengajuan_id);
+    if (!head) return { ok: false, error: 'Pengajuan tidak ditemukan' };
+    const pending = readAllItems().filter(i => i.pengajuan_id === head.id && i.status === 'MENUNGGU_ADMIN');
+    if (!pending.length) return { ok: false, error: 'Tidak ada baris backdate yang menunggu ACC Admin' };
+    const periodeHead = readAllPeriode(head.dapur).find(r => r.id === head.periode_id);
+    const periodeTutup = !periodeHead || periodeHead.status !== 'AKTIF';
+    if (periodeTutup && st !== 'DITOLAK') {
+      return { ok: false, error: 'Periode pengajuan ini sudah ditutup — pengajuan backdate yang tertinggal hanya bisa ditolak' };
+    }
+    const now = new Date();
+    const sh = getSheet(SHEETS.PITEM);
+    if (st === 'DISETUJUI') {
+      const infoAcc = 'ACC backdate Admin (' + (me.nama || me.id) + ')' + (catatan ? ': ' + catatan : '');
+      pending.forEach(function(it) {
+        const lama = String(it.catatan || '').trim();
+        const catBaru = lama ? lama + ' | ' + infoAcc : infoAcc;
+        sh.getRange(it._row, 15, 1, 2).setValues([['DIAJUKAN', catBaru]]);
+        sh.getRange(it._row, 22).setValue(now);
+      });
+      refreshHeaderStatus(head.id);
+      logActivity(me.id, 'accBackdatePengajuan', head.nomor + ' (' + pending.length + ' baris diteruskan ke PIC/Yayasan)');
+      return { ok: true, data: { status: 'DIAJUKAN', jumlah: pending.length } };
+    } else {
+      const infoTolak = 'Backdate ditolak Admin (' + (me.nama || me.id) + '): ' + catatan;
+      pending.forEach(function(it) {
+        const lama = String(it.catatan || '').trim();
+        const catBaru = lama ? infoTolak + ' | ' + lama : infoTolak;
+        sh.getRange(it._row, 15, 1, 2).setValues([['DITOLAK', catBaru]]);
+        sh.getRange(it._row, 18, 1, 2).setValues([[now, me.id]]);
+        sh.getRange(it._row, 22).setValue(now);
+      });
+      getSheet(SHEETS.PENGAJUAN).getRange(head._row, 9, 1, 2).setValues([[now, me.id]]);
+      refreshHeaderStatus(head.id);
+      logActivity(me.id, 'tolakBackdatePengajuan', head.nomor + ' (' + pending.length + ' baris ditolak)');
+      return { ok: true, data: { status: 'DITOLAK', jumlah: pending.length } };
+    }
   });
 }
 
@@ -3861,7 +3923,7 @@ function getBADaftar(p) {
       pengajuan: 0, menunggu: 0, disetujui: 0, total: 0 };
     const g = groups[k]; g.pengajuan++;
     (itemsBy[h.id] || []).forEach(function(i) {
-      if (i.status === 'DIAJUKAN' || i.status === 'REVISI') g.menunggu++;
+      if (i.status === 'MENUNGGU_ADMIN' || i.status === 'DIAJUKAN' || i.status === 'REVISI') g.menunggu++;
       if (i.status === 'DISETUJUI' || i.status === 'TEREALISASI') { g.disetujui++; g.total += i.nominal; }
     });
   });
@@ -3910,7 +3972,7 @@ function getBeritaAcara(p) {
   if (!heads.length) return { ok: false, error: 'Tidak ada pengajuan pada tanggal ' + tanggal };
   const headIds = heads.map(h => h.id);
   const all = readAllItems().filter(i => headIds.indexOf(i.pengajuan_id) >= 0);
-  const menunggu = all.filter(i => i.status === 'DIAJUKAN' || i.status === 'REVISI');
+  const menunggu = all.filter(i => i.status === 'MENUNGGU_ADMIN' || i.status === 'DIAJUKAN' || i.status === 'REVISI');
   if (menunggu.length) return { ok: false, error: 'Masih ada ' + menunggu.length + ' baris menunggu keputusan / revisi. Berita Acara bisa dicetak setelah semua baris hari ini diputuskan.' };
   const disetujui = all.filter(i => i.status === 'DISETUJUI' || i.status === 'TEREALISASI')
     .sort((a, b) => (headIds.indexOf(a.pengajuan_id) - headIds.indexOf(b.pengajuan_id)) || (a.urut - b.urut));
@@ -4064,7 +4126,7 @@ function getRencanaOps(p) {
   Object.keys(items).forEach(function(k) {
     const it = items[k];
     if (it.dapur !== dapurId || it.periode_id !== per.id || it.jenis !== 'Operasional' || pidRencana[it.pengajuan_id]) return;
-    if (['DIAJUKAN', 'REVISI', 'DISETUJUI', 'TEREALISASI'].indexOf(it.status) < 0) return;
+    if (['MENUNGGU_ADMIN', 'DIAJUKAN', 'REVISI', 'DISETUJUI', 'TEREALISASI'].indexOf(it.status) < 0) return;
     const h = headMap[it.pengajuan_id] || {}, tx = it.transaksi_id ? txMap[it.transaksi_id] : null;
     luar.push({ id: 'LUAR-' + it.id, pitem_id: it.id, tanggal: tx ? tx.tanggal : h.tanggal, kategori: it.kategori, uraian: it.uraian, nominal: tx ? nilaiLPDH(tx) : it.nominal,
       penerima_id: it.penerima_id, pengajuan_id: it.pengajuan_id, nomor: h.nomor || '', status: it.status });
@@ -4162,7 +4224,7 @@ function getPaguOps(p) {
   const heads = {}; readAllPengajuan().forEach(function(x) { if (x.dapur === dapurId && x.tanggal === tgl) heads[x.id] = 1; });
   let diajukan = 0, nDiajukan = 0;
   readAllItems().forEach(function(it) {
-    if (!heads[it.pengajuan_id] || it.jenis !== 'Operasional' || ['DIAJUKAN', 'REVISI', 'DISETUJUI'].indexOf(it.status) < 0) return;
+    if (!heads[it.pengajuan_id] || it.jenis !== 'Operasional' || ['MENUNGGU_ADMIN', 'DIAJUKAN', 'REVISI', 'DISETUJUI'].indexOf(it.status) < 0) return;
     diajukan += it.nominal + (it.biaya_admin || 0); nDiajukan++;
   });
   const rencanaBelum = ((d.items || []).filter(function(x) { return x.tanggal === tgl && !x.pengajuan_id; })).reduce(function(a, x) { return a + (Number(x.nominal) || 0); }, 0);

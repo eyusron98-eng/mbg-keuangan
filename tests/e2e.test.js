@@ -1519,6 +1519,28 @@ async function isiBahanBaku(page, uraian, volume, harga) {
     assert(srv.log.lazy.some(u => /recharts/.test(u)), 'Recharts harus diminta saat Dashboard butuh grafik');
   });
 
+  all &= await run('Persetujuan Backdate: Admin ACC meneruskan ke PIC/Yayasan', { role: 'admin',
+    override: (a, m, p) => a === 'getPengajuan' ? { ok: true, data: {
+        pengajuan: [{ id: 'PBD1', nomor: 'BA-PA/S1/2026/10/010', dapur: 'D1', periode_id: 'P1', tanggal: '2026-10-10', status: 'MENUNGGU_ADMIN', created_at: '2026-10-15T10:00:00', created_by_nama: 'Siti', total_diajukan: 100000, total_disetujui: 0,
+          items: [{ id: 'PBD1-1', pengajuan_id: 'PBD1', urut: 1, jenis: 'Operasional', kategori: 'Gas', uraian: 'Gas backdate', nominal: 100000, rencana_riil: 100000, penerima_nama: 'Toko A', bank: 'BCA', no_rek: '123', status: 'MENUNGGU_ADMIN', catatan: '', putaran: 1 }] }],
+        va: { D1: { sisaVA: 5000000, komitmen: 0, tersedia: 5000000 } },
+        periodeAktif: { D1: 'P1' }, periodeRange: { D1: { mulai: '2026-10-01', akhir: '2026-10-31' } } } }
+      : a === 'decideBackdatePengajuan' ? { ok: true, data: { status: p.status === 'DITOLAK' ? 'DITOLAK' : 'DIAJUKAN', jumlah: 1 } } : null }, async (page, srv) => {
+    await login(page, 'admin');
+    await page.waitForSelector('header');
+    await page.click('nav:visible >> text=Persetujuan');
+    await page.waitForSelector('text=Pengajuan Backdate');
+    await page.waitForSelector('text=Menunggu ACC Admin');
+    await page.fill('[aria-label="Catatan ACC backdate Admin"]', 'Nota fisik valid');
+    await page.click('button:has-text("ACC ke PIC/Yayasan")');
+    await page.waitForSelector('text=Ya, ACC & Teruskan');
+    await page.click('button:has-text("Ya, ACC & Teruskan")');
+    await page.waitForSelector('text=di-ACC Admin');
+    const sent = srv.log.posts.find(x => x.action === 'decideBackdatePengajuan');
+    assert(sent && sent.params.pengajuan_id === 'PBD1' && sent.params.status === 'DISETUJUI' && sent.params.catatan === 'Nota fisik valid',
+      'decideBackdatePengajuan tidak terkirim benar: ' + JSON.stringify(sent));
+  });
+
   console.log(all ? 'SEMUA LULUS' : 'ADA YANG GAGAL');
   process.exit(all ? 0 : 1);
 })();

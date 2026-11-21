@@ -80,6 +80,8 @@ function makeEnv(usersInit, transform) {
   };
   vm.createContext(sandbox);
   vm.runInContext(transform ? transform(fs.readFileSync(FILE, 'utf8')) : fs.readFileSync(FILE, 'utf8'), sandbox, { filename: 'Code.gs' });
+  sandbox.__today = '2026-10-10';
+  vm.runInContext('const _origTodayStr = todayStr; todayStr = function() { return typeof __today === "string" && __today ? __today : _origTodayStr(); };', sandbox);
   sandbox.__book = book; sandbox.__cache = cacheStore;
   return sandbox;
 }
@@ -1144,6 +1146,73 @@ const ok = (c, m) => { console.log((c ? 'PASS ' : 'FAIL ') + m); if (!c) fails++
     ok(BA.PengajuanItem.filter(x => ['PL1-1', 'PL2-1', 'PL3-1'].includes(x[0])).every(x => x[14] === 'TEREALISASI' && !!x[19]), 'semua tunggakan lama di semua dapur berstatus TEREALISASI');
     r = call(ea, 'POST', { action: 'realisasiMassal', token: tAdm, dapur: 'ALL', tanpa_mutasi: true, sertakan_tutup: true });
     ok(r.ok && r.data.jumlah === 0, 'setelah realisasi langsung ALL: 0 tunggakan tersisa');
+  }
+
+  // 24. Pengajuan backdate: wajib ACC Admin dulu sebelum masuk ke persetujuan PIC/Yayasan
+  {
+    const eb = makeEnv([
+      ['U1', 'adm', 'AdmPass1', 'Admin Utama', 'admin', '', 'YA'],
+      ['U2', 'akn', 'AknPass1', 'Akuntan D1', 'akuntan', 'D001', 'YA'],
+      ['U3', 'pic', 'PicPass1', 'PIC D1', 'pic', 'D001', 'YA'],
+      ['U4', 'yys', 'YysPass1', 'Yayasan', 'yayasan', '', 'YA'],
+    ]);
+    eb.__today = '2026-10-15';
+    const tokB = (u, p) => call(eb, 'POST', { action: 'login', username: u, password: p }).data.token;
+    const tAdm = tokB('adm', 'AdmPass1'), tAkn = tokB('akn', 'AknPass1'), tPic = tokB('pic', 'PicPass1'), tYys = tokB('yys', 'YysPass1');
+    const itemGas = { jenis: 'Operasional', kategori: 'Gas', uraian: 'Gas backdate', nominal: 100000, rencana_riil: 100000, penerima_id: 'pn1', nota_url: 'https://drive.google.com/nota-bd1' };
+
+    // 1. Akuntan ajukan backdate (2026-10-10 < today 2026-10-15)
+    let r = call(eb, 'POST', { action: 'createPengajuan', token: tAkn, tanggal: '2026-10-10', items: [itemGas] });
+    ok(r.ok && r.data.backdate === true, 'createPengajuan backdate diterima dan ditandai backdate=true');
+    const pid1 = r.data.id;
+
+    // 2. PIC & Yayasan tidak melihat pengajuan backdate di tab Menunggu
+    r = call(eb, 'POST', { action: 'getPengajuan', token: tPic, filter: 'menunggu' });
+    ok(r.ok && r.data.pengajuan.length === 0, 'PIC tidak melihat pengajuan backdate sebelum di-ACC Admin');
+    r = call(eb, 'POST', { action: 'getPengajuan', token: tYys, filter: 'menunggu' });
+    ok(r.ok && r.data.pengajuan.length === 0, 'Yayasan tidak melihat pengajuan backdate sebelum di-ACC Admin');
+
+    // 3. PIC / Yayasan ditolak jika mencoba decidePengajuan langsung atau decideBackdatePengajuan
+    const it1Id = pid1 + '-1';
+    r = call(eb, 'POST', { action: 'decidePengajuan', token: tPic, pengajuan_id: pid1, keputusan: [{ item_id: it1Id, status: 'DISETUJUI' }] });
+    ok(!r.ok && /menunggu ACC Admin/i.test(r.error), 'PIC tidak bisa memutuskan backdate sebelum ACC Admin: ' + r.error);
+    r = call(eb, 'POST', { action: 'decideBackdatePengajuan', token: tPic, pengajuan_id: pid1, status: 'DISETUJUI' });
+    ok(!r.ok && /Hanya Admin/i.test(r.error), 'PIC tidak boleh memanggil decideBackdatePengajuan');
+    r = call(eb, 'POST', { action: 'decideBackdatePengajuan', token: tYys, pengajuan_id: pid1, status: 'DISETUJUI' });
+    ok(!r.ok && /Hanya Admin/i.test(r.error), 'Yayasan tidak boleh memanggil decideBackdatePengajuan');
+
+    // 4. Admin melihat pengajuan backdate di tab Menunggu dengan status MENUNGGU_ADMIN
+    r = call(eb, 'POST', { action: 'getPengajuan', token: tAdm, filter: 'menunggu' });
+    ok(r.ok && r.data.pengajuan.length === 1 && r.data.pengajuan[0].status === 'MENUNGGU_ADMIN', 'Admin melihat backdate berstatus MENUNGGU_ADMIN di tab Menunggu');
+
+    // 5. Akuntan masih bisa edit baris saat MENUNGGU_ADMIN dan status tetap MENUNGGU_ADMIN
+    r = call(eb, 'POST', { action: 'updatePengajuanItem', token: tAkn, item_id: it1Id, jenis: 'Operasional', kategori: 'Gas', uraian: 'Gas backdate revisi', nominal: 110000, rencana_riil: 110000, penerima_id: 'pn1', nota_url: 'https://drive.google.com/nota-bd1' });
+    ok(r.ok, 'Akuntan bisa edit baris saat MENUNGGU_ADMIN');
+    r = call(eb, 'POST', { action: 'getPengajuan', token: tAdm, filter: 'menunggu' });
+    ok(r.ok && r.data.pengajuan[0].status === 'MENUNGGU_ADMIN' && r.data.pengajuan[0].items[0].nominal === 110000, 'setelah edit status tetap MENUNGGU_ADMIN');
+
+    // 6. Admin ACC backdate → status berubah ke MENUNGGU / DIAJUKAN (belum buat transaksi)
+    r = call(eb, 'POST', { action: 'decideBackdatePengajuan', token: tAdm, pengajuan_id: pid1, status: 'DISETUJUI', catatan: 'Nota fisik sudah dicek' });
+    ok(r.ok && r.data.status === 'DIAJUKAN', 'Admin ACC backdate berhasil → DIAJUKAN');
+    ok(eb.__book.Transaksi.length === 1, 'ACC Admin belum membuat transaksi / memotong VA');
+
+    // 7. Sekarang PIC melihat pengajuan di tab Menunggu dan dapat menyetujuinya → TEREALISASI pada tanggal backdate
+    r = call(eb, 'POST', { action: 'getPengajuan', token: tPic, filter: 'menunggu' });
+    ok(r.ok && r.data.pengajuan.length === 1 && r.data.pengajuan[0].status === 'MENUNGGU', 'setelah ACC Admin, PIC melihat pengajuan di tab Menunggu');
+    r = call(eb, 'POST', { action: 'decidePengajuan', token: tPic, pengajuan_id: pid1, keputusan: [{ item_id: it1Id, status: 'DISETUJUI' }] });
+    ok(r.ok && r.data.terealisasi === 1, 'PIC berhasil menyetujui pengajuan backdate setelah ACC Admin');
+    const txBd = eb.__book.Transaksi[1];
+    ok(txBd && txBd[2] === '2026-10-10' && txBd[8] === 110000, 'transaksi backdate tercatat pada tanggal 2026-10-10');
+
+    // 8. Admin menolak backdate (wajib catatan)
+    r = call(eb, 'POST', { action: 'createPengajuan', token: tAkn, tanggal: '2026-10-11', items: [Object.assign({}, itemGas, { uraian: 'Gas backdate tolak' })] });
+    const pid2 = r.data.id;
+    r = call(eb, 'POST', { action: 'decideBackdatePengajuan', token: tAdm, pengajuan_id: pid2, status: 'DITOLAK', catatan: '' });
+    ok(!r.ok && /wajib/i.test(r.error), 'tolak backdate tanpa alasan ditolak');
+    r = call(eb, 'POST', { action: 'decideBackdatePengajuan', token: tAdm, pengajuan_id: pid2, status: 'DITOLAK', catatan: 'Nota tidak valid' });
+    ok(r.ok && r.data.status === 'DITOLAK', 'Admin berhasil menolak pengajuan backdate dengan alasan');
+    r = call(eb, 'POST', { action: 'getPengajuan', token: tPic, filter: 'menunggu' });
+    ok(r.ok && r.data.pengajuan.length === 0, 'pengajuan backdate yang ditolak Admin tidak masuk ke PIC');
   }
 
   console.log(fails ? '\n' + fails + ' GAGAL' : '\nSEMUA LULUS');

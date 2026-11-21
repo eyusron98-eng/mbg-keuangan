@@ -2170,7 +2170,9 @@ function RencanaOpsPage({ session, scope, toast }) {
     setItems(baru);
     const ok = await simpan(baru);
     setAjukanTgl('');
-    toast('Pengajuan ' + res.data.nomor + ' terkirim untuk persetujuan' + (ok ? '' : ' (rencana belum tersimpan — tekan Simpan)'));
+    toast(res.data && res.data.backdate
+      ? 'Pengajuan backdate ' + res.data.nomor + ' terkirim — menunggu ACC Admin dulu sebelum masuk ke PIC/Yayasan' + (ok ? '' : ' (rencana belum tersimpan — tekan Simpan)')
+      : 'Pengajuan ' + res.data.nomor + ' terkirim untuk persetujuan' + (ok ? '' : ' (rencana belum tersimpan — tekan Simpan)'));
     setWaText({ text: teksWaRencana(res.data.nomor, t, baris, catatan), ids: [res.data.id] });   // langsung siap disalin ke grup WA
     load();
   }
@@ -2185,7 +2187,7 @@ function RencanaOpsPage({ session, scope, toast }) {
   const stAju = function(x) { return x.luar ? x.status : stBaris[x.id]; };
   function grupAju(t) {
     const g = {};
-    items.concat(luarItems).forEach(function(x) { if (!x.pengajuan_id || (t && x.tanggal !== t) || ['DIAJUKAN', 'REVISI', 'DISETUJUI'].indexOf(stAju(x)) < 0) return; (g[x.pengajuan_id] = g[x.pengajuan_id] || []).push(x); });
+    items.concat(luarItems).forEach(function(x) { if (!x.pengajuan_id || (t && x.tanggal !== t) || ['MENUNGGU_ADMIN', 'DIAJUKAN', 'REVISI', 'DISETUJUI'].indexOf(stAju(x)) < 0) return; (g[x.pengajuan_id] = g[x.pengajuan_id] || []).push(x); });
     return g;
   }
   function waGrup(g) {
@@ -2198,7 +2200,7 @@ function RencanaOpsPage({ session, scope, toast }) {
     if (!r.ok) { toast('Gagal membatalkan: ' + (r.error || ''), 'error'); return; }
     setEdit(null); toast('Pengajuan ' + x.nomor + ' dibatalkan — baris bisa diubah lagi'); load();
   }
-  const statusAju = function(x) { return (x.luar ? 'Di luar rencana · ' : '') + (({ DIAJUKAN: 'Menunggu persetujuan', DISETUJUI: 'Disetujui', REVISI: 'Perlu revisi — ubah di menu Pengajuan', TEREALISASI: 'Terealisasi', TRANSAKSI: 'Transaksi tercatat' })[x.luar ? x.status : stBaris[x.id]] || 'Diajukan'); };
+  const statusAju = function(x) { return (x.luar ? 'Di luar rencana · ' : '') + (({ MENUNGGU_ADMIN: 'Menunggu ACC Admin (backdate)', DIAJUKAN: 'Menunggu persetujuan', DISETUJUI: 'Disetujui', REVISI: 'Perlu revisi — ubah di menu Pengajuan', TEREALISASI: 'Terealisasi', TRANSAKSI: 'Transaksi tercatat' })[x.luar ? x.status : stBaris[x.id]] || 'Diajukan'); };
   const Baris = function({ x }) {
     const fee = roFee(x, pmap, ctx.bankVA), pn = pmap[x.penerima_id];
     const butuhRiil = butuhRencanaRealisasi('Operasional', x.kategori);
@@ -2470,8 +2472,8 @@ function RencanaItemModal({ x, ctx, hari, kategori, bisaUbah, pmap, onClose, onS
   const [biayaAdmin, setBiayaAdmin] = useState(String(x.biaya_admin > 0 ? x.biaya_admin : BIAYA_ADMIN_DEFAULT));
   const [alasan, setAlasan] = useState('');
   const [mauBatal, setMauBatal] = useState(false);
-  const labelSt = ({ DIAJUKAN: 'menunggu persetujuan', DISETUJUI: 'sudah disetujui, belum direalisasi', REVISI: 'perlu revisi', TEREALISASI: 'sudah direalisasi' })[statusBaris] || 'diajukan';
-  const bolehBatal = bisaBatal && ['DIAJUKAN', 'REVISI', 'DISETUJUI'].indexOf(statusBaris) >= 0;
+  const labelSt = ({ MENUNGGU_ADMIN: 'menunggu ACC Admin (backdate)', DIAJUKAN: 'menunggu persetujuan', DISETUJUI: 'sudah disetujui, belum direalisasi', REVISI: 'perlu revisi', TEREALISASI: 'sudah direalisasi' })[statusBaris] || 'diajukan';
+  const bolehBatal = bisaBatal && ['MENUNGGU_ADMIN', 'DIAJUKAN', 'REVISI', 'DISETUJUI'].indexOf(statusBaris) >= 0;
   const set = function(k, v) {
     const next = Object.assign({}, f, { [k]: v });
     if (k === 'nominal' && !riilDiatur && butuhRencanaRealisasi('Operasional', next.kategori)) {
@@ -4266,6 +4268,7 @@ function DapurForm({ mode, initial, session, toast, onClose, onSaved }) {
 //  v6 — PENGAJUAN ANGGARAN · PERSETUJUAN · REALISASI
 // ============================================================
 const STATUS_STYLE = {
+  MENUNGGU_ADMIN: { bg: '#F3EAF8', fg: '#6B3FA0', label: 'Menunggu ACC Admin' },
   DIAJUKAN:    { bg: '#FBF3E2', fg: '#9A6A0B', label: 'Menunggu' },
   DISETUJUI:   { bg: '#E8F1EC', fg: '#15663E', label: 'Disetujui' },
   REVISI:      { bg: '#EAF0F8', fg: '#3E6BAE', label: 'Revisi' },
@@ -4629,7 +4632,9 @@ function PengajuanForm({ kategoriMap, penerima, upsertPenerima, toast, onCreated
       const res = await apiPost('createPengajuan', { items: items, dapur: dapur, tanggal: tanggal, request_id: reqId.current });
       setConfirm(false);
       if (res.ok) {
-        toast('Pengajuan ' + res.data.nomor + ' terkirim untuk persetujuan');
+        toast(res.data && res.data.backdate
+          ? 'Pengajuan backdate ' + res.data.nomor + ' terkirim — menunggu ACC Admin dulu sebelum masuk ke PIC/Yayasan'
+          : 'Pengajuan ' + res.data.nomor + ' terkirim untuk persetujuan');
         const pmap = {}; (penerima || []).forEach(function(x){ pmap[x.id] = x; });
         onCreated({ id: res.data.id, nomor: res.data.nomor, tanggal: tanggal, dapur: dapur, catatan: catatanKirim, items: items.map(function(it){
           const pn = pmap[it.penerima_id] || {};
@@ -4654,8 +4659,8 @@ function PengajuanForm({ kategoriMap, penerima, upsertPenerima, toast, onCreated
       </select>
     </Field>}
     <Field label="Tanggal pengajuan (hari H penggunaan dana) *"
-      hint={tglErr ? '⚠️ ' + tglErr : tanggal < todayISO() ? 'Tanggal mundur — akan ditandai "diajukan setelah hari H" ke Yayasan' : tanggal > todayISO() ? 'Pengajuan untuk hari mendatang' : 'Hari ini'}
-      hintColor={tglErr ? COLORS.danger : tanggal < todayISO() ? '#9A6A0B' : null}>
+      hint={tglErr ? '⚠️ ' + tglErr : tanggal < todayISO() ? 'Tanggal backdate (sebelum hari ini) — harus di-ACC Admin dulu sebelum masuk ke persetujuan PIC/Yayasan' : tanggal > todayISO() ? 'Pengajuan untuk hari mendatang' : 'Hari ini'}
+      hintColor={tglErr ? COLORS.danger : tanggal < todayISO() ? '#6B3FA0' : null}>
       <input type="date" value={tanggal} min={rng ? rng.mulai : undefined} max={rng ? rng.akhir : undefined}
         onChange={function(e){ setTanggal(e.target.value); }} style={Object.assign({}, inputStyle, tglErr ? { borderColor: COLORS.danger } : {})}/>
     </Field>
@@ -4761,7 +4766,7 @@ function BatalModal({ item, toast, onClose, onSaved }) {
   </Modal>;
 }
 
-function pendingSt(it) { return it.status === 'DIAJUKAN' || it.status === 'REVISI'; }
+function pendingSt(it) { return it.status === 'MENUNGGU_ADMIN' || it.status === 'DIAJUKAN' || it.status === 'REVISI'; }
 function TimingBadge({ h }) {
   const dibuat = String(h.created_at || '').substring(0, 10);
   if (!dibuat || dibuat === h.tanggal) return null;
@@ -4792,7 +4797,7 @@ function ItemRow({ it, actions, children }) {
         <div className="flex flex-wrap gap-1 mt-1.5"><StatusBadge status={it.status}/><ItemFlags it={it}/>{it.putaran > 1 && <MiniBadge bg={COLORS.paper} fg={COLORS.muted}>Putaran {it.putaran}</MiniBadge>}</div>
         {pendingSt(it) && it.rek_berubah && <div className="text-[11px] mt-1.5 rounded p-1.5" style={{ background: '#F8E9E5', color: COLORS.danger }}>
           Rekening berbeda dari pembayaran terakhir yang disetujui: {it.rek_berubah.dari} → <b>{it.rek_berubah.ke}</b></div>}
-        {it.catatan && (it.status === 'DIAJUKAN' || it.status === 'DISETUJUI' || it.status === 'TEREALISASI') &&
+        {it.catatan && (it.status === 'MENUNGGU_ADMIN' || it.status === 'DIAJUKAN' || it.status === 'DISETUJUI' || it.status === 'TEREALISASI') &&
           <div className="text-[11px] mt-1.5 rounded-md px-2 py-1" style={{ background: '#FBF3E3', color: '#9A6A0B' }}>⚠️ {it.catatan}</div>}
         {it.catatan && (it.status === 'REVISI' || it.status === 'DITOLAK' || it.status === 'DIBATALKAN') &&
           <div className="text-[11px] mt-1.5" style={{ color: it.status === 'DIBATALKAN' ? COLORS.muted : (it.status === 'REVISI' ? COLORS.blue : COLORS.danger) }}>Catatan: {it.catatan}</div>}
@@ -4946,8 +4951,8 @@ function PengajuanPage({ session, scope, dapurList, toast }) {
   const tampil = mode === 'hari' ? data.pengajuan.filter(function(h){ return h.tanggal === hariIni; })
     : mode === 'aktif' ? data.pengajuan
     : (!per ? [] : dataLalu ? dataLalu.pengajuan : null);
-  const perluTindakan = data.pengajuan.filter(function(h){ return h.tanggal !== hariIni && (h.status === 'MENUNGGU' || h.status === 'REVISI'); });
-  const belumWA = canCreate ? data.pengajuan.filter(function(h){ return !waSudah(h.id) && (h.items || []).some(function(i){ return ['DIAJUKAN', 'REVISI', 'DISETUJUI'].indexOf(i.status) >= 0; }); }) : [];
+  const perluTindakan = data.pengajuan.filter(function(h){ return h.tanggal !== hariIni && (h.status === 'MENUNGGU_ADMIN' || h.status === 'MENUNGGU' || h.status === 'REVISI'); });
+  const belumWA = canCreate ? data.pengajuan.filter(function(h){ return !waSudah(h.id) && (h.items || []).some(function(i){ return ['MENUNGGU_ADMIN', 'DIAJUKAN', 'REVISI', 'DISETUJUI'].indexOf(i.status) >= 0; }); }) : [];
   const kosong = mode === 'hari' ? 'Belum ada pengajuan dengan hari H ' + fmtDDMMYYYY(hariIni) + '.'
     : mode === 'aktif' ? 'Belum ada pengajuan di periode aktif.'
     : !per ? 'Pilih periode yang sudah ditutup untuk melihat pengajuannya.' : 'Tidak ada pengajuan di periode ini.';
@@ -5021,20 +5026,23 @@ function PengajuanPage({ session, scope, dapurList, toast }) {
           <div className="sm:text-right shrink-0">
             <StatusBadge status={h.status}/>
             <div className="text-xs mt-1 num" style={{ color: COLORS.muted }}>Diajukan {fmt(h.total_diajukan)} · <span style={{ color: COLORS.green }}>Disetujui {fmt(h.total_disetujui)}</span></div>
-            {canCreate && mode !== 'lalu' && h.items.some(function(i){ return ['DIAJUKAN', 'REVISI', 'DISETUJUI'].indexOf(i.status) >= 0; }) && <div className="mt-1.5 flex sm:justify-end items-center gap-1.5 flex-wrap">
+            {canCreate && mode !== 'lalu' && h.items.some(function(i){ return ['MENUNGGU_ADMIN', 'DIAJUKAN', 'REVISI', 'DISETUJUI'].indexOf(i.status) >= 0; }) && <div className="mt-1.5 flex sm:justify-end items-center gap-1.5 flex-wrap">
               {!waSudah(h.id) && <MiniBadge bg="#FBF3E3" fg="#9A6A0B">Belum disalin ke WA</MiniBadge>}
               <button onClick={function(){ setWaText({ text: waPengajuan(h, dapurMap[h.dapur]), ids: [h.id] }); }}
                 className="text-[11px] font-semibold rounded px-2 py-1" style={{ color: COLORS.green, border: '1px solid ' + COLORS.line }}>{waSudah(h.id) ? 'Salin lagi pesan WA' : 'Salin pesan WA'}</button></div>}
           </div>
         </div>
+        {h.status === 'MENUNGGU_ADMIN' && <div className="px-3 sm:px-4 py-2 text-xs" style={{ background: '#F3EAF8', color: '#6B3FA0' }}>
+          Pengajuan backdate — sedang <b>menunggu ACC Admin</b> sebelum diteruskan ke persetujuan PIC/Yayasan.
+        </div>}
         {h.items.map(function(it){
           let actions = null;
           if (canCreate && mode !== 'lalu') {
             const btn = function(label, color, onClick) { return <button key={label} onClick={onClick} className="text-[11px] font-semibold rounded px-2 py-1" style={{ color: color, border: '1px solid ' + COLORS.line }}>{label}</button>; };
             const a = [];
             if (it.status === 'REVISI') a.push(btn('Perbaiki', COLORS.blue, function(){ setEditItem(it); }));
-            if (it.status === 'DIAJUKAN') a.push(btn('Edit', COLORS.blue, function(){ setEditItem(it); }));
-            if ((isAkuntan ? ['DIAJUKAN','REVISI','DISETUJUI'] : ['DIAJUKAN','REVISI']).indexOf(it.status) >= 0) a.push(btn('Batalkan', COLORS.danger, function(){ setBatalItem(it); }));
+            if (it.status === 'DIAJUKAN' || it.status === 'MENUNGGU_ADMIN') a.push(btn('Edit', COLORS.blue, function(){ setEditItem(it); }));
+            if ((isAkuntan ? ['MENUNGGU_ADMIN','DIAJUKAN','REVISI','DISETUJUI'] : ['MENUNGGU_ADMIN','DIAJUKAN','REVISI']).indexOf(it.status) >= 0) a.push(btn('Batalkan', COLORS.danger, function(){ setBatalItem(it); }));
             actions = a.length ? a : null;
           }
           return <ItemRow key={it.id} it={it} actions={actions}/>;
@@ -5161,7 +5169,7 @@ function waSudah(id) { try { return !!localStorage.getItem('waDisalin:' + id); }
 function waTandai(ids) { (ids || []).forEach(function(id) { try { if (id) localStorage.setItem('waDisalin:' + id, String(Date.now())); } catch (e) {} }); }
 // Teks WA satu pengajuan dari daftar baris (menunggu / revisi / disetujui; yang batal & sudah direalisasi tidak ikut)
 function waPengajuan(h, dapurNama) {
-  const aktif = (h.items || []).filter(function(i) { return ['DIAJUKAN', 'REVISI', 'DISETUJUI'].indexOf(i.status) >= 0; });
+  const aktif = (h.items || []).filter(function(i) { return ['MENUNGGU_ADMIN', 'DIAJUKAN', 'REVISI', 'DISETUJUI'].indexOf(i.status) >= 0; });
   const cat = aktif.map(function(i) { const c = String(i.catatan || ''), k = c.indexOf('Catatan akuntan: '); return k < 0 ? '' : c.substring(k + 17); }).filter(Boolean)[0] || '';
   return buildWAPesan({ nomor: h.nomor, tanggal: h.tanggal, dapurNama: dapurNama || '', oleh: h.created_by_nama, items: aktif, catatan: cat,
     disetujui: aktif.length > 0 && aktif.every(function(i) { return i.status === 'DISETUJUI'; }) });
@@ -6615,6 +6623,61 @@ function PersetujuanCard({ h, va, dapurNama, toast, onDone, tutup }) {
   </Card>;
 }
 
+function BackdateAdminCard({ h, dapurNama, toast, onDone, tutup }) {
+  const pending = h.items.filter(function(i){ return i.status === 'MENUNGGU_ADMIN'; });
+  const [catatan, setCatatan] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [confirm, setConfirm] = useState(null);   // 'DISETUJUI' | 'DITOLAK'
+  const totalAjukan = pending.reduce(function(s, i){ return s + i.nominal + (i.biaya_admin || 0); }, 0);
+  async function submit(st) {
+    if (st === 'DITOLAK' && !catatan.trim()) { toast('Alasan penolakan backdate wajib diisi', 'error'); setConfirm(null); return; }
+    setSaving(true);
+    const res = await apiPost('decideBackdatePengajuan', { pengajuan_id: h.id, status: st, catatan: catatan.trim() });
+    setSaving(false); setConfirm(null);
+    if (res.ok) {
+      toast(st === 'DISETUJUI'
+        ? 'Backdate ' + h.nomor + ' di-ACC Admin — kini masuk ke persetujuan PIC/Yayasan'
+        : 'Pengajuan backdate ' + h.nomor + ' ditolak Admin');
+      onDone();
+    } else toast(res.error || 'Gagal menyimpan', 'error');
+  }
+  return <Card pad={false} className="mb-3">
+    <div className="p-3 sm:p-4 flex flex-col sm:flex-row sm:items-start justify-between gap-2" style={{ background: '#F3EAF8', borderRadius: '12px 12px 0 0' }}>
+      <div className="min-w-0">
+        <div className="text-sm font-bold" style={{ color: '#4A2574' }}>{dapurNama} · Pengajuan Backdate</div>
+        <div className="font-mono text-xs break-all" style={{ color: COLORS.ink }}>{h.nomor}</div>
+        <div className="text-xs" style={{ color: '#6B3FA0' }}>Hari H {fmtDDMMYYYY(h.tanggal)} · oleh {h.created_by_nama} · {pending.length} baris menunggu ACC Admin</div>
+        <div className="mt-1"><TimingBadge h={h}/></div>
+      </div>
+      <StatusBadge status="MENUNGGU_ADMIN"/>
+    </div>
+    <div className="px-3 sm:px-4 py-2 text-xs" style={{ background: tutup ? '#F8E9E5' : '#FAF6FD', color: tutup ? COLORS.danger : '#6B3FA0', borderBottom: '1px solid ' + COLORS.line }}>
+      {tutup
+        ? 'Periode pengajuan ini sudah ditutup — pengajuan backdate yang tertinggal hanya bisa ditolak.'
+        : 'Pengajuan bertanggal mundur (backdate). Setelah di-ACC Admin, pengajuan ini akan masuk ke daftar persetujuan PIC/Yayasan.'}
+    </div>
+    {h.items.map(function(it){ return <ItemRow key={it.id} it={it}/>; })}
+    <div className="p-3 sm:p-4" style={{ borderTop: '1px solid ' + COLORS.line }}>
+      <div className="flex justify-between text-sm mb-2"><span style={{ color: COLORS.muted }}>Total pengajuan backdate</span><b className="num" style={{ color: COLORS.ink }}>{fmt(totalAjukan)}</b></div>
+      <input value={catatan} onChange={function(e){ setCatatan(e.target.value); }} aria-label="Catatan ACC backdate Admin"
+        placeholder="Catatan Admin (opsional untuk ACC, wajib jika menolak)"
+        style={Object.assign({}, inputStyle, { fontSize: 13, marginBottom: 10 })}/>
+      <div className={'grid gap-2 ' + (tutup ? 'grid-cols-1' : 'grid-cols-2')}>
+        {!tutup && <Btn disabled={saving} onClick={function(){ setConfirm('DISETUJUI'); }}>{I.check} ACC ke PIC/Yayasan</Btn>}
+        <Btn kind="danger" disabled={saving || !catatan.trim()} onClick={function(){ setConfirm('DITOLAK'); }}>{I.x} Tolak backdate</Btn>
+      </div>
+      {!catatan.trim() && <div className="text-[11px] mt-1.5" style={{ color: COLORS.muted }}>Isi catatan dulu bila ingin menolak pengajuan backdate.</div>}
+    </div>
+    {confirm && <ConfirmModal
+      title={confirm === 'DISETUJUI' ? 'ACC backdate ' + h.nomor + '?' : 'Tolak backdate ' + h.nomor + '?'}
+      confirmLabel={saving ? 'Menyimpan…' : (confirm === 'DISETUJUI' ? 'Ya, ACC & Teruskan' : 'Ya, Tolak')}
+      message={confirm === 'DISETUJUI'
+        ? 'Pengajuan backdate (' + pending.length + ' baris, ' + fmt(totalAjukan) + ') akan di-ACC Admin dan diteruskan ke persetujuan PIC/Yayasan (belum memotong VA sampai disetujui PIC/Yayasan).'
+        : 'Semua ' + pending.length + ' baris pengajuan backdate ini akan ditolak dengan alasan: "' + catatan.trim() + '".'}
+      onConfirm={function(){ if (!saving) submit(confirm); }} onClose={function(){ setConfirm(null); }}/>}
+  </Card>;
+}
+
 function PersetujuanPage({ session, scope, dapurList, toast }) {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -6645,9 +6708,12 @@ function PersetujuanPage({ session, scope, dapurList, toast }) {
     : mode === 'aktif' ? 'Belum ada pengajuan di periode aktif.'
     : !per ? 'Pilih periode yang sudah ditutup untuk melihat pengajuannya.' : 'Tidak ada pengajuan di periode ini.';
   function kartu(h) {
+    const tutup = mode === 'lalu' || !!h.periode_tutup;
+    if (h.status === 'MENUNGGU_ADMIN' && session.user.role === 'admin') {
+      return <BackdateAdminCard key={h.id + '-adm-' + h.items.length} h={h} tutup={tutup} dapurNama={dapurMap[h.dapur] || h.dapur} toast={toast} onDone={load}/>;
+    }
     // Periode ditutup: baris yang masih menunggu (mis. pengajuan ganda) hanya bisa ditolak
     if (h.status === 'MENUNGGU') {
-      const tutup = mode === 'lalu' || !!h.periode_tutup;
       return <PersetujuanCard key={h.id + '-' + h.items.length} h={h} va={tutup ? null : data.va[h.dapur]} tutup={tutup} dapurNama={dapurMap[h.dapur] || h.dapur} toast={toast} onDone={load}/>;
     }
     return <Card key={h.id} pad={false} className="mb-3">
@@ -6657,6 +6723,9 @@ function PersetujuanPage({ session, scope, dapurList, toast }) {
           <div className="text-xs" style={{ color: COLORS.muted }}>{fmtDDMMYYYY(h.tanggal)} · disetujui {fmt(h.total_disetujui)}{h.decided_by_nama ? ' · oleh ' + oleh(h.decided_by_nama, h.decided_by_role) : ''}</div></div>
         <StatusBadge status={h.status}/>
       </div>
+      {h.status === 'MENUNGGU_ADMIN' && <div className="px-3 sm:px-4 py-2 text-xs" style={{ background: '#F3EAF8', color: '#6B3FA0' }}>
+        Pengajuan backdate ini sedang menunggu ACC Admin sebelum dapat diputuskan PIC/Yayasan.
+      </div>}
       {h.items.map(function(it){ return <ItemRow key={it.id} it={it}/>; })}
     </Card>;
   }
