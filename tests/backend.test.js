@@ -1317,6 +1317,19 @@ const ok = (c, m) => { console.log((c ? 'PASS ' : 'FAIL ') + m); if (!c) fails++
     r = call(e26, 'POST', { action: 'getRencanaOps', token: tAkn });
     ok(r.ok && r.data.pmPop && r.data.pmPop['2026-10-15'] === 100,
       'getRencanaOps membawa pmPop=100 (hanya sekolah yang dikirim) untuk dicocokkan Akuntan');
+
+    // Sinkronisasi otomatis Aslap → LPDH PIC: catat transaksi honor relawan di 2026-10-15 tanpa mengisi RelawanBayar manual
+    if (!e26.__book.Transaksi) e26.__book.Transaksi = [['id','dapur','tanggal','no_bukti','jenis','kategori','uraian','sumber','riil','unriil','bukti_url','catatan','user','periode_id','link']];
+    e26.__book.Transaksi.push(['TH-SYNC-1', 'D001', '2026-10-15', 'HR-SYNC-1', 'Operasional', 'Gaji/honor relawan pekerja SPPG', 'Honor relawan 15 Okt', 'VA', 220000, 220000, 'https://drive.google.com/hr1', '', 'U2', 'P1', '']);
+    delete e26.__cache['sh:Transaksi'];
+    r = call(e26, 'POST', { action: 'getDataLPDH', token: tPic, dapur: 'D001', tanggal: '2026-10-15' });
+    const txLpdhRl = r.ok && r.data.transaksi.find(t => t.id === 'TH-SYNC-1');
+    ok(txLpdhRl && Array.isArray(txLpdhRl.relawan) && txLpdhRl.relawan.length === 2 && txLpdhRl.relawanDariAslap === true
+      && txLpdhRl.relawan.some(x => x.nama === 'AB (pengganti Relawan A)') && txLpdhRl.relawan.some(x => x.nama === 'Relawan B'),
+      'getDataLPDH otomatis sinkron 2 relawan dari kehadiran Aslap tanpa PIC mengisi ulang');
+    const rbSync = call(e26, 'POST', { action: 'getRelawanBayar', token: tPic, transaksi_id: 'TH-SYNC-1' });
+    ok(rbSync.ok && rbSync.data.rows.length === 2 && /Aslap/i.test(rbSync.data.sumber),
+      'getRelawanBayar juga otomatis menarik daftar hadir relawan dari Aslap');
   }
 
   console.log(fails ? '\n' + fails + ' GAGAL' : '\nSEMUA LULUS');

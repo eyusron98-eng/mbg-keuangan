@@ -16,7 +16,9 @@
   .num { font-variant-numeric: tabular-nums; }
 
   /* Kenyamanan: fokus jelas, sentuhan responsif, animasi halus */
-  input, select, textarea { transition: border-color .15s ease, box-shadow .15s ease, background-color .15s ease; }
+  input, select, textarea { transition: border-color .15s ease, box-shadow .15s ease, background-color .15s ease; max-width: 100%; min-width: 0; }
+  input[type="date"] { -webkit-appearance: none; appearance: none; max-width: 100%; min-width: 0; width: 100%; display: block; }
+  .grid > * { min-width: 0; }
   input:focus, select:focus, textarea:focus { border-color: #15663E !important; box-shadow: 0 0 0 3px rgba(21,102,62,0.14); }
   button:focus-visible, a:focus-visible { outline: 2px solid #15663E; outline-offset: 2px; }
   button { transition: transform .08s ease, opacity .15s ease, background-color .15s ease, box-shadow .15s ease, border-color .15s ease; }
@@ -194,15 +196,15 @@ async function kirimDenganSesi(kirim) {
 // - Muat ulang halaman (F5): tampil instan 0 ms dari cache localStorage sambil diperbarui di latar belakang.
 // - Otomatis dibersihkan setiap kali ada aksi tulis/ubah data atau ganti sesi/peran.
 const READ_CACHE_TTL = {
-  getDapur: 300000, getKategori: 300000, getLogoKop: 300000, getBankVA: 300000,
-  getPenandatangan: 180000, getTtd: 180000, getTtdPengesahan: 180000,
-  getPenerima: 120000, getDataPenerima: 120000,
-  getPeriodeList: 60000, getActivePeriode: 60000, getVATopups: 60000, getPettyTopups: 60000,
-  getDashboard: 45000, getTransaksi: 45000, getTxChanges: 45000,
-  getPengajuan: 30000, getBADaftar: 45000, getBeritaAcara: 60000,
-  getRencanaOps: 45000, getPaguOps: 45000,
-  getDataLPDH: 45000, getHarianLPDH: 45000, getRelawanTetap: 60000, getRelawanBayar: 60000,
-  getKwitansiHarian: 30000, getTugasHarian: 30000, getUsers: 60000,
+  getDapur: 600000, getKategori: 600000, getLogoKop: 600000, getBankVA: 600000,
+  getPenandatangan: 300000, getTtd: 300000, getTtdPengesahan: 300000,
+  getPenerima: 300000, getDataPenerima: 300000,
+  getPeriodeList: 180000, getActivePeriode: 180000, getVATopups: 180000, getPettyTopups: 180000,
+  getDashboard: 120000, getTransaksi: 120000, getTxChanges: 120000,
+  getPengajuan: 90000, getBADaftar: 120000, getBeritaAcara: 180000,
+  getRencanaOps: 120000, getPaguOps: 120000,
+  getDataLPDH: 120000, getHarianLPDH: 120000, getRelawanTetap: 180000, getRelawanBayar: 120000,
+  getKwitansiHarian: 90000, getTugasHarian: 90000, getUsers: 180000,
 };
 const API_STORAGE_KEY = 'mbg_api_cache_v2';
 const API_STORAGE_TTL = 600000;   // 10 menit di localStorage
@@ -510,12 +512,12 @@ function JourneyHeader({ peranLabel, judul, sub, tanggal, onTanggal, tanggalAria
 }
 function JourneyStepper({ steps, activeStep, onSelect }) {
   return <div className="rounded-2xl p-1.5" style={{ background: '#ECE9DF', border: '1px solid rgba(23,42,31,0.06)' }}>
-    <div className={'grid gap-1.5 ' + (steps.length === 4 ? 'grid-cols-2 sm:grid-cols-4' : 'grid-cols-3')}>
+    <div className={'grid gap-1.5 ' + (steps.length === 4 ? 'grid-cols-2 sm:grid-cols-4' : 'grid-cols-1 sm:grid-cols-3')}>
       {steps.map(function(st) {
         const no = st.no, aktif = activeStep === no, boleh = st.unlocked !== false, done = !!st.done;
         return <button key={no} type="button" disabled={!boleh} onClick={function() { if (boleh) onSelect(no); }}
           data-active={aktif ? 'true' : 'false'} data-done={done ? 'true' : 'false'}
-          className="rounded-xl px-3 py-2.5 text-left transition flex flex-col justify-between"
+          className="rounded-xl px-3 py-2.5 text-left transition flex sm:flex-col items-center sm:items-stretch justify-between gap-2 sm:gap-1"
           style={{
             background: aktif ? '#FFFFFF' : done ? 'rgba(255,255,255,0.68)' : 'transparent',
             color: aktif ? COLORS.ink : done ? COLORS.deep : COLORS.muted,
@@ -523,23 +525,27 @@ function JourneyStepper({ steps, activeStep, onSelect }) {
             border: aktif ? '1px solid rgba(21,102,62,0.22)' : '1px solid transparent',
             opacity: boleh ? 1 : 0.55,
           }}>
-          <div className="flex items-center justify-between gap-1.5 mb-1">
-            <span className="inline-flex items-center justify-center rounded-full text-[11px] font-extrabold"
+          <div className="flex items-center gap-2 sm:justify-between min-w-0 flex-1 sm:flex-initial">
+            <span className="inline-flex items-center justify-center rounded-full text-[11px] font-extrabold shrink-0"
               style={{
-                width: 22, height: 22,
+                width: 24, height: 24,
                 background: aktif ? COLORS.green : done ? '#D8EFE1' : 'rgba(23,42,31,0.08)',
                 color: aktif ? '#fff' : done ? COLORS.green : COLORS.ink,
               }}>
               {done && !aktif ? '✓' : !boleh ? '🔒' : no}
             </span>
-            {st.statusText && <span className="text-[10px] font-bold px-2 py-0.5 rounded-full truncate"
+            <div className="sm:hidden min-w-0 flex-1">
+              <div className="text-xs font-extrabold leading-tight truncate" style={{ color: aktif ? COLORS.green : COLORS.ink }}>{st.label}</div>
+              {st.sub && <div className="text-[11px] truncate" style={{ color: COLORS.muted }}>{st.sub}</div>}
+            </div>
+            {st.statusText && <span className="text-[10px] font-bold px-2 py-0.5 rounded-full whitespace-nowrap shrink-0"
               style={{
                 background: aktif ? '#EAF4EE' : done ? '#EAF4EE' : 'rgba(23,42,31,0.05)',
                 color: aktif || done ? COLORS.green : COLORS.muted,
               }}>{st.statusText}</span>}
           </div>
-          <div className="text-xs font-extrabold leading-tight" style={{ color: aktif ? COLORS.green : COLORS.ink }}>{st.label}</div>
-          {st.sub && <div className="text-[10.5px] mt-0.5 truncate" style={{ color: COLORS.muted }}>{st.sub}</div>}
+          <div className="hidden sm:block text-xs font-extrabold leading-tight" style={{ color: aktif ? COLORS.green : COLORS.ink }}>{st.label}</div>
+          {st.sub && <div className="hidden sm:block text-[10.5px] truncate" style={{ color: COLORS.muted }}>{st.sub}</div>}
         </button>;
       })}
     </div>
@@ -2817,7 +2823,7 @@ function LpdhPage({ session, scope, toast }) {
 
     <Card>
       <div className="font-bold mb-3" style={{ color: COLORS.ink }}>Buat LPDH harian</div>
-      <div className="grid grid-cols-2 gap-2">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-3">
         <Field label="Tanggal pelayanan"><input type="date" value={tanggal} onChange={function(e) { setTanggal(e.target.value); }} style={inputStyle}/></Field>
         <Field label="Status hari">
           <select value={opsi.statusHari} onChange={function(e) { setOpsi(Object.assign({}, opsi, { statusHari: e.target.value })); }} style={inputStyle}>
@@ -2847,7 +2853,7 @@ function LpdhPage({ session, scope, toast }) {
           <div className="flex items-center justify-between gap-2">
             <div>
               <div className="text-sm font-semibold" style={{ color: COLORS.ink }}>Porsi POP/Fleet & syarat insentif</div>
-              <div className="text-xs" style={{ color: data.harian ? COLORS.green : '#9A6A0B' }}>{data.harian ? 'Sudah diisi untuk tanggal ini' : 'Belum diisi untuk tanggal ini (diisi PIC)'}</div>
+              <div className="text-xs" style={{ color: data.harian ? COLORS.green : '#9A6A0B' }}>{data.harian ? 'Sudah diisi untuk tanggal ini' : 'Belum diisi untuk tanggal ini (diisi Aslap/PIC)'}</div>
             </div>
             {bisaIsi && <Btn size="sm" kind={data.harian ? 'ghost' : 'solid'} onClick={function() { setEditHarian(true); }}>{data.harian ? I.edit : I.plusSm} {data.harian ? 'Ubah' : 'Isi'}</Btn>}
           </div>
@@ -2856,7 +2862,7 @@ function LpdhPage({ session, scope, toast }) {
           <div className="text-sm font-semibold" style={{ color: COLORS.ink }}>Saldo VA menurut rekening (akhir hari)</div>
           <div className="text-xs mb-2" style={{ color: COLORS.muted }}>Ketik dari mobile banking / rekening koran — bukan dari aplikasi, agar cek PPK "saldo komponen = saldo VA" benar-benar menguji. Saldo menurut aplikasi: <b className="num">{fmt(saldoAkhirApp)}</b></div>
           {bisaLengkapi ? <>
-            <div className="grid grid-cols-2 gap-2">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
               <RupiahInput value={saldoRek.saldo_va} onChange={function(v) { setSaldoRek(Object.assign({}, saldoRek, { saldo_va: v })); }} label="Saldo VA rekening"/>
               <Btn onClick={simpanSaldoRek} disabled={simpanSaldo || saldoRek.saldo_va === ''}>{simpanSaldo ? I.spinner : I.check} Simpan saldo</Btn>
             </div>
@@ -2882,7 +2888,7 @@ function LpdhPage({ session, scope, toast }) {
                   : k.ttd_otomatis ? 'Kuitansi bertanda tangan dibuat otomatis saat LPDH diunduh'
                   : ttd ? <>Kuitansi bertanda tangan Mitra ✓ {k.ttd_url && <a href={k.ttd_url} target="_blank" rel="noopener" className="underline">lihat</a>}</> : 'TTD akuntan / PIC belum diunggah di Profil — kuitansi belum bisa ditandatangani otomatis'}</div></div>
               <div className="flex flex-col gap-1 shrink-0">
-                {bisaIsi && <label className="inline-flex items-center justify-center gap-1 rounded-lg px-3 py-2 text-xs font-semibold cursor-pointer" style={{ background: ttd ? 'transparent' : COLORS.green, color: ttd ? COLORS.green : '#fff', border: '1px solid ' + (ttd ? COLORS.line : COLORS.green), minHeight: 36 }}>
+                {bisaIsi && <label className="inline-flex items-center justify-center gap-1 rounded-lg px-3 py-2 text-xs font-semibold cursor-pointer whitespace-nowrap" style={{ background: ttd ? 'transparent' : COLORS.green, color: ttd ? COLORS.green : '#fff', border: '1px solid ' + (ttd ? COLORS.line : COLORS.green), minHeight: 36 }}>
                   {unggahTtd === t.id ? I.spinner : I.camera} {ttd ? 'Ganti ttd' : 'Unggah ttd'}
                   <input type="file" accept="image/*,application/pdf" className="hidden" aria-label={'Unggah kuitansi ttd ' + t.id} onChange={function(e) { if (e.target.files[0]) kirimTtd(t, e.target.files[0]); e.target.value = ''; }}/></label>}
                 {bisaLengkapi && <Btn size="sm" kind="ghost" onClick={function() { setEditInsentif(Object.assign({}, t, { insentif: Object.assign({ no_ppk: data.ppkTerakhir || '', nilai_ppk: t.riil }, k) })); }}>{ppk ? 'Ubah PPK' : 'Isi PPK'}</Btn>}
@@ -2890,14 +2896,16 @@ function LpdhPage({ session, scope, toast }) {
             </div>
           </div>; })}
         </div>}
-        {bisaIsi && <div className="mt-3 pt-3 flex items-center justify-between gap-2" style={{ borderTop: '1px solid ' + COLORS.line }}>
-          <div className="text-xs" style={{ color: COLORS.muted }}>Nama, tugas & upah relawan bisa diatur kapan saja.</div>
-          <Btn size="sm" kind="ghost" onClick={function() { setRelawanTetap(true); }}>{I.users} Daftar relawan tetap</Btn></div>}
+        {bisaLengkapi && <div className="mt-3 pt-3 flex flex-wrap items-center justify-between gap-2" style={{ borderTop: '1px solid ' + COLORS.line }}>
+          <div className="text-xs flex-1 min-w-0" style={{ color: COLORS.muted }}>Nama, tugas &amp; upah relawan bisa diatur kapan saja.</div>
+          <div className="shrink-0"><Btn size="sm" kind="ghost" onClick={function() { setRelawanTetap(true); }}>{I.users} <span className="whitespace-nowrap">Daftar relawan tetap</span></Btn></div></div>}
         {grup.rl.length > 0 && <div className="mt-3 pt-3" style={{ borderTop: '1px solid ' + COLORS.line }}>
           <div className="text-sm font-semibold mb-1" style={{ color: COLORS.ink }}>Daftar penerima honor relawan</div>
           {grup.rl.map(function(t) { return <div key={t.id} className="flex items-center justify-between gap-2 py-1.5 text-sm">
             <div className="min-w-0"><div className="truncate" style={{ color: COLORS.ink }}>{t.uraian}</div>
-              <div className="text-xs" style={{ color: t.relawan ? COLORS.green : '#9A6A0B' }}>{fmt(t.riil)} · {t.relawan ? t.relawan.length + ' relawan' : 'daftar belum diisi'}</div></div>
+              <div className="text-xs" style={{ color: t.relawan ? COLORS.green : '#9A6A0B' }}>
+                {fmt(t.riil)} · {t.relawan ? (t.relawan.length + ' relawan' + (t.relawanDariAslap ? ' ✓ (sinkron dari Aslap)' : '')) : 'daftar belum diisi'}
+              </div></div>
             {bisaIsi && <Btn size="sm" kind={t.relawan ? 'ghost' : 'solid'} onClick={function() { setEditRelawan(t); }}>{t.relawan ? 'Ubah' : 'Isi'}</Btn>}
           </div>; })}
         </div>}
@@ -7148,8 +7156,10 @@ function AkuntanJourneyPage({ session, scope, toast, onBuka }) {
   const [bukaPanelLpdh, setBukaPanelLpdh] = useState(false);
 
   useEffect(function() {
-    api('getKategori').then(function(r) { if (r.ok && r.data) setKategoriOps(r.data['Operasional'] || []); });
-  }, []);
+    if (editRoItem && !kategoriOps.length) {
+      api('getKategori').then(function(r) { if (r.ok && r.data) setKategoriOps(r.data['Operasional'] || []); });
+    }
+  }, [editRoItem]);
 
   function load() {
     if (!dapurId) return;
@@ -8494,16 +8504,19 @@ function App() {
   useEffect(function() {
     if (session) {
       const sc = session.user.dapur || 'ALL';
+      const rNow = session.user.role;
       setScope(sc);
-      api('getDapur').then(function(r){ if (r.ok) setDapurList(r.data); });
+      // Hanya peran multi-dapur (admin/yayasan/asisten) yang perlu daftar semua dapur saat login
+      if (rNow === 'admin' || rNow === 'yayasan' || rNow === 'asisten') {
+        api('getDapur').then(function(r){ if (r.ok) setDapurList(r.data); });
+      }
       // Pra-muat hanya yang benar-benar diperlukan peran agar beban awal ringan
       const t = setTimeout(function() {
-        const rNow = session.user.role;
         if (Object.keys(_apiInflight).length === 0 && rNow !== 'aslap' && rNow !== 'pic') {
           if (rNow === 'akuntan' || rNow === 'asisten' || rNow === 'admin') api('getKategori');
           if (rNow !== 'asisten') api('getPeriodeList', { role: rNow, dapur: sc, scope: sc });
         }
-      }, 1500);
+      }, 1800);
       return function() { clearTimeout(t); };
     }
   }, [authSession, actAs]);
@@ -8708,19 +8721,19 @@ function App() {
       </div>
 
       <nav id="nav-bawah" className="vv-bawah md:hidden fixed bottom-0 left-0 right-0 z-30 flex no-print"
-        style={{ background: COLORS.surface, borderTop: '1px solid ' + COLORS.line, paddingBottom: 'env(safe-area-inset-bottom, 0px)', overflowX: 'auto', overflowY: 'hidden', WebkitOverflowScrolling: 'touch' }}>
+        style={{ background: 'rgba(255,255,255,0.96)', backdropFilter: 'blur(10px)', borderTop: '1px solid ' + COLORS.line, paddingBottom: 'env(safe-area-inset-bottom, 0px)', overflowX: 'auto', overflowY: 'hidden', WebkitOverflowScrolling: 'touch' }}>
         <div className="flex" style={{ width: navItems.length > 5 ? 'max-content' : '100%', minWidth: '100%' }}>
           {kategoriGroups.map(function(kat, gi) {
-            return <div key={kat.id} className="flex items-stretch" style={{ borderLeft: gi > 0 ? '1px solid ' + COLORS.line : 'none' }}>
+            return <div key={kat.id} className="flex items-stretch" style={{ flex: navItems.length > 5 ? '0 0 auto' : (kat.items.length + ' 1 0'), borderLeft: gi > 0 ? '1px solid ' + COLORS.line : 'none' }}>
               {kat.items.map(function(item){
                 const k = item[0], label = item[1], icon = item[2];
                 const active = view === k;
                 return <button key={k} onClick={function(){setView(k);}}
-                  className="flex flex-col items-center justify-center gap-0.5 py-2 shrink-0"
+                  className="flex flex-col items-center justify-center gap-0.5 py-2 px-1.5 shrink-0"
                   style={{ color: active?COLORS.green:COLORS.muted, flex: navItems.length > 5 ? '0 0 auto' : '1 1 0',
-                           width: navItems.length > 5 ? 68 : 'auto', minWidth: navItems.length > 5 ? 68 : 0,
+                           minWidth: navItems.length > 5 ? 74 : 0,
                            borderTop: active ? '2px solid ' + COLORS.green : '2px solid transparent' }}>
-                  {icon}<span className="text-[11px] font-medium whitespace-nowrap leading-none mt-0.5">{label}</span>
+                  {icon}<span className="text-[11px] font-semibold whitespace-nowrap leading-none mt-0.5">{label}</span>
                 </button>;
               })}
             </div>;
