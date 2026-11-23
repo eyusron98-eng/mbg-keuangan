@@ -50,7 +50,7 @@ function makeServer(opts) {
   const log = { urls: [], posts: [], createCount: 0, lazy: [] };
   function handle(action, p, isPost) {
     switch (action) {
-      case 'login': return { ok: true, data: { token: 'tok', user: { id: 'u1', nama: 'Siti', username: p.username, role: opts.role, dapur: (opts.role === 'akuntan' || opts.role === 'pic') ? 'D1' : '' } } };
+      case 'login': return { ok: true, data: { token: 'tok', user: { id: 'u1', nama: 'Siti', username: p.username, role: opts.role, dapur: (opts.role === 'akuntan' || opts.role === 'pic' || opts.role === 'aslap') ? 'D1' : '' } } };
       case 'getDapur': return { ok: true, data: [{ id: 'D1', nama: 'SPPG Satu', kode: 'S1' }, { id: 'D2', nama: 'SPPG Dua', kode: 'S2' }] };
       case 'getPeriodeList': return { ok: true, data: p.scope === 'D2' ? [{ id: 'P9', periode_no: 3, dapur: 'D2', status: 'AKTIF', tanggal_mulai: '2026-10-05', tanggal_akhir: '2026-10-25', penerima: 50, saldoVA: 3000000, saldoPettyAwal: 0 }] : [P1, P2] };
       case 'getActivePeriode': return { ok: true, data: P2 };
@@ -717,12 +717,12 @@ async function isiBahanBaku(page, uraian, volume, harga) {
     await page.waitForSelector('header');
     await page.click('nav:visible >> text=Kwitansi');
     await page.waitForSelector('text=Relawan dicentang sesuai kehadiran');
-    await page.waitForSelector('text=2 kwitansi');
+    await page.waitForSelector('text=2 orang hadir');
     await page.fill('[aria-label="PM Bu Rina"]', '40');
     await page.check('[aria-label="Pilih Joko"]');
-    await page.waitForSelector('text=3 kwitansi');
+    await page.waitForSelector('text=3 orang hadir');
     await page.uncheck('[aria-label="Pilih Joko"]');
-    const [dl] = await Promise.all([page.waitForEvent('download'), page.click('button:has-text("Terbitkan & unduh PDF")')]);
+    const [dl] = await Promise.all([page.waitForEvent('download'), page.click('button:has-text("Unduh PDF Kwitansi sekarang")')]);
     const k = globalThis.__kw;
     assert(k.rows.length === 2 && k.rows.find(r => r.penerima_id === 'K1').pm === 40 && k.rows.find(r => r.penerima_id === 'R1').nominal === 150000, 'kiriman salah: ' + JSON.stringify(k.rows));
     assert(/^Kwitansi_CPJ02_\d{4}-\d{2}-\d{2}\.pdf$/.test(dl.suggestedFilename()), 'nama file: ' + dl.suggestedFilename());
@@ -1539,6 +1539,48 @@ async function isiBahanBaku(page, uraian, volume, harga) {
     const sent = srv.log.posts.find(x => x.action === 'decideBackdatePengajuan');
     assert(sent && sent.params.pengajuan_id === 'PBD1' && sent.params.status === 'DISETUJUI' && sent.params.catatan === 'Nota fisik valid',
       'decideBackdatePengajuan tidak terkirim benar: ' + JSON.stringify(sent));
+  });
+
+  all &= await run('Aslap: kehadiran tanpa nominal per orang + pengganti + simpan tanpa PDF + Pengiriman POP sederhana', { role: 'aslap',
+    override: (a, m, p) => a === 'getKwitansiHarian' ? { ok: true, data: {
+        bisaUbah: true, sembunyiNominal: true, sudahTerbit: 0, adaParafAslap: true,
+        totalPilih: { RELAWAN: 220000, PIC_SEKOLAH: 0, KADER: 0 },
+        tercatat: { RELAWAN: 220000, PIC_SEKOLAH: 0, KADER: 0 },
+        anggaran: { RELAWAN: 220000, PIC_SEKOLAH: 0, KADER: 0 },
+        rows: [
+          { penerima_id: 'DP1', jenis: 'RELAWAN', nama: 'Relawan A', jabatan: 'Masak', lembaga: '', ada_ttd: true, pm: 0, nominal: null, pengganti: '', pilih: true },
+          { penerima_id: 'DP2', jenis: 'RELAWAN', nama: 'Relawan B', jabatan: 'Cuci', lembaga: '', ada_ttd: true, pm: 0, nominal: null, pengganti: '', pilih: true },
+        ] } }
+      : a === 'terbitkanKwitansi' ? { ok: true, data: { sudahTerbit: 2, totalPilih: { RELAWAN: 220000, PIC_SEKOLAH: 0, KADER: 0 }, anggaran: { RELAWAN: 220000, PIC_SEKOLAH: 0, KADER: 0 } } }
+      : a === 'getHarianLPDH' ? { ok: true, data: { sumber: 'disalin dari 2026-10-14', pmRencana: 100, data: {
+          sekolah: [
+            { nama: 'SDN A', jenjang: 'SD', besar: 30, kecil: 20, dikirim: true },
+            { nama: 'SDN B', jenjang: 'SD', besar: 40, kecil: 10, dikirim: true },
+            { nama: 'SDN C', jenjang: 'SD', besar: 25, kecil: 25, dikirim: true },
+          ], pm: [], produksi: {}, syarat: {} } } }
+      : a === 'saveHarianLPDH' ? { ok: true } : null }, async (page, srv) => {
+    await login(page, 'aslap1');
+    await page.waitForSelector('text=Kehadiran Relawan, PIC & Posyandu');
+    // Tidak ada input nominal per orang untuk Aslap
+    assert((await page.locator('[aria-label^="Nominal "]').count()) === 0, 'Aslap tidak boleh melihat input nominal per orang');
+    // Catat pengganti AB untuk Relawan A
+    await page.click('button:has-text("Diganti?") >> nth=0');
+    await page.fill('[aria-label="Pengganti Relawan A"]', 'AB');
+    await page.click('button:has-text("Simpan Kehadiran")');
+    await page.waitForSelector('text=Kehadiran tersimpan');
+    const kwSent = srv.log.posts.find(x => x.action === 'terbitkanKwitansi');
+    assert(kwSent && kwSent.params.simpan_saja === true && kwSent.params.rows[0].pengganti === 'AB',
+      'terbitkanKwitansi simpan_saja + pengganti tidak terkirim benar: ' + JSON.stringify(kwSent));
+    // Pindah ke Pengiriman POP: hilangkan centang SDN A (tidak dihapus), total PM jadi 100 cocok dengan pmRencana=100
+    await page.click('nav:visible >> text=Pengiriman POP');
+    await page.waitForSelector('text=Pengiriman Ompreng / POP Harian');
+    await page.uncheck('[aria-label="Dikirim SDN A"]');
+    await page.waitForSelector('text=cocok dengan PM Rencana Ops Akuntan');
+    await page.click('button:has-text("Simpan Pengiriman POP")');
+    await page.waitForSelector('text=Pengiriman POP disimpan');
+    const popSent = srv.log.posts.find(x => x.action === 'saveHarianLPDH');
+    assert(popSent && popSent.params.data.sekolah.length === 3 && popSent.params.data.sekolah[0].dikirim === false && popSent.params.data.produksi.total === 100,
+      'saveHarianLPDH harus menyimpan 3 sekolah basis (SDN A dikirim=false) & total=100: ' + JSON.stringify(popSent && popSent.params.data));
   });
 
   console.log(all ? 'SEMUA LULUS' : 'ADA YANG GAGAL');

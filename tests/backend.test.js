@@ -1255,6 +1255,70 @@ const ok = (c, m) => { console.log((c ? 'PASS ' : 'FAIL ') + m); if (!c) fails++
       'getPaguOps setelah BB TEREALISASI: terpakai=19.500 & cadanganBB=0 (tidak ada sisa estimasi)');
   }
 
+  // 26. Peran Aslap: kehadiran (tanpa lihat gaji per orang), pengganti + paraf Aslap, POP dengan basis sekolah tetap (dikirim=true/false)
+  {
+    const e26 = makeEnv([
+      ['U1', 'adm', 'AdmPass1', 'Admin', 'admin', '', 'YA'],
+      ['U2', 'akn', 'AknPass1', 'Akuntan', 'akuntan', 'D001', 'YA'],
+      ['U3', 'pic', 'PicPass1', 'PIC', 'pic', 'D001', 'YA'],
+      ['U4', 'asl', 'AslPass1', 'Aslap D1', 'aslap', 'D001', 'YA'],
+    ]);
+    e26.__today = '2026-10-15';
+    const tok = (u, p) => call(e26, 'POST', { action: 'login', username: u, password: p }).data.token;
+    const tAkn = tok('akn', 'AknPass1'), tPic = tok('pic', 'PicPass1'), tAsl = tok('asl', 'AslPass1');
+
+    // PIC menambah 2 relawan master
+    const dp1 = call(e26, 'POST', { action: 'saveDataPenerima', token: tPic, jenis: 'RELAWAN', nama: 'Relawan A', jabatan: 'Masak', nominal: 100000 }).data.id;
+    const dp2 = call(e26, 'POST', { action: 'saveDataPenerima', token: tPic, jenis: 'RELAWAN', nama: 'Relawan B', jabatan: 'Cuci', nominal: 120000 }).data.id;
+
+    // Aslap menyimpan parafnya sendiri
+    let r = call(e26, 'POST', { action: 'saveTtd', token: tAsl, fileData: 'data:image/png;base64,iVBORw0KGgo=' });
+    ok(r.ok, 'Aslap dapat menyimpan paraf/TTD sendiri');
+
+    // Aslap membuka kehadiran: tidak melihat nominal per orang (nominal === null), tapi melihat totalPilih & anggaran
+    r = call(e26, 'POST', { action: 'getKwitansiHarian', token: tAsl, tanggal: '2026-10-15' });
+    ok(r.ok && r.data.sembunyiNominal === true && r.data.rows.every(x => x.nominal === null) && r.data.totalPilih.RELAWAN === 220000 && r.data.adaParafAslap === true,
+      'Aslap tidak melihat gaji per orang, hanya total (220.000) & status paraf');
+
+    // Aslap mencatat kehadiran: Relawan A diganti oleh AB, Relawan B hadir normal (simpan_saja tanpa unduh PDF)
+    r = call(e26, 'POST', { action: 'terbitkanKwitansi', token: tAsl, tanggal: '2026-10-15', simpan_saja: true,
+      rows: [{ penerima_id: dp1, pengganti: 'AB' }, { penerima_id: dp2, pengganti: '' }] });
+    ok(r.ok && r.data.sudahTerbit === 2 && r.data.totalPilih.RELAWAN === 220000, 'Aslap simpan kehadiran dengan pengganti AB berhasil');
+
+    // Hari berikutnya (2026-10-16): basis data tetap Relawan A (bukan AB)
+    r = call(e26, 'POST', { action: 'getKwitansiHarian', token: tAsl, tanggal: '2026-10-16' });
+    ok(r.ok && r.data.rows.some(x => x.penerima_id === dp1 && x.nama === 'Relawan A' && x.pengganti === ''),
+      'hari berikutnya basis data tetap Relawan A (pengganti hanya untuk tanggal itu)');
+
+    // Saat PIC cetak/unduh LPDH untuk 2026-10-15: baris pengganti memakai nama "AB (pengganti Relawan A)" & paraf Aslap
+    r = call(e26, 'POST', { action: 'getKwitansiCetak', token: tPic, tanggal: '2026-10-15', jenis: 'RELAWAN' });
+    const rowSub = r.ok && r.data.rows.find(x => x.penerima_id === dp1);
+    ok(rowSub && rowSub.nama === 'AB (pengganti Relawan A)' && rowSub.paraf_aslap === true && !!rowSub.ttd,
+      'getKwitansiCetak: pengganti menampilkan "AB (pengganti Relawan A)" + paraf Aslap');
+
+    // Aslap mencatat POP: 4 sekolah (A, B, C, D), tapi hari Selasa sekolah A tidak dikirim (dikirim=false)
+    r = call(e26, 'POST', { action: 'saveHarianLPDH', token: tAsl, tanggal: '2026-10-15', data: {
+      sekolah: [
+        { nama: 'SDN A', jenjang: 'SD', besar: 30, kecil: 20, dikirim: false },
+        { nama: 'SDN B', jenjang: 'SD', besar: 40, kecil: 10, dikirim: true },
+        { nama: 'SDN C', jenjang: 'SD', besar: 25, kecil: 25, dikirim: true },
+      ],
+      pm: [{ kode: 'KS-02', target: 35, distribusi: 35, diterima: 35, tidak: 0 }, { kode: 'KS-03', target: 65, distribusi: 65, diterima: 65, tidak: 0 }],
+      produksi: { total: 100 }, syarat: {}
+    } });
+    ok(r.ok, 'Aslap dapat menyimpan POP harian dengan sekolah dikirim=false');
+
+    // Hari berikutnya (2026-10-16): disalin dari 2026-10-15, SDN A tetap ada di basis data, dan pmRencana=100 (dari setup)
+    r = call(e26, 'POST', { action: 'getHarianLPDH', token: tAsl, tanggal: '2026-10-16' });
+    ok(r.ok && r.data.data.sekolah.length === 3 && r.data.data.sekolah[0].nama === 'SDN A' && r.data.pmRencana === 100,
+      'basis data sekolah (termasuk SDN A yang tidak dikirim) tetap tersimpan untuk hari berikutnya + pmRencana=100');
+
+    // getRencanaOps mengembalikan pmPop = 100 (hanya sekolah yang dikirim: B + C)
+    r = call(e26, 'POST', { action: 'getRencanaOps', token: tAkn });
+    ok(r.ok && r.data.pmPop && r.data.pmPop['2026-10-15'] === 100,
+      'getRencanaOps membawa pmPop=100 (hanya sekolah yang dikirim) untuk dicocokkan Akuntan');
+  }
+
   console.log(fails ? '\n' + fails + ' GAGAL' : '\nSEMUA LULUS');
   process.exit(fails ? 1 : 0);
 })();
