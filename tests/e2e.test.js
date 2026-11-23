@@ -1550,14 +1550,14 @@ async function isiBahanBaku(page, uraian, volume, harga) {
           { penerima_id: 'DP1', jenis: 'RELAWAN', nama: 'Relawan A', jabatan: 'Masak', lembaga: '', ada_ttd: true, pm: 0, nominal: null, pengganti: '', pilih: true },
           { penerima_id: 'DP2', jenis: 'RELAWAN', nama: 'Relawan B', jabatan: 'Cuci', lembaga: '', ada_ttd: true, pm: 0, nominal: null, pengganti: '', pilih: true },
           { penerima_id: 'PIC1', jenis: 'PIC_SEKOLAH', nama: 'Pak Budi', jabatan: '', lembaga: 'SDN A', ada_ttd: true, pm: 50, nominal: null, pengganti: '', pilih: true },
-          { penerima_id: 'PIC2', jenis: 'PIC_SEKOLAH', nama: 'Bu Ani', jabatan: '', lembaga: 'SDN B', ada_ttd: true, pm: 50, nominal: null, pengganti: '', pilih: true },
+          { penerima_id: 'PIC2', jenis: 'PIC_SEKOLAH', nama: 'Bu Ani', jabatan: '', lembaga: 'Kb Raudhotussalikin', ada_ttd: true, pm: 50, nominal: null, pengganti: '', pilih: true },
         ] } }
       : a === 'terbitkanKwitansi' ? { ok: true, data: { sudahTerbit: p.rows.length, totalPilih: { RELAWAN: 220000, PIC_SEKOLAH: 50000, KADER: 0 }, anggaran: { RELAWAN: 220000, PIC_SEKOLAH: 50000, KADER: 0 } } }
       : a === 'getHarianLPDH' ? { ok: true, data: { sumber: 'disalin dari 2026-10-14', pmRencana: 110, data: {
           sekolah: [
             { nama: 'SDN A', jenjang: 'SD', besar: 30, kecil: 20, dikirim: true },
-            { nama: 'SDN B', jenjang: 'SD', besar: 40, kecil: 10, dikirim: true },
-            { nama: 'SDN C', jenjang: 'SD', besar: 25, kecil: 25, dikirim: true },
+            { nama: 'PAUD Raudhatus Salikin', jenjang: 'PAUD', besar: 40, kecil: 10, dikirim: true },
+            { nama: 'RA Al-Muslim', jenjang: 'PAUD', besar: 25, kecil: 25, dikirim: true },
           ], pm: [], produksi: { organoleptik: 0 }, syarat: {} } } }
       : a === 'saveHarianLPDH' ? { ok: true } : null }, async (page, srv) => {
     await login(page, 'aslap1');
@@ -1570,8 +1570,9 @@ async function isiBahanBaku(page, uraian, volume, harga) {
     await page.fill('[aria-label="Uji organoleptik"]', '10');
     await page.waitForSelector('text=Total PM diproduksi (110) cocok dengan PM Rencana Ops Akuntan');
     await page.click('button:has-text("Simpan POP & Lanjut ke PIC/Posyandu")');
-    // Langkah 2: Pak Budi (SDN A) otomatis di-uncheck + ada peringatan tidak dikirim
+    // Langkah 2: Pak Budi (SDN A) otomatis di-uncheck + Bu Ani ("Kb Raudhotussalikin") cocok dengan "PAUD Raudhatus Salikin"
     await page.waitForSelector('text=Tidak dikirim di POP (SDN A)');
+    await page.waitForSelector('text=Dikirim di POP (50 PM · PAUD Raudhatus Salikin)');
     assert(!(await page.isChecked('[aria-label="Pilih Pak Budi"]')), 'PIC sekolah tidak dikirim harus otomatis direkomendasikan kosong');
     assert(await page.isChecked('[aria-label="Pilih Bu Ani"]'), 'PIC sekolah dikirim harus tetap dicentang');
     assert((await page.locator('[aria-label^="Nominal "]').count()) === 0, 'Aslap tidak boleh melihat nominal per orang');

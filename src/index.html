@@ -3075,14 +3075,74 @@ function PopLapanganPage({ session, scope, toast }) {
 }
 
 // Pencocokan nama lembaga PIC Sekolah / Kader Posyandu dengan daftar sekolah/posyandu POP
+// Menangani variasi penulisan di lapangan: spasi ("Almuslim" vs "Al Muslim"), awalan jenjang ("KB" vs "PAUD" vs "Kober"),
+// serta variasi ejaan Arab/Indonesia ("Raudhotussalikin" vs "Raudhatus Salikin" / "Roudhotus Sholihin", "Gazzala" vs "Ghazala").
 function normSekolah(s) { return String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim(); }
+function intiSekolah(s) {
+  const n = normSekolah(s)
+    .replace(/^(paud|kober|kb|tk\s*it|tk|ra|sd\s*it|sdn|sds|sd|mi|smp\s*it|smpn|smps|smp|mtsn|mts|sman|smas|sma|smkn|smks|smk|ma|slb|pkbm|posyandu|pos\s*kb|b3)\b\s*/g, '')
+    .replace(/\b(al|ar|as|asy|at|an|az|ad|adh)\s+/g, 'al')
+    .trim();
+  return n || normSekolah(s);
+}
+function fonetikSekolah(s) {
+  return intiSekolah(s)
+    .replace(/\s+/g, '')
+    .replace(/sh/g, 's').replace(/ts/g, 's').replace(/sy/g, 's')
+    .replace(/dz/g, 'z').replace(/zh/g, 'z')
+    .replace(/dh/g, 'd').replace(/th/g, 't')
+    .replace(/kh/g, 'k').replace(/gh/g, 'g').replace(/q/g, 'k')
+    .replace(/au/g, 'o').replace(/ou/g, 'o').replace(/o/g, 'a').replace(/e/g, 'i')
+    .replace(/(.)\1+/g, '$1');
+}
+function jarakEdit(a, b) {
+  if (a === b) return 0;
+  const la = a.length, lb = b.length;
+  if (!la || !lb) return Math.max(la, lb);
+  const dp = [];
+  for (let j = 0; j <= lb; j++) dp[j] = j;
+  for (let i = 1; i <= la; i++) {
+    let prev = dp[0]; dp[0] = i;
+    for (let j = 1; j <= lb; j++) {
+      const cur = dp[j];
+      dp[j] = a.charAt(i - 1) === b.charAt(j - 1) ? prev : 1 + Math.min(prev, dp[j], dp[j - 1]);
+      prev = cur;
+    }
+  }
+  return dp[lb];
+}
 function cocokSekolahPop(lembaga, sekolahList) {
   const lb = normSekolah(lembaga);
   if (!lb || !sekolahList || !sekolahList.length) return null;
+  // 1. Sama persis
   let hit = sekolahList.find(function(s) { return normSekolah(s.nama) === lb; });
   if (hit) return hit;
-  hit = sekolahList.find(function(s) { const sn = normSekolah(s.nama); return sn && (sn.indexOf(lb) >= 0 || lb.indexOf(sn) >= 0); });
-  return hit || null;
+  // 2. Sama setelah lepas spasi ("almuslim" == "al muslim")
+  const lbRapat = lb.replace(/\s+/g, '');
+  hit = sekolahList.find(function(s) { const sr = normSekolah(s.nama).replace(/\s+/g, ''); return sr && (sr === lbRapat || sr.indexOf(lbRapat) >= 0 || lbRapat.indexOf(sr) >= 0); });
+  if (hit) return hit;
+  // 3. Sama pada nama inti tanpa awalan jenjang ("KB Al Muslim" == "RA Al-Muslim")
+  const lbInti = intiSekolah(lembaga).replace(/\s+/g, '');
+  if (lbInti.length >= 3) {
+    hit = sekolahList.find(function(s) { const si = intiSekolah(s.nama).replace(/\s+/g, ''); return si.length >= 3 && (si === lbInti || si.indexOf(lbInti) >= 0 || lbInti.indexOf(si) >= 0); });
+    if (hit) return hit;
+  }
+  // 4. Sama secara fonetik / kemiripan ejaan ("Raudhotussalikin" vs "Raudhatus Salikin" / "Roudhotus Sholihin")
+  const lbFon = fonetikSekolah(lembaga);
+  if (lbFon.length >= 4) {
+    hit = sekolahList.find(function(s) { const sf = fonetikSekolah(s.nama); return sf.length >= 4 && (sf === lbFon || sf.indexOf(lbFon) >= 0 || lbFon.indexOf(sf) >= 0); });
+    if (hit) return hit;
+    let best = null, bestDist = 999;
+    sekolahList.forEach(function(s) {
+      const sf = fonetikSekolah(s.nama);
+      if (sf.length < 4) return;
+      const d = jarakEdit(lbFon, sf);
+      const maxLen = Math.max(lbFon.length, sf.length);
+      if (d < bestDist && d <= Math.max(2, Math.floor(maxLen * 0.28))) { bestDist = d; best = s; }
+    });
+    if (best) return best;
+  }
+  return null;
 }
 
 // Journey bertahap 3 langkah khusus Aslap: 1) POP & PM → 2) PIC Sekolah & Posyandu (otomatis rekomendasi kosongkan yang tidak dikirim) → 3) Relawan
@@ -3285,7 +3345,8 @@ function AslapJourneyPage({ session, scope, toast }) {
                 </div>
                 <div className="text-[11px] truncate" style={{ color: COLORS.muted }}>{x.jenis === 'RELAWAN' ? (x.jabatan || '—') : x.lembaga}</div>
                 {tidakDikirim && <div className="text-[10.5px] font-semibold mt-0.5" style={{ color: '#9A6A0B' }}>⚠️ Tidak dikirim di POP ({matchPop.nama}) — disarankan kosongkan</div>}
-                {!tidakDikirim && matchPop && <div className="text-[10.5px] mt-0.5" style={{ color: COLORS.green }}>✓ Dikirim di POP ({fmtNoRp(pmMatch)} PM)</div>}
+                {!tidakDikirim && matchPop && <div className="text-[10.5px] mt-0.5" style={{ color: COLORS.green }}>✓ Dikirim di POP ({fmtNoRp(pmMatch)} PM{normSekolah(matchPop.nama) !== normSekolah(x.lembaga) ? ' · ' + matchPop.nama : ''})</div>}
+                {x.jenis !== 'RELAWAN' && !matchPop && d.sekolah.length > 0 && <div className="text-[10.5px] mt-0.5" style={{ color: COLORS.muted }}>ℹ️ Nama "{x.lembaga}" belum terbaca di daftar POP Langkah 1 (samakan nama bila sekolah yang sama)</div>}
               </div>
               {x.pilih && <button type="button" onClick={function() { setBukaSub(function(p) { const n = Object.assign({}, p); n[x.penerima_id] = !showSub; return n; }); if (showSub && x.pengganti) ubahKw(x.penerima_id, 'pengganti', ''); }}
                 className="text-[11px] font-semibold rounded px-2 py-1 shrink-0" style={{ color: showSub ? '#6B3FA0' : COLORS.muted, border: '1px solid ' + (showSub ? '#C9B2E3' : COLORS.line), background: showSub ? '#F3EAF8' : 'transparent' }}>
