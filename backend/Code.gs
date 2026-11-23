@@ -3717,12 +3717,14 @@ function getTugasHarian(p) {
   if (!me) return { ok: false, error: SESI_ERR };
   const dapurId = lpdhDapur(me, p.dapur), tgl = String(p.tanggal || todayStr()).substring(0, 10);
   if (!dapurId || !/^\d{4}-\d{2}-\d{2}$/.test(tgl)) return { ok: false, error: 'Pilih dapur & tanggal' };
-  // persetujuan yang menunggu (semua tanggal) di dapur ini + ringkasan pengajuan hari itu
+  // persetujuan yang menunggu khusus pada tanggal tgl di dapur ini (tanggal lain / besok tidak ditampilkan & tidak mengunci tahap berikutnya)
   const allItems = readAllItems().filter(function(i) { return i.dapur === dapurId; });
-  const menunggu = allItems.filter(function(i) { return i.status === 'DIAJUKAN'; });
   const heads = {}, headHariIds = {};
   readAllPengajuan().forEach(function(h) { heads[h.id] = h; if (h.dapur === dapurId && h.tanggal === tgl) headHariIds[h.id] = h; });
-  const tglMenunggu = {}; menunggu.forEach(function(i) { const h = heads[i.pengajuan_id]; if (h) tglMenunggu[h.tanggal] = 1; });
+  const menungguSemua = allItems.filter(function(i) { return i.status === 'DIAJUKAN'; });
+  const menunggu = menungguSemua.filter(function(i) { return !!headHariIds[i.pengajuan_id]; });
+  const lainHari = menungguSemua.length - menunggu.length;
+  const tglMenunggu = menunggu.length ? [tgl] : [];
   // porsi PM & syarat insentif hari itu
   const hr = bacaHarian(dapurId, tgl).tepat, hd = hr ? hr.data || {} : null;
   const porsi = hd ? (hd.pm || []).reduce(function(a, x) { return a + (Number(x.distribusi) || 0); }, 0) : 0;
@@ -3766,7 +3768,7 @@ function getTugasHarian(p) {
     KADER: tercatat.KADER + diajukan.KADER,
   };
   return { ok: true, data: { tanggal: tgl,
-    persetujuan: { baris: menunggu.length, nominal: menunggu.reduce(function(a, i) { return a + i.nominal + (i.biaya_admin || 0); }, 0), tanggal: Object.keys(tglMenunggu).sort(),
+    persetujuan: { baris: menunggu.length, nominal: menunggu.reduce(function(a, i) { return a + i.nominal + (i.biaya_admin || 0); }, 0), tanggal: tglMenunggu, lainHari: lainHari,
       hariIni: { total: pjHariTotal, menunggu: pjHariMenunggu, backdate: pjHariBackdate, setuju: pjHariSetuju } },
     porsi: { ada: !!hd, sekolah: nSekolah, dikirimSekolah: nSekolahDikirim, total: porsi, dikirim: porsiDikirim, diproduksi: porsiDiproduksi,
       syarat: !!(hd && hd.syarat && LPDH_SYARAT.every(function(s2) { return hd.syarat[s2]; })) },

@@ -7098,10 +7098,10 @@ function TugasHarianPage({ session, scope, toast, onBuka }) {
 
         {(step === 2 || bukaSetujuInline) && <div className="space-y-2">
           <div className="flex items-center justify-between px-1">
-            <Eyebrow>Panel Persetujuan Langsung (Tahap 2)</Eyebrow>
+            <Eyebrow>Panel Persetujuan Khusus Tanggal {fmtDDMMYYYY(tanggal)} (Tahap 2)</Eyebrow>
             <button type="button" onClick={load} className="text-xs font-semibold" style={{ color: COLORS.green }}>Segarkan status</button>
           </div>
-          <PersetujuanPage session={session} scope={dapurId} dapurList={[{ id: dapurId, nama: dapurId }]} toast={toast}/>
+          <PersetujuanPage session={session} scope={dapurId} dapurList={[{ id: dapurId, nama: dapurId }]} toast={toast} filterTanggal={tanggal} onChanged={load}/>
         </div>}
 
         {(step === 3 || bukaLpdhInline) && <div className="space-y-2">
@@ -8100,44 +8100,49 @@ function BackdateAdminCard({ h, dapurNama, toast, onDone, tutup }) {
   </Card>;
 }
 
-function PersetujuanPage({ session, scope, dapurList, toast }) {
+function PersetujuanPage({ session, scope, dapurList, toast, filterTanggal, onChanged }) {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
-  const [mode, setMode] = useState('menunggu');   // 'menunggu' | 'hari' | 'aktif' | 'lalu'
+  const [mode, setMode] = useState(filterTanggal ? 'hari' : 'menunggu');   // 'menunggu' | 'hari' | 'aktif' | 'lalu'
   const [per, setPer] = useState('');
   const [nMenunggu, setNMenunggu] = useState(null);
   const [waText, setWaText] = useState(null);
   const multi = session.user.role !== 'pic' && (!scope || scope === 'ALL');
   const scopeDapur = session.user.role === 'pic' ? '' : (scope && scope !== 'ALL' ? scope : '');
-  const periodesTutup = usePeriodeTutup(session, mode === 'lalu', scopeDapur, setPer);
+  const periodesTutup = usePeriodeTutup(session, !filterTanggal && mode === 'lalu', scopeDapur, setPer);
   const dapurMap = useMemo(function(){ const m = {}; (dapurList || []).forEach(function(d){ m[d.id] = d.nama; }); return m; }, [dapurList]);
   const load = useCallback(async function() {
-    if (mode === 'lalu' && !per) { setData({ pengajuan: [], va: {} }); setLoading(false); return; }
+    if (!filterTanggal && mode === 'lalu' && !per) { setData({ pengajuan: [], va: {} }); setLoading(false); return; }
     setLoading(true);
-    const prm = { scope: scope || 'ALL', filter: mode === 'menunggu' ? 'menunggu' : '' };
-    if (mode === 'lalu') prm.periode_id = per;
+    const prm = { scope: scope || 'ALL', filter: (!filterTanggal && mode === 'menunggu') ? 'menunggu' : '' };
+    if (!filterTanggal && mode === 'lalu') prm.periode_id = per;
     const res = await api('getPengajuan', prm);
     setLoading(false);
-    if (res.ok) { setData(res.data); if (mode === 'menunggu') setNMenunggu(res.data.pengajuan.length); }
+    if (res.ok) { setData(res.data); if (!filterTanggal && mode === 'menunggu') setNMenunggu(res.data.pengajuan.length); }
     else toast(res.error || 'Gagal memuat', 'error');
-  }, [scope, mode, per]);
+  }, [scope, mode, per, filterTanggal]);
   useEffect(function(){ setData(null); load(); }, [load]);
+  function onCardDone() { load(); if (onChanged) onChanged(); }
 
-  const hariIni = todayISO();
-  const list = !data ? null : mode === 'hari' ? data.pengajuan.filter(function(h){ return h.tanggal === hariIni; }) : data.pengajuan;
+  const hariIni = filterTanggal || todayISO();
+  const list = !data ? null
+    : filterTanggal ? data.pengajuan.filter(function(h){ return h.tanggal === filterTanggal; })
+    : mode === 'hari' ? data.pengajuan.filter(function(h){ return h.tanggal === hariIni; })
+    : data.pengajuan;
   const perObj = (periodesTutup || []).find(function(x){ return x.id === per; });
-  const kosong = mode === 'menunggu' ? 'Tidak ada pengajuan yang menunggu keputusan.'
+  const kosong = filterTanggal ? 'Tidak ada pengajuan untuk tanggal ' + fmtDDMMYYYY(filterTanggal) + '.'
+    : mode === 'menunggu' ? 'Tidak ada pengajuan yang menunggu keputusan.'
     : mode === 'hari' ? 'Belum ada pengajuan dengan hari H ' + fmtDDMMYYYY(hariIni) + '.'
     : mode === 'aktif' ? 'Belum ada pengajuan di periode aktif.'
     : !per ? 'Pilih periode yang sudah ditutup untuk melihat pengajuannya.' : 'Tidak ada pengajuan di periode ini.';
   function kartu(h) {
-    const tutup = mode === 'lalu' || !!h.periode_tutup;
+    const tutup = (!filterTanggal && mode === 'lalu') || !!h.periode_tutup;
     if (h.status === 'MENUNGGU_ADMIN' && session.user.role === 'admin') {
-      return <BackdateAdminCard key={h.id + '-adm-' + h.items.length} h={h} tutup={tutup} dapurNama={dapurMap[h.dapur] || h.dapur} toast={toast} onDone={load}/>;
+      return <BackdateAdminCard key={h.id + '-adm-' + h.items.length} h={h} tutup={tutup} dapurNama={dapurMap[h.dapur] || h.dapur} toast={toast} onDone={onCardDone}/>;
     }
     // Periode ditutup: baris yang masih menunggu (mis. pengajuan ganda) hanya bisa ditolak
     if (h.status === 'MENUNGGU') {
-      return <PersetujuanCard key={h.id + '-' + h.items.length} h={h} va={tutup ? null : data.va[h.dapur]} tutup={tutup} dapurNama={dapurMap[h.dapur] || h.dapur} toast={toast} onDone={load}/>;
+      return <PersetujuanCard key={h.id + '-' + h.items.length} h={h} va={tutup ? null : data.va[h.dapur]} tutup={tutup} dapurNama={dapurMap[h.dapur] || h.dapur} toast={toast} onDone={onCardDone}/>;
     }
     const bisaWa = (h.items || []).some(function(i){ return ['MENUNGGU_ADMIN', 'DIAJUKAN', 'REVISI', 'DISETUJUI', 'TEREALISASI'].indexOf(i.status) >= 0; });
     return <Card key={h.id} pad={false} className="mb-3">
@@ -8161,11 +8166,11 @@ function PersetujuanPage({ session, scope, dapurList, toast }) {
   }
 
   return <div>
-    <Card className="mb-3">
+    {!filterTanggal && <Card className="mb-3">
       <ModePeriodeBar modes={[['menunggu', 'Menunggu']].concat(MODE_PERIODE)} mode={mode} setMode={setMode} counts={{ menunggu: nMenunggu }}
         periodes={periodesTutup} per={per} setPer={setPer} multi={session.user.role !== 'pic'} dapurMap={dapurMap}/>
       <div className="flex justify-end mt-2"><Btn size="sm" kind="ghost" onClick={load}>{loading ? I.spinner : 'Muat ulang'}</Btn></div>
-    </Card>
+    </Card>}
     {!list ? <Card><div className="flex items-center gap-2 text-sm" style={{ color: COLORS.muted }}>{I.spinner} Memuat…</div></Card>
     : list.length === 0 ? <Card><div className="text-sm text-center py-6" style={{ color: COLORS.muted }}>{kosong}</div></Card>
     : multi ? kelompokDapur(list, dapurMap).map(function(grp){
