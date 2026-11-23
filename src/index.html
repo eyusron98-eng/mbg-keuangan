@@ -3204,11 +3204,14 @@ function AslapJourneyPage({ session, scope, toast }) {
           if (x.pengganti) subInit[x.penerima_id] = true;
           let pilih = x.pilih;
           let pmVal = x.pm || '';
-          if (!sudahTerbit && x.jenis !== 'RELAWAN' && sekolahSaved.length) {
+          if (x.jenis !== 'RELAWAN' && sekolahSaved.length) {
             const match = cocokSekolahPop(x.lembaga, sekolahSaved);
-            if (match) {
-              if (match.dikirim === false) pilih = false;
-              else { const totSk = (Number(match.besar) || 0) + (Number(match.kecil) || 0); if (totSk > 0) pmVal = totSk; }
+            const totSk = match ? ((Number(match.besar) || 0) + (Number(match.kecil) || 0)) : 0;
+            const dikirimPop = !!(match && match.dikirim !== false && totSk > 0);
+            if (!dikirimPop) {
+              if (!sudahTerbit) pilih = false;
+            } else {
+              pmVal = totSk;
             }
           }
           return Object.assign({}, x, { nominal: x.nominal != null ? String(x.nominal) : '', pm: String(pmVal || ''), pengganti: x.pengganti || '', pilih: pilih });
@@ -3248,16 +3251,26 @@ function AslapJourneyPage({ session, scope, toast }) {
   const selisihPM = pmRencana != null ? (totProd - pmRencana) : null;
   const tanpaJenjang = d.sekolah.filter(function(x) { return !x.jenjang; });
 
-  // Terapkan rekomendasi POP ke daftar PIC Sekolah & Kader Posyandu (yang sekolahnya tidak dikirim otomatis direkomendasikan kosong)
-  function terapkanRekomendasiPop(sekolahTerbaru) {
+  // Cek apakah seorang PIC Sekolah / Kader Posyandu dikirim hari ini menurut daftar POP Langkah 1
+  function statusPopPenerima(x, sekolahList) {
+    if (x.jenis === 'RELAWAN' || !sekolahList || !sekolahList.length) return { dikirim: true, match: null, pm: 0, alasan: '' };
+    const m = cocokSekolahPop(x.lembaga, sekolahList);
+    if (!m) return { dikirim: false, match: null, pm: 0, alasan: 'Tidak ada di daftar pengiriman POP hari ini' };
+    const pm = (Number(m.besar) || 0) + (Number(m.kecil) || 0);
+    if (m.dikirim === false || pm <= 0) return { dikirim: false, match: m, pm: 0, alasan: 'Tidak dikirim di POP (' + m.nama + ')' };
+    return { dikirim: true, match: m, pm: pm, alasan: '' };
+  }
+
+  // Terapkan rekomendasi POP ke daftar PIC Sekolah & Kader Posyandu (yang sekolah/posyandunya tidak dikirim otomatis di-uncheck)
+  function terapkanRekomendasiPop(sekolahTerbaru, filterJenis) {
+    if (!sekolahTerbaru || !sekolahTerbaru.length) return;
     setKwRows(function(prev) {
       return prev.map(function(x) {
         if (x.jenis === 'RELAWAN') return x;
-        const m = cocokSekolahPop(x.lembaga, sekolahTerbaru);
-        if (!m) return x;
-        if (m.dikirim === false) return Object.assign({}, x, { pilih: false });
-        const totSk = (Number(m.besar) || 0) + (Number(m.kecil) || 0);
-        return Object.assign({}, x, { pilih: true, pm: totSk > 0 ? String(totSk) : x.pm });
+        if (filterJenis && x.jenis !== filterJenis) return x;
+        const st = statusPopPenerima(x, sekolahTerbaru);
+        if (!st.dikirim) return Object.assign({}, x, { pilih: false });
+        return Object.assign({}, x, { pilih: true, pm: st.pm > 0 ? String(st.pm) : x.pm });
       });
     });
   }
@@ -3316,37 +3329,56 @@ function AslapJourneyPage({ session, scope, toast }) {
       const tot = (kwData.totalPilih || {})[j[0]] || 0;
       const ang = (kwData.anggaran || kwData.tercatat || {})[j[0]] || 0;
       const beda = (ang > 0 || tot > 0) && ang !== tot;
-      const tidakDikirimCount = j[0] !== 'RELAWAN' ? g.filter(function(x) { const m = cocokSekolahPop(x.lembaga, d.sekolah); return m && m.dikirim === false; }).length : 0;
+      const rekTidakCeklis = j[0] !== 'RELAWAN' && d.sekolah.length > 0
+        ? g.filter(function(x) { return !statusPopPenerima(x, d.sekolah).dikirim; })
+        : [];
+      const masihTerceklis = rekTidakCeklis.filter(function(x) { return x.pilih; });
       return <Card key={j[0]} pad={false} className="mb-3">
         <div className="px-4 pt-3 text-[11px]" style={{ color: beda ? '#9A6A0B' : COLORS.green }}>
           Hadir <b>{nHadir}/{g.length}</b> · Total tersimpan <b>{fmt(tot)}</b> · Anggaran Akuntan <b>{fmt(ang)}</b>
           {beda ? ' — ⚠️ selisih ' + fmt(tot - ang) + ' (koordinasikan dengan Akuntan)' : (ang > 0 ? ' · ✓ cocok' : '')}
         </div>
-        {tidakDikirimCount > 0 && <div className="px-4 pt-1.5 text-[11px]" style={{ color: '#9A6A0B' }}>
-          ℹ️ {tidakDikirimCount} sekolah/posyandu tidak dikirim di Langkah 1 — otomatis direkomendasikan tidak hadir (dikosongkan).
+        {rekTidakCeklis.length > 0 && <div className="mx-4 mt-2 rounded-xl p-2.5 text-xs" style={{ background: '#FBF3E2', border: '1px solid #E6CF9E', color: '#7A5408' }}>
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="font-bold">⚠️ Rekomendasi TIDAK diceklis ({rekTidakCeklis.length} orang — tidak dikirim di POP):</div>
+            {masihTerceklis.length > 0
+              ? <button type="button" onClick={function() { terapkanRekomendasiPop(d.sekolah, j[0]); }}
+                  className="rounded-lg px-2.5 py-1 text-[11px] font-bold"
+                  style={{ background: COLORS.amber, color: '#fff' }}>
+                  Lepas ceklis {masihTerceklis.length} nama ini
+                </button>
+              : <span className="text-[11px] font-semibold" style={{ color: COLORS.green }}>✓ Sudah tidak diceklis</span>}
+          </div>
+          <div className="mt-1 text-[11px] leading-relaxed">
+            {rekTidakCeklis.map(function(x) {
+              return <span key={x.penerima_id} className="inline-block mr-2">• <b>{x.nama}</b> ({x.lembaga || '—'}){x.pilih ? ' [masih terceklis]' : ''}</span>;
+            })}
+          </div>
         </div>}
-        <div className="px-4 pt-1.5 pb-1 flex justify-between items-center"><Eyebrow>{j[1]}</Eyebrow>
+        <div className="px-4 pt-2 pb-1 flex justify-between items-center"><Eyebrow>{j[1]}</Eyebrow>
           <span className="text-xs flex gap-3">
+            {j[0] !== 'RELAWAN' && d.sekolah.length > 0 && <button type="button" onClick={function() { terapkanRekomendasiPop(d.sekolah, j[0]); }} className="font-semibold" style={{ color: COLORS.green }}>Sesuai POP</button>}
             <button type="button" onClick={function() { setKwRows(kwRows.map(function(x) { return x.jenis === j[0] ? Object.assign({}, x, { pilih: true }) : x; })); }} style={{ color: COLORS.blue }}>Semua</button>
             <button type="button" onClick={function() { setKwRows(kwRows.map(function(x) { return x.jenis === j[0] ? Object.assign({}, x, { pilih: false }) : x; })); }} style={{ color: COLORS.blue }}>Kosongkan</button>
           </span>
         </div>
         {g.map(function(x) {
           const showSub = !!(bukaSub[x.penerima_id] || x.pengganti);
-          const matchPop = x.jenis !== 'RELAWAN' ? cocokSekolahPop(x.lembaga, d.sekolah) : null;
-          const tidakDikirim = matchPop && matchPop.dikirim === false;
-          const pmMatch = matchPop && matchPop.dikirim !== false ? ((Number(matchPop.besar) || 0) + (Number(matchPop.kecil) || 0)) : 0;
+          const stPop = statusPopPenerima(x, d.sekolah);
+          const matchPop = stPop.match;
+          const tidakDikirim = x.jenis !== 'RELAWAN' && d.sekolah.length > 0 && !stPop.dikirim;
+          const pmMatch = stPop.pm;
           return <div key={x.penerima_id} className="px-4 py-2.5" style={{ borderTop: '1px solid ' + COLORS.line, opacity: x.pilih ? 1 : 0.55, background: tidakDikirim ? '#FDF8EE' : '#fff' }}>
             <div className="flex items-center gap-2">
               <input type="checkbox" checked={!!x.pilih} onChange={function(e) { ubahKw(x.penerima_id, 'pilih', e.target.checked); }} style={{ width: 22, height: 22, flexShrink: 0 }} aria-label={'Pilih ' + x.nama}/>
               <div className="flex-1 min-w-0">
-                <div className="text-sm truncate" style={{ color: COLORS.ink }}>
-                  {x.pengganti ? <><b>{x.pengganti}</b> <span className="text-[11px]" style={{ color: '#6B3FA0' }}>(pengganti {x.nama} · paraf Aslap)</span></> : x.nama}
+                <div className="text-sm truncate flex items-center gap-1.5 flex-wrap" style={{ color: COLORS.ink }}>
+                  <span>{x.pengganti ? <><b>{x.pengganti}</b> <span className="text-[11px]" style={{ color: '#6B3FA0' }}>(pengganti {x.nama} · paraf Aslap)</span></> : x.nama}</span>
+                  {tidakDikirim && <span className="text-[10px] font-bold rounded px-1.5 py-0.5" style={{ background: '#FBE8C8', color: '#8A5A00' }}>Rekomendasi: Jangan Ceklis</span>}
                 </div>
                 <div className="text-[11px] truncate" style={{ color: COLORS.muted }}>{x.jenis === 'RELAWAN' ? (x.jabatan || '—') : x.lembaga}</div>
-                {tidakDikirim && <div className="text-[10.5px] font-semibold mt-0.5" style={{ color: '#9A6A0B' }}>⚠️ Tidak dikirim di POP ({matchPop.nama}) — disarankan kosongkan</div>}
+                {tidakDikirim && <div className="text-[10.5px] font-semibold mt-0.5" style={{ color: '#9A6A0B' }}>⚠️ {stPop.alasan} — disarankan kosongkan kehadiran <b>{x.nama}</b></div>}
                 {!tidakDikirim && matchPop && <div className="text-[10.5px] mt-0.5" style={{ color: COLORS.green }}>✓ Dikirim di POP ({fmtNoRp(pmMatch)} PM{normSekolah(matchPop.nama) !== normSekolah(x.lembaga) ? ' · ' + matchPop.nama : ''})</div>}
-                {x.jenis !== 'RELAWAN' && !matchPop && d.sekolah.length > 0 && <div className="text-[10.5px] mt-0.5" style={{ color: COLORS.muted }}>ℹ️ Nama "{x.lembaga}" belum terbaca di daftar POP Langkah 1 (samakan nama bila sekolah yang sama)</div>}
               </div>
               {x.pilih && <button type="button" onClick={function() { setBukaSub(function(p) { const n = Object.assign({}, p); n[x.penerima_id] = !showSub; return n; }); if (showSub && x.pengganti) ubahKw(x.penerima_id, 'pengganti', ''); }}
                 className="text-[11px] font-semibold rounded px-2 py-1 shrink-0" style={{ color: showSub ? '#6B3FA0' : COLORS.muted, border: '1px solid ' + (showSub ? '#C9B2E3' : COLORS.line), background: showSub ? '#F3EAF8' : 'transparent' }}>
