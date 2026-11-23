@@ -1838,10 +1838,12 @@ function roBersih(u) {
 }
 function roMedian(a) { const s = a.slice().sort(function(x, y) { return x - y; }); return s.length ? s[Math.floor((s.length - 1) / 2)] : 0; }
 function roTerbanyak(a) { const c = {}; let best = '', n = 0; a.forEach(function(x) { c[x] = (c[x] || 0) + 1; if (c[x] > n) { n = c[x]; best = x; } }); return best; }
-// Biaya admin transfer bahan baku (transaksi 'Biaya Admin Bank' milik pembelian bahan baku) ikut menghabiskan pagu operasional LPDH.
-// Hari yang sudah lewat: sebesar yang nyata tercatat. Hari ini & ke depan: yang terbesar antara nyata dan cadangan (setelan.bb transfer × biaya transfer).
+// Biaya admin transfer bahan baku (transaksi 'Biaya Admin Bank' + pengajuan Bahan Baku aktif) ikut menghabiskan pagu operasional LPDH.
+// Jika Bahan Baku hari itu sudah diajukan/tercatat (ctx.adminBBAda), pakai biaya admin nyatanya (tanpa sisa estimasi).
+// Hari yang sudah lewat: sebesar yang nyata tercatat. Hari ini & ke depan (belum ada pengajuan BB): cadangan (setelan.bb transfer × biaya transfer).
 function roAdminBB(h, setelan, ctx, dariTgl) {
   const nyata = ((ctx && ctx.adminBB) || {})[h.tanggal] || 0;
+  if (((ctx && ctx.adminBBAda) || {})[h.tanggal]) return nyata;
   if (h.libur || (dariTgl && h.tanggal < dariTgl)) return nyata;
   return Math.max(nyata, Math.max(0, Number(setelan && setelan.bb) || 0) * RO_FEE);
 }
@@ -1971,7 +1973,7 @@ function roMatriks(items, ctx, setelan, hariSet, dariTgl) {
   roHari(ctx.periode, hariSet).forEach(function(h) {
     const a = roAdminBB(h, setelan, ctx, dariTgl); if (!a) return;
     bb[h.tanggal] = a; if (aktif(h.tanggal)) bbAktif += a;
-    if (a > (((ctx && ctx.adminBB) || {})[h.tanggal] || 0)) bbPerkiraan[h.tanggal] = true;
+    if (!((ctx && ctx.adminBBAda) || {})[h.tanggal] && a > (((ctx && ctx.adminBB) || {})[h.tanggal] || 0)) bbPerkiraan[h.tanggal] = true;
   });
   const feeAktif = Object.keys(fee).reduce(function(a, t) { return a + (aktif(t) ? fee[t] : 0); }, 0);
   return { feeAktif: feeAktif, bb: bb, bbPerkiraan: bbPerkiraan, bbAktif: bbAktif, batas: (setelan && setelan.batas) || 95, kolom: kolom, sel: sel, fee: fee, tak: tak, takItems: takItems, terjadwal: terjadwal, ring: roRingkas(items, ctx, setelan, hariSet, dariTgl) };

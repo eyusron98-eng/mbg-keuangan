@@ -804,7 +804,7 @@ const ok = (c, m) => { console.log((c ? 'PASS ' : 'FAIL ') + m); if (!c) fails++
     ok(r.ok && r.data.cadanganBB === 12 * 6500, 'form Pengajuan: cadangan admin bahan baku ikut dihitung (' + (r.data && r.data.cadanganBB) + ')');
     B8.Transaksi.push(['TFEE', 'D001', '2026-10-13', 'NB-ADM2', 'Operasional', 'Biaya Admin Bank', 'Admin', 'VA', 6500, 6500, 'https://x', '', 'U2', 'P1', 'ADMIN:IT1']);
     r = call(e8, 'GET', { action: 'getPaguOps', token: tA, tanggal: '2026-10-13' });
-    ok(r.data.cadanganBB === 12 * 6500 - 6500, 'cadangan dikurangi admin bahan baku yang sudah nyata (' + (r.data && r.data.cadanganBB) + ')');
+    ok(r.data.cadanganBB === 0, 'setelah ada transaksi/pengajuan bahan baku nyata, sisa cadangan estimasi = 0 (' + (r.data && r.data.cadanganBB) + ')');
 
     // kwitansi harian → PDF tersimpan & tertaut ke data LPDH
     r = call(e8, 'POST', { action: 'simpanKwitansiFile', token: tk8('yay'), tanggal: '2026-10-10', jenis: 'KADER', fileData: 'JVBERg==' });
@@ -1213,6 +1213,46 @@ const ok = (c, m) => { console.log((c ? 'PASS ' : 'FAIL ') + m); if (!c) fails++
     ok(r.ok && r.data.status === 'DITOLAK', 'Admin berhasil menolak pengajuan backdate dengan alasan');
     r = call(eb, 'POST', { action: 'getPengajuan', token: tPic, filter: 'menunggu' });
     ok(r.ok && r.data.pengajuan.length === 0, 'pengajuan backdate yang ditolak Admin tidak masuk ke PIC');
+  }
+
+  // 25. Biaya admin Bahan Baku di Rencana Ops & Pagu Ops menyesuaikan pengajuan/transaksi Bahan Baku yang sebenarnya
+  {
+    const e25 = makeEnv([
+      ['U1', 'akn', 'AknPass1', 'Akuntan', 'akuntan', 'D001', 'YA'],
+      ['U2', 'pic', 'PicPass1', 'PIC', 'pic', 'D001', 'YA'],
+    ]);
+    e25.__today = '2026-10-15';
+    const tok = (u, p) => call(e25, 'POST', { action: 'login', username: u, password: p }).data.token;
+    const tAkn = tok('akn', 'AknPass1'), tPic = tok('pic', 'PicPass1');
+    // Setelan estimasi 7 transfer BB/hari (7 * 6.500 = 45.500)
+    call(e25, 'POST', { action: 'saveRencanaOps', token: tAkn, data: { setelan: { indeks: 100, batas: 95, bb: 7 }, hari: {}, items: [] } });
+    // Sebelum ada pengajuan BB di 2026-10-15 → cadanganBB = 45.500, adminBBAda kosong
+    let r = call(e25, 'POST', { action: 'getPaguOps', token: tAkn, tanggal: '2026-10-15' });
+    ok(r.ok && r.data.cadanganBB === 45500, 'sebelum ada pengajuan BB, cadanganBB = estimasi 7 × 6.500 (45.500)');
+    // Ajukan 5 baris BB: 3 pakai biaya admin (19.500), 2 gratis sesama bank (0)
+    const bbItem = (u, fee) => ({ jenis: 'Bahan Baku', kategori: 'Semua Kategori', uraian: u, nominal: 50000, penerima_id: 'pn1', biaya_admin: fee,
+      nota_url: 'https://drive.google.com/bb-' + u, rincian: [{ nama: u, kategori: 'Sayuran', volume: 1, satuan: 'kg', harga: 50000 }] });
+    r = call(e25, 'POST', { action: 'createPengajuan', token: tAkn, tanggal: '2026-10-15', items: [
+      bbItem('B1', 6500), bbItem('B2', 6500), bbItem('B3', 6500), bbItem('B4', 0), bbItem('B5', 0)
+    ] });
+    ok(r.ok, 'pengajuan 5 baris BB (3 admin, 2 gratis) berhasil');
+    const pid = r.data.id;
+    // Saat masih DIAJUKAN: getRencanaOps & getPaguOps langsung memakai 19.500 (bukan 45.500!)
+    r = call(e25, 'POST', { action: 'getRencanaOps', token: tAkn });
+    ok(r.ok && r.data.adminBB['2026-10-15'] === 19500 && r.data.adminBBAda['2026-10-15'] === true,
+      'getRencanaOps saat BB masih DIAJUKAN: adminBB=19.500 & adminBBAda=true (dapat ' + JSON.stringify([r.data.adminBB, r.data.adminBBAda]) + ')');
+    r = call(e25, 'POST', { action: 'getPaguOps', token: tAkn, tanggal: '2026-10-15' });
+    ok(r.ok && r.data.cadanganBB === 19500, 'getPaguOps saat BB masih DIAJUKAN: cadanganBB=19.500 (bukan 45.500)');
+    // Setelah disetujui (TEREALISASI): adminBB tetap 19.500 (tidak dobel!), terpakai = 19.500, cadanganBB = 0
+    r = call(e25, 'POST', { action: 'decidePengajuan', token: tPic, pengajuan_id: pid,
+      keputusan: [1, 2, 3, 4, 5].map(n => ({ item_id: pid + '-' + n, status: 'DISETUJUI' })) });
+    ok(r.ok && r.data.terealisasi === 5, 'PIC menyetujui 5 baris BB');
+    r = call(e25, 'POST', { action: 'getRencanaOps', token: tAkn });
+    ok(r.ok && r.data.adminBB['2026-10-15'] === 19500 && r.data.adminBBAda['2026-10-15'] === true,
+      'getRencanaOps setelah BB TEREALISASI: adminBB tetap 19.500 tanpa dobel hitung');
+    r = call(e25, 'POST', { action: 'getPaguOps', token: tAkn, tanggal: '2026-10-15' });
+    ok(r.ok && r.data.terpakai === 19500 && r.data.cadanganBB === 0,
+      'getPaguOps setelah BB TEREALISASI: terpakai=19.500 & cadanganBB=0 (tidak ada sisa estimasi)');
   }
 
   console.log(fails ? '\n' + fails + ' GAGAL' : '\nSEMUA LULUS');

@@ -4055,16 +4055,39 @@ function opsPerTanggal(dapurId, periodeId) {
   });
   return out;
 }
-// Biaya admin transfer milik pembelian bahan baku per tanggal (nyata) — ikut menghabiskan pagu operasional LPDH
-function adminBBPerTanggal(dapurId, periodeId, items) {
-  const out = {};
+// Biaya admin transfer milik pembelian bahan baku per tanggal (nyata: transaksi + pengajuan aktif) & penanda tanggal yang sudah punya pengajuan/transaksi Bahan Baku.
+// Jika Bahan Baku sudah diajukan/tercatat di tanggal itu, estimasi cadangan tidak lagi dipakai — otomatis mengikuti biaya admin yang diajukan/terealisasi.
+function adminBBInfoPerTanggal(dapurId, periodeId, items) {
+  const nyata = {}, belumRealisasi = {}, ada = {};
+  const headMap = {};
+  readAllPengajuan().forEach(function(h) { if (h.dapur === dapurId && h.periode_id === periodeId) headMap[h.id] = h; });
   readAllTransaksi([dapurId], periodeId).forEach(function(t) {
+    if (t.jenis === 'Bahan Baku') ada[t.tanggal] = true;
     const l = String(t.pengajuan_item_id || '');
     if (!isFeeLink(l)) return;
     const it = items[l.substring(BIAYA_ADMIN_PREFIX.length)];
-    if (it && it.jenis === 'Bahan Baku') out[t.tanggal] = (out[t.tanggal] || 0) + nilaiLPDH(t);
+    if (it && it.jenis === 'Bahan Baku') {
+      nyata[t.tanggal] = (nyata[t.tanggal] || 0) + nilaiLPDH(t);
+      ada[t.tanggal] = true;
+    }
   });
-  return out;
+  Object.keys(items).forEach(function(k) {
+    const it = items[k];
+    if (it.dapur !== dapurId || it.periode_id !== periodeId || it.jenis !== 'Bahan Baku') return;
+    if (['MENUNGGU_ADMIN', 'DIAJUKAN', 'REVISI', 'DISETUJUI', 'TEREALISASI'].indexOf(it.status) < 0) return;
+    const h = headMap[it.pengajuan_id];
+    const tgl = h ? h.tanggal : '';
+    if (!tgl) return;
+    ada[tgl] = true;
+    if (it.status !== 'TEREALISASI' && !it.transaksi_id && it.biaya_admin > 0) {
+      nyata[tgl] = (nyata[tgl] || 0) + it.biaya_admin;
+      belumRealisasi[tgl] = (belumRealisasi[tgl] || 0) + it.biaya_admin;
+    }
+  });
+  return { nyata: nyata, belumRealisasi: belumRealisasi, ada: ada };
+}
+function adminBBPerTanggal(dapurId, periodeId, items) {
+  return adminBBInfoPerTanggal(dapurId, periodeId, items).nyata;
 }
 // Cadangan bawaan: rata-rata transfer bahan baku berbiaya admin per hari belanja pada periode terakhir yang punya datanya
 function bbTransferBawaan(dapurId, periodeId, items) {
@@ -4137,12 +4160,13 @@ function getRencanaOps(p) {
     luar.push({ id: 'LUAR-' + t.id, tanggal: t.tanggal, kategori: t.kategori, uraian: String(t.uraian || ''), nominal: nilaiLPDH(t), penerima_id: '', pengajuan_id: '', nomor: String(t.no_bukti || ''), status: 'TRANSAKSI' });
   });
   const ident = readIdentitasLPDH(dapurId) || {};
+  const bbInfo = adminBBInfoPerTanggal(dapurId, per.id, items);
   return { ok: true, data: {
     dapur: dapurId,
     periode: { id: per.id, periode_no: per.periode_no, tanggal_mulai: per.tanggal_mulai, tanggal_akhir: per.tanggal_akhir, penerima: per.penerima, status: per.status },
     rencana: rencana, riwayat: riwayat, status: status, luar: luar,
     dapurNama: ((getDapur().data || []).find(function(x) { return x.id === dapurId; }) || {}).nama || '', bankVA: String(ident.bank || ''),
-    aktual: opsPerTanggal(dapurId, per.id), adminBB: adminBBPerTanggal(dapurId, per.id, items), bbDefault: bbTransferBawaan(dapurId, per.id, items),
+    aktual: opsPerTanggal(dapurId, per.id), adminBB: bbInfo.nyata, adminBBAda: bbInfo.ada, bbDefault: bbTransferBawaan(dapurId, per.id, items),
     penerima: readPenerima().filter(function(r) { return r.aktif; }).map(function(r) { return { id: r.id, nama: r.nama, bank: r.bank, no_rek: r.no_rek }; })
       .sort(function(a, b) { return a.nama.localeCompare(b.nama); }),
     bisaUbah: me.role === 'akuntan' || me.role === 'admin' } };
@@ -4232,6 +4256,8 @@ function getPaguOps(p) {
   return { ok: true, data: { tanggal: tgl, pm: pm, indeks: indeks, libur: libur, pagu: libur ? 0 : Math.round(PAGU_OPS_PER_PM * pm * indeks / 100),
     terpakai: opsPerTanggal(dapurId, per.id)[tgl] || 0, cadanganBB: (function() {
       const items = {}; readAllItems().forEach(function(i) { items[i.id] = i; });
+      const info = adminBBInfoPerTanggal(dapurId, per.id, items);
+      if (info.ada[tgl]) return info.belumRealisasi[tgl] || 0;
       const bb = set.bb !== undefined ? Number(set.bb) || 0 : bbTransferBawaan(dapurId, per.id, items);
-      return libur ? 0 : Math.max(0, bb * 6500 - (adminBBPerTanggal(dapurId, per.id, items)[tgl] || 0)); })(), diajukan: diajukan, nDiajukan: nDiajukan, rencanaBelum: rencanaBelum, bankVA: String(ident.bank || '') } };
+      return libur ? 0 : Math.max(0, bb * 6500); })(), diajukan: diajukan, nDiajukan: nDiajukan, rencanaBelum: rencanaBelum, bankVA: String(ident.bank || '') } };
 }

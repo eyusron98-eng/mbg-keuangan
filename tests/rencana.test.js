@@ -109,6 +109,18 @@ ok(!u5.items.some(x => x.bagian && x.nominal < 250000), 'belanja kecil tidak dip
   ok(g.items[0].tanggal !== '2026-11-17' || g.sisaLebih > 0, 'geser otomatis memperhitungkan cadangan admin bahan baku (hari itu tinggal 2.935.000)');
   const u2 = R.roUsulkan(ctx, { indeks: 100, batas: 100, bb: 10 }, {}, 1, [], '2026-11-16'), r2 = R.roRingkas(u2.items, ctx, { indeks: 100, batas: 100, bb: 10 }, {}, '2026-11-16');
   ok(r2.nLebih === 0, 'usulan otomatis tetap muat pagu setelah cadangan admin bahan baku (' + r2.nLebih + ' hari lebih)');
+  // Jika Bahan Baku hari itu sudah diajukan (adminBBAda=true), pakai biaya admin yang sebenarnya diajukan (tanpa sisa estimasi)
+  const c3 = Object.assign({}, ctx, {
+    adminBB: { '2026-11-16': 19500, '2026-11-17': 0 },
+    adminBBAda: { '2026-11-16': true, '2026-11-17': true },
+  });
+  const s7 = { indeks: 100, batas: 100, bb: 7 };
+  const h18 = hh.find(h => h.tanggal === '2026-11-18');
+  ok(R.roAdminBB(h16, s7, c3, '2026-11-16') === 19500 && R.roAdminBB(h17, s7, c3, '2026-11-16') === 0 && R.roAdminBB(h18, s7, c3, '2026-11-16') === 45500,
+    'adminBB menyesuaikan pengajuan BB: 3 dari 5 pakai admin = 19.500; semua gratis = 0; belum diajukan = estimasi 7×6.500 (45.500)');
+  const m3 = R.roMatriks([], c3, s7, {}, '2026-11-16');
+  ok(m3.bb['2026-11-16'] === 19500 && !m3.bbPerkiraan['2026-11-16'] && !m3.bb['2026-11-17'] && m3.bb['2026-11-18'] === 45500 && m3.bbPerkiraan['2026-11-18'] === true,
+    'matriks: tanggal yang sudah ada pengajuan BB tidak lagi bertanda perkiraan dan tidak menyisakan estimasi');
 }
 const kosong = R.roUsulkan(Object.assign({}, ctx, { riwayat: null }), set, {}, 1);
 ok(kosong.items.length === 0 && /manual/.test(kosong.catatan), 'tanpa riwayat: tidak ada usulan, diminta isi manual');
