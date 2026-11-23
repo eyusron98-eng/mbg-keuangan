@@ -3717,25 +3717,61 @@ function getTugasHarian(p) {
   if (!me) return { ok: false, error: SESI_ERR };
   const dapurId = lpdhDapur(me, p.dapur), tgl = String(p.tanggal || todayStr()).substring(0, 10);
   if (!dapurId || !/^\d{4}-\d{2}-\d{2}$/.test(tgl)) return { ok: false, error: 'Pilih dapur & tanggal' };
-  // persetujuan yang menunggu (semua tanggal) di dapur ini
-  const menunggu = readAllItems().filter(function(i) { return i.dapur === dapurId && i.status === 'DIAJUKAN'; });
-  const heads = {}; readAllPengajuan().forEach(function(h) { heads[h.id] = h; });
+  // persetujuan yang menunggu (semua tanggal) di dapur ini + ringkasan pengajuan hari itu
+  const allItems = readAllItems().filter(function(i) { return i.dapur === dapurId; });
+  const menunggu = allItems.filter(function(i) { return i.status === 'DIAJUKAN'; });
+  const heads = {}, headHariIds = {};
+  readAllPengajuan().forEach(function(h) { heads[h.id] = h; if (h.dapur === dapurId && h.tanggal === tgl) headHariIds[h.id] = h; });
   const tglMenunggu = {}; menunggu.forEach(function(i) { const h = heads[i.pengajuan_id]; if (h) tglMenunggu[h.tanggal] = 1; });
   // porsi PM & syarat insentif hari itu
   const hr = bacaHarian(dapurId, tgl).tepat, hd = hr ? hr.data || {} : null;
   const porsi = hd ? (hd.pm || []).reduce(function(a, x) { return a + (Number(x.distribusi) || 0); }, 0) : 0;
+  const porsiDikirim = hd ? ((hd.sekolah || []).length
+    ? hd.sekolah.filter(function(s) { return s.dikirim !== false; }).reduce(function(a, s) { return a + (Number(s.besar) || 0) + (Number(s.kecil) || 0); }, 0)
+    : porsi) : 0;
+  const porsiDiproduksi = hd ? (Number(hd.produksi && hd.produksi.total) || porsiDikirim) : 0;
+  const nSekolah = hd && hd.sekolah ? hd.sekolah.length : 0;
+  const nSekolahDikirim = hd && hd.sekolah ? hd.sekolah.filter(function(s) { return s.dikirim !== false; }).length : 0;
   // penerima aktif & kwitansi terbit hari itu
   const tx = readAllTransaksi([dapurId]).filter(function(t) { return t.tanggal === tgl; });
   const k = konteksKw(dapurId, tgl, tx), dp = bacaDataPenerima(dapurId), props = k.props;
   const aktif = { RELAWAN: 0, PIC_SEKOLAH: 0, KADER: 0 }, tanpaTtd = { RELAWAN: 0, PIC_SEKOLAH: 0, KADER: 0 };
   dp.forEach(function(x) { if (!x.aktif || aktif[x.jenis] === undefined) return; aktif[x.jenis]++; if (!props[ttdKey('P_' + x.id)]) tanpaTtd[x.jenis]++; });
-  const terbit = { RELAWAN: 0, PIC_SEKOLAH: 0, KADER: 0 }, nilai = { RELAWAN: 0, PIC_SEKOLAH: 0, KADER: 0 };
-  k.kw.forEach(function(x) { if (terbit[x.jenis] !== undefined) { terbit[x.jenis]++; nilai[x.jenis] += x.nominal; } });
-  const honor = tx.filter(isHonorRelawan).reduce(function(a, t) { return a + nilaiLPDH(t); }, 0);
+  const terbit = { RELAWAN: 0, PIC_SEKOLAH: 0, KADER: 0 }, nilai = { RELAWAN: 0, PIC_SEKOLAH: 0, KADER: 0 }, pengganti = [];
+  k.kw.forEach(function(x) {
+    if (terbit[x.jenis] !== undefined) { terbit[x.jenis]++; nilai[x.jenis] += x.nominal; }
+    if (x.pengganti) pengganti.push({ nama: x.nama, pengganti: x.pengganti, jenis: x.jenis });
+  });
+  const tercatat = { RELAWAN: 0, PIC_SEKOLAH: 0, KADER: 0 }, diajukan = { RELAWAN: 0, PIC_SEKOLAH: 0, KADER: 0 };
+  tx.forEach(function(t) {
+    if (isHonorRelawan(t)) tercatat.RELAWAN += nilaiLPDH(t);
+    else if (t.jenis === 'Operasional' && t.kategori === 'Insentif Guru/PIC Sekolah') tercatat.PIC_SEKOLAH += nilaiLPDH(t);
+    else if (t.jenis === 'Operasional' && t.kategori === 'Insentif Kader Posyandu') tercatat.KADER += nilaiLPDH(t);
+  });
+  let pjHariTotal = 0, pjHariMenunggu = 0, pjHariBackdate = 0, pjHariSetuju = 0;
+  allItems.forEach(function(it) {
+    if (!headHariIds[it.pengajuan_id]) return;
+    pjHariTotal++;
+    if (it.status === 'DIAJUKAN') pjHariMenunggu++;
+    else if (it.status === 'MENUNGGU_ADMIN') pjHariBackdate++;
+    else if (it.status === 'DISETUJUI' || it.status === 'TEREALISASI') pjHariSetuju++;
+    if (['MENUNGGU_ADMIN', 'DIAJUKAN', 'REVISI', 'DISETUJUI'].indexOf(it.status) < 0) return;
+    if (it.jenis === 'Operasional' && /^gaji\/honor relawan/i.test(String(it.kategori || ''))) diajukan.RELAWAN += it.nominal;
+    else if (it.jenis === 'Operasional' && it.kategori === 'Insentif Guru/PIC Sekolah') diajukan.PIC_SEKOLAH += it.nominal;
+    else if (it.jenis === 'Operasional' && it.kategori === 'Insentif Kader Posyandu') diajukan.KADER += it.nominal;
+  });
+  const anggaran = {
+    RELAWAN: tercatat.RELAWAN + diajukan.RELAWAN,
+    PIC_SEKOLAH: tercatat.PIC_SEKOLAH + diajukan.PIC_SEKOLAH,
+    KADER: tercatat.KADER + diajukan.KADER,
+  };
   return { ok: true, data: { tanggal: tgl,
-    persetujuan: { baris: menunggu.length, nominal: menunggu.reduce(function(a, i) { return a + i.nominal + (i.biaya_admin || 0); }, 0), tanggal: Object.keys(tglMenunggu).sort() },
-    porsi: { ada: !!hd, sekolah: hd && hd.sekolah ? hd.sekolah.length : 0, total: porsi, syarat: !!(hd && hd.syarat && LPDH_SYARAT.every(function(s2) { return hd.syarat[s2]; })) },
-    penerima: { aktif: aktif, tanpaTtd: tanpaTtd }, kwitansi: { terbit: terbit, nilai: nilai, honor: honor },
+    persetujuan: { baris: menunggu.length, nominal: menunggu.reduce(function(a, i) { return a + i.nominal + (i.biaya_admin || 0); }, 0), tanggal: Object.keys(tglMenunggu).sort(),
+      hariIni: { total: pjHariTotal, menunggu: pjHariMenunggu, backdate: pjHariBackdate, setuju: pjHariSetuju } },
+    porsi: { ada: !!hd, sekolah: nSekolah, dikirimSekolah: nSekolahDikirim, total: porsi, dikirim: porsiDikirim, diproduksi: porsiDiproduksi,
+      syarat: !!(hd && hd.syarat && LPDH_SYARAT.every(function(s2) { return hd.syarat[s2]; })) },
+    penerima: { aktif: aktif, tanpaTtd: tanpaTtd },
+    kwitansi: { terbit: terbit, nilai: nilai, honor: tercatat.RELAWAN, tercatat: tercatat, diajukan: diajukan, anggaran: anggaran, pengganti: pengganti },
     ttd: { kepala: k.ttdKepala, pic: k.ttdPic, akuntan: k.ttdAkn, namaKepala: (readIdentitasLPDH(dapurId) || {}).kepala_nama || '' },
     lpdh: { transaksi: tx.length, kwitansiPerlu: bisaIsiLPDH(me) ? kwitansiPerlu(k) : [] },
     bisaSetuju: me.role === 'pic' || me.role === 'admin' } };

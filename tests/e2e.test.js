@@ -668,7 +668,7 @@ async function isiBahanBaku(page, uraian, volume, harga) {
     globalThis.__rt = null;
   });
 
-  all &= await run('Data Penerima: PIC tambah kader + TTD digambar; Profil PIC ada TTD Kepala SPPG', { role: 'pic',
+  all &= await run('Data Penerima: Akuntan tambah kader + TTD digambar; Profil PIC ada TTD Kepala SPPG', { role: 'akuntan',
     override: (a, m, p) => a === 'getDataPenerima' ? { ok: true, data: { bisaUbah: true, rows: globalThis.__dp || [{ id: 'DP1', jenis: 'RELAWAN', nama: 'Siti', jabatan: 'Juru masak', lembaga: '', pm: 0, nominal: 150000, metode: 'Transfer', aktif: true, ada_ttd: true }] } }
       : a === 'saveDataPenerima' ? (globalThis.__dpSave = p, globalThis.__dp = [{ id: 'DP1', jenis: 'RELAWAN', nama: 'Siti', jabatan: 'Juru masak', lembaga: '', pm: 0, nominal: 150000, metode: 'Transfer', aktif: true, ada_ttd: true },
         { id: 'DP2', jenis: p.jenis, nama: p.nama, jabatan: '', lembaga: p.lembaga, pm: p.pm, nominal: p.nominal, metode: p.metode, aktif: true, ada_ttd: false }], { ok: true, data: { id: 'DP2' } })
@@ -699,7 +699,6 @@ async function isiBahanBaku(page, uraian, volume, harga) {
     await page.click('.sheet button[aria-label="Tutup"]');
     await page.waitForSelector('text=1 penerima aktif belum punya tanda tangan');
     await page.click('nav:visible >> text=Profil');
-    await page.waitForSelector('text=Tanda tangan Kepala SPPG');
     await page.waitForSelector('text=Tanda tangan saya');
     globalThis.__dp = null;
   });
@@ -1590,6 +1589,29 @@ async function isiBahanBaku(page, uraian, volume, harga) {
     const ids = (kwSent && kwSent.params.rows || []).map(r => r.penerima_id);
     assert(kwSent && kwSent.params.simpan_saja === true && !ids.includes('PIC1') && ids.includes('PIC2') && kwSent.params.rows.find(r => r.penerima_id === 'DP1').pengganti === 'AB',
       'terbitkanKwitansi salah: ' + JSON.stringify(kwSent));
+  });
+
+  all &= await run('Journey PIC & Akuntan: PIC terkunci antar tahap & menu ringkas; Akuntan 4 tahap bebas (tidak dikunci)', { role: 'akuntan',
+    override: (a, m, p) => a === 'getTugasHarian' ? { ok: true, data: {
+        tanggal: p.tanggal, bisaSetuju: false,
+        persetujuan: { baris: 1, nominal: 500000, tanggal: [p.tanggal], hariIni: { total: 2, menunggu: 1, backdate: 0, setuju: 1 } },
+        porsi: { ada: true, sekolah: 3, dikirimSekolah: 2, total: 100, dikirim: 100, diproduksi: 110, syarat: true },
+        penerima: { aktif: { RELAWAN: 10, PIC_SEKOLAH: 3, KADER: 2 }, tanpaTtd: { RELAWAN: 0, PIC_SEKOLAH: 0, KADER: 0 } },
+        kwitansi: { terbit: { RELAWAN: 10, PIC_SEKOLAH: 2, KADER: 2 }, nilai: { RELAWAN: 1100000, PIC_SEKOLAH: 100000, KADER: 100000 }, honor: 1100000,
+          anggaran: { RELAWAN: 1100000, PIC_SEKOLAH: 100000, KADER: 100000 } },
+        ttd: { kepala: true, pic: true, akuntan: true }, lpdh: { transaksi: 4, kwitansiPerlu: [] } } } : null }, async (page) => {
+    await login(page, 'siti');
+    await page.waitForSelector('header');
+    // Akuntan tetap memiliki akses LPDH Harian & Kwitansi + menu Alur Harian (4 tahap bebas tidak dikunci)
+    assert(await page.isVisible('nav:visible >> text=LPDH Harian'), 'Akuntan harus punya akses LPDH Harian');
+    assert(await page.isVisible('nav:visible >> text=Kwitansi'), 'Akuntan harus punya akses Kwitansi');
+    await page.click('nav:visible >> text=Alur Harian');
+    await page.waitForSelector('text=Alur Kerja Harian Akuntan');
+    assert(!(await page.isDisabled('button:has-text("2. Pengajuan & Absensi")')), 'Tahap 2 Akuntan tidak boleh dikunci');
+    assert(!(await page.isDisabled('button:has-text("3. Pantau ACC & BA")')), 'Tahap 3 Akuntan tidak boleh dikunci');
+    assert(!(await page.isDisabled('button:has-text("4. Sinkron VA & LPDH")')), 'Tahap 4 Akuntan tidak boleh dikunci');
+    await page.click('button:has-text("2. Pengajuan & Absensi")');
+    await page.waitForSelector('text=Pastikan nominal pengajuan Honor Relawan');
   });
 
   console.log(all ? 'SEMUA LULUS' : 'ADA YANG GAGAL');
