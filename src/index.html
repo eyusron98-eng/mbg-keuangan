@@ -2613,7 +2613,6 @@ function LpdhPage({ session, scope, toast }) {
   const [busyText, setBusyText] = useState('');
   const [hasil, setHasil] = useState(null);
   const [konfirmSaldo, setKonfirmSaldo] = useState(false);
-  const [unduhKwPdf, setUnduhKwPdf] = useState(true);
 
   // Preload ExcelJS & template LPDH di latar belakang saat halaman dibuka agar klik Unduh langsung jalan tanpa tunggu CDN
   useEffect(function() { ensureExcelJS().catch(function(){}); getLpdhTemplateBuf().catch(function(){}); }, []);
@@ -2723,20 +2722,8 @@ function LpdhPage({ session, scope, toast }) {
       a.href = URL.createObjectURL(blob); a.download = r.namaFile;
       document.body.appendChild(a); a.click(); a.remove();
       setTimeout(function() { URL.revokeObjectURL(a.href); }, 5000);
-      let kwDiunduh = false;
-      if (unduhKwPdf && bisaIsi) {
-        try {
-          setBusyText('Mengunduh PDF Kwitansi Harian…');
-          const rk = await api('getKwitansiCetak', { dapur: dapurId, tanggal: tanggal, jenis: 'RELAWAN,PIC_SEKOLAH,KADER' });
-          if (rk.ok && rk.data && (rk.data.rows || []).length) {
-            const docKw = await buildKwitansiPdf(rk.data);
-            docKw.save('Kwitansi_' + String((rk.data.dapur && (rk.data.dapur.kode || rk.data.dapur.nama)) || dapurId).replace(/[^A-Za-z0-9]+/g, '_') + '_' + tanggal + '.pdf');
-            kwDiunduh = true;
-          }
-        } catch (e) {}
-      }
       setHasil(r);
-      toast('LPDH diunduh: ' + r.namaFile + (kwDiunduh ? ' + PDF Kwitansi Harian' : ''));
+      toast('LPDH diunduh: ' + r.namaFile);
     } catch (e) { toast('Gagal membuat LPDH: ' + e.message, 'error'); }
     setBusy(false); setBusyText('');
   }
@@ -2849,11 +2836,7 @@ function LpdhPage({ session, scope, toast }) {
         {saldoBeda && <div className="text-sm rounded-lg p-3 mt-3" style={{ background: '#F8E9E5', color: COLORS.danger }} aria-label="Saldo tidak sinkron">
           <b>Saldo VA tidak sinkron.</b> Tersimpan {fmt(saldoTersimpan)}, sedangkan menurut transaksi hari ini {fmt(saldoAkhirApp)} (selisih {fmt(saldoAkhirApp - saldoTersimpan)}).
           Biasanya karena ada transaksi yang diubah/dihapus setelah saldo disimpan. Cocokkan dengan mutasi rekening, lalu perbarui <b>Saldo VA menurut rekening</b> di atas (atau isi penjelasan bila memang berbeda).</div>}
-        {bisaIsi && <label className="flex items-center gap-2 text-xs mt-3" style={{ color: COLORS.ink }}>
-          <input type="checkbox" checked={unduhKwPdf} onChange={function(e) { setUnduhKwPdf(e.target.checked); }} style={{ width: 16, height: 16 }}/>
-          <span>Sertakan unduh <b>PDF Kwitansi Harian</b> sekaligus</span>
-        </label>}
-        <div className="mt-3"><Btn full onClick={function() { if (saldoBeda) setKonfirmSaldo(true); else unduh(); }} disabled={busy}>{busy ? I.spinner : I.download} {busy && busyText ? busyText : 'Unduh LPDH (.xlsx)'}</Btn></div>
+        <div className="mt-4"><Btn full onClick={function() { if (saldoBeda) setKonfirmSaldo(true); else unduh(); }} disabled={busy}>{busy ? I.spinner : I.download} {busy && busyText ? busyText : 'Unduh LPDH (.xlsx)'}</Btn></div>
         <div className="mt-2"><Btn full kind="ghost" onClick={unduhPengesahan} disabled={busy}>{busy ? I.spinner : I.file} Lembar Pengesahan (PDF bertanda tangan)</Btn></div>
         {konfirmSaldo && <ConfirmModal title="Saldo VA tidak sinkron" confirmLabel="Tetap unduh" onClose={function() { setKonfirmSaldo(false); }} onConfirm={function() { setKonfirmSaldo(false); unduh(); }}
           message={'Saldo VA tersimpan ' + fmt(saldoTersimpan) + ' berbeda ' + fmt(saldoAkhirApp - saldoTersimpan) + ' dari transaksi hari ini (' + fmt(saldoAkhirApp) + ') tanpa penjelasan. Di LPDH, cek PPK "saldo komponen = saldo VA" akan menunjukkan selisih ini. Sebaiknya perbarui saldo dulu sesuai mutasi rekening.'}/>}
@@ -6070,7 +6053,7 @@ function KwitansiPage({ session, scope, toast }) {
         const totJ = (d.totalPilih || {})[j[0]] || 0, angJ = (d.anggaran || d.tercatat || {})[j[0]] || 0;
         return (totJ > 0 || angJ > 0) && totJ !== angJ;
       });
-      toast('Kehadiran tersimpan (' + dipilih.length + ' orang). PDF kwitansi akan otomatis diunduh saat LPDH diunduh.' + (selisihAda ? ' Ada selisih dengan anggaran Akuntan — cek ringkasan.' : ''), selisihAda ? 'error' : undefined);
+      toast('Kehadiran tersimpan (' + dipilih.length + ' orang). PDF kwitansi otomatis dibuat & diunggah ke Drive saat LPDH diunduh.' + (selisihAda ? ' Ada selisih dengan anggaran Akuntan — cek ringkasan.' : ''), selisihAda ? 'error' : undefined);
       load();
     } catch (e) { toast('Gagal menyimpan kehadiran: ' + e.message, 'error'); }
     finally { setBusy(false); }
@@ -6109,7 +6092,7 @@ function KwitansiPage({ session, scope, toast }) {
         ? 'Tandai siapa saja yang hadir hari ini. Jika ada pengganti (bukan relawan tetap), klik "Diganti?" dan tulis namanya — basis data tetap, TTD pengganti otomatis memakai paraf Aslap. Cukup cocokkan total dengan anggaran Akuntan.'
         : modeKw === 'periode'
         ? 'Cetak kwitansi 1 periode penuh berdasarkan jumlah hari efektif beroperasi (1 hari insentif × hari efektif). TTD Relawan, PIC & Posyandu dikosongkan untuk TTD basah; TTD Akuntan & Kepala SPPG tetap otomatis.'
-        : 'Cukup tandai yang hadir lalu Simpan Kehadiran — tanpa harus mengunduh PDF. PDF kwitansi bertanda tangan otomatis dibuat & diunduh saat LPDH Harian diunduh.'}</div></div>
+        : 'Cukup tandai yang hadir lalu Simpan Kehadiran — tanpa perlu mengunduh PDF. PDF kwitansi bertanda tangan otomatis dibuat & diunggah ke Drive untuk link LPDH saat LPDH Harian diunduh.'}</div></div>
     {!isAslap && <div className="grid grid-cols-2 gap-2 mb-3">
       {[['harian', 'Kehadiran / Kwitansi Harian (LPDH)'], ['periode', 'Kwitansi Per Periode (TTD Basah)']].map(function(t) {
         const on = modeKw === t[0];
@@ -6120,7 +6103,7 @@ function KwitansiPage({ session, scope, toast }) {
     {!isAslap && modeKw === 'periode' ? <KwitansiPeriodeView session={session} dapurId={dapurId} toast={toast}/> : <>
     <Card className="mb-3">
       <Field label="Tanggal"><input type="date" value={tanggal} onChange={function(e) { if (e.target.value) setTanggal(e.target.value); }} style={inputStyle} aria-label="Tanggal kwitansi"/></Field>
-      {data && data.sudahTerbit > 0 && <div className="text-xs rounded-lg p-2.5 mb-2" style={{ background: '#EAF0F8', color: COLORS.blue }}>{data.sudahTerbit} kehadiran/kwitansi sudah tercatat untuk tanggal ini. PDF kwitansi akan otomatis ikut diunduh saat LPDH diunduh.</div>}
+      {data && data.sudahTerbit > 0 && <div className="text-xs rounded-lg p-2.5 mb-2" style={{ background: '#EAF0F8', color: COLORS.blue }}>{data.sudahTerbit} kehadiran/kwitansi sudah tercatat untuk tanggal ini. PDF kwitansi otomatis dibuat & diunggah ke Drive saat LPDH diunduh.</div>}
       {data && !data.sudahTerbit && data.dariHonor && <div className="text-xs rounded-lg p-2.5 mb-2" style={{ background: '#EAF3EC', color: COLORS.green }}>Relawan dicentang sesuai kehadiran di pembayaran honor tanggal ini.</div>}
       {isAslap && adaPengganti && data && !data.adaParafAslap && <div className="text-xs rounded-lg p-2.5" style={{ background: '#FBF3E2', color: '#7A5408' }}>⚠️ Ada penerima pengganti hari ini, tetapi <b>Paraf Aslap</b> belum disimpan. Buka menu <b>Profil & Paraf</b> untuk menggambar/mengunggah paraf Anda.</div>}
     </Card>
