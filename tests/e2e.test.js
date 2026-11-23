@@ -1541,46 +1541,55 @@ async function isiBahanBaku(page, uraian, volume, harga) {
       'decideBackdatePengajuan tidak terkirim benar: ' + JSON.stringify(sent));
   });
 
-  all &= await run('Aslap: kehadiran tanpa nominal per orang + pengganti + simpan tanpa PDF + Pengiriman POP sederhana', { role: 'aslap',
+  all &= await run('Aslap: journey 3 tahap (1. POP & total diproduksi → 2. PIC/Posyandu otomatis rekomendasi kosongkan sekolah tak dikirim → 3. Relawan + pengganti)', { role: 'aslap',
     override: (a, m, p) => a === 'getKwitansiHarian' ? { ok: true, data: {
         bisaUbah: true, sembunyiNominal: true, sudahTerbit: 0, adaParafAslap: true,
-        totalPilih: { RELAWAN: 220000, PIC_SEKOLAH: 0, KADER: 0 },
-        tercatat: { RELAWAN: 220000, PIC_SEKOLAH: 0, KADER: 0 },
-        anggaran: { RELAWAN: 220000, PIC_SEKOLAH: 0, KADER: 0 },
+        totalPilih: { RELAWAN: 220000, PIC_SEKOLAH: 100000, KADER: 0 },
+        tercatat: { RELAWAN: 220000, PIC_SEKOLAH: 50000, KADER: 0 },
+        anggaran: { RELAWAN: 220000, PIC_SEKOLAH: 50000, KADER: 0 },
         rows: [
           { penerima_id: 'DP1', jenis: 'RELAWAN', nama: 'Relawan A', jabatan: 'Masak', lembaga: '', ada_ttd: true, pm: 0, nominal: null, pengganti: '', pilih: true },
           { penerima_id: 'DP2', jenis: 'RELAWAN', nama: 'Relawan B', jabatan: 'Cuci', lembaga: '', ada_ttd: true, pm: 0, nominal: null, pengganti: '', pilih: true },
+          { penerima_id: 'PIC1', jenis: 'PIC_SEKOLAH', nama: 'Pak Budi', jabatan: '', lembaga: 'SDN A', ada_ttd: true, pm: 50, nominal: null, pengganti: '', pilih: true },
+          { penerima_id: 'PIC2', jenis: 'PIC_SEKOLAH', nama: 'Bu Ani', jabatan: '', lembaga: 'SDN B', ada_ttd: true, pm: 50, nominal: null, pengganti: '', pilih: true },
         ] } }
-      : a === 'terbitkanKwitansi' ? { ok: true, data: { sudahTerbit: 2, totalPilih: { RELAWAN: 220000, PIC_SEKOLAH: 0, KADER: 0 }, anggaran: { RELAWAN: 220000, PIC_SEKOLAH: 0, KADER: 0 } } }
-      : a === 'getHarianLPDH' ? { ok: true, data: { sumber: 'disalin dari 2026-10-14', pmRencana: 100, data: {
+      : a === 'terbitkanKwitansi' ? { ok: true, data: { sudahTerbit: p.rows.length, totalPilih: { RELAWAN: 220000, PIC_SEKOLAH: 50000, KADER: 0 }, anggaran: { RELAWAN: 220000, PIC_SEKOLAH: 50000, KADER: 0 } } }
+      : a === 'getHarianLPDH' ? { ok: true, data: { sumber: 'disalin dari 2026-10-14', pmRencana: 110, data: {
           sekolah: [
             { nama: 'SDN A', jenjang: 'SD', besar: 30, kecil: 20, dikirim: true },
             { nama: 'SDN B', jenjang: 'SD', besar: 40, kecil: 10, dikirim: true },
             { nama: 'SDN C', jenjang: 'SD', besar: 25, kecil: 25, dikirim: true },
-          ], pm: [], produksi: {}, syarat: {} } } }
+          ], pm: [], produksi: { organoleptik: 0 }, syarat: {} } } }
       : a === 'saveHarianLPDH' ? { ok: true } : null }, async (page, srv) => {
     await login(page, 'aslap1');
-    await page.waitForSelector('text=Kehadiran Relawan, PIC & Posyandu');
-    // Tidak ada input nominal per orang untuk Aslap
-    assert((await page.locator('[aria-label^="Nominal "]').count()) === 0, 'Aslap tidak boleh melihat input nominal per orang');
-    // Catat pengganti AB untuk Relawan A
+    await page.waitForSelector('text=Tugas Harian Aslap (Bertahap)');
+    // Langkah 2 & 3 terkunci sebelum Langkah 1 disimpan
+    assert(await page.isDisabled('button:has-text("2. PIC & Posyandu")'), 'Langkah 2 harus terkunci sebelum Langkah 1 selesai');
+    assert(await page.isDisabled('button:has-text("3. Relawan")'), 'Langkah 3 harus terkunci sebelum Langkah 2 selesai');
+    // Langkah 1: hilangkan centang SDN A (dikirim=100), isi Uji organoleptik=10 → total diproduksi=110 cocok dengan pmRencana=110
+    await page.uncheck('[aria-label="Dikirim SDN A"]');
+    await page.fill('[aria-label="Uji organoleptik"]', '10');
+    await page.waitForSelector('text=Total PM diproduksi (110) cocok dengan PM Rencana Ops Akuntan');
+    await page.click('button:has-text("Simpan POP & Lanjut ke PIC/Posyandu")');
+    // Langkah 2: Pak Budi (SDN A) otomatis di-uncheck + ada peringatan tidak dikirim
+    await page.waitForSelector('text=Tidak dikirim di POP (SDN A)');
+    assert(!(await page.isChecked('[aria-label="Pilih Pak Budi"]')), 'PIC sekolah tidak dikirim harus otomatis direkomendasikan kosong');
+    assert(await page.isChecked('[aria-label="Pilih Bu Ani"]'), 'PIC sekolah dikirim harus tetap dicentang');
+    assert((await page.locator('[aria-label^="Nominal "]').count()) === 0, 'Aslap tidak boleh melihat nominal per orang');
+    await page.click('button:has-text("Lanjut ke Kehadiran Relawan")');
+    // Langkah 3: Relawan A diganti AB → Simpan Semua Kehadiran
+    await page.waitForSelector('text=Relawan A');
     await page.click('button:has-text("Diganti?") >> nth=0');
     await page.fill('[aria-label="Pengganti Relawan A"]', 'AB');
-    await page.click('button:has-text("Simpan Kehadiran")');
-    await page.waitForSelector('text=Kehadiran tersimpan');
-    const kwSent = srv.log.posts.find(x => x.action === 'terbitkanKwitansi');
-    assert(kwSent && kwSent.params.simpan_saja === true && kwSent.params.rows[0].pengganti === 'AB',
-      'terbitkanKwitansi simpan_saja + pengganti tidak terkirim benar: ' + JSON.stringify(kwSent));
-    // Pindah ke Pengiriman POP: hilangkan centang SDN A (tidak dihapus), total PM jadi 100 cocok dengan pmRencana=100
-    await page.click('nav:visible >> text=Pengiriman POP');
-    await page.waitForSelector('text=Pengiriman Ompreng / POP Harian');
-    await page.uncheck('[aria-label="Dikirim SDN A"]');
-    await page.waitForSelector('text=cocok dengan PM Rencana Ops Akuntan');
-    await page.click('button:has-text("Simpan Pengiriman POP")');
-    await page.waitForSelector('text=Pengiriman POP disimpan');
+    await page.click('button:has-text("Simpan Semua Kehadiran")');
+    await page.waitForSelector('text=Semua kehadiran tersimpan');
     const popSent = srv.log.posts.find(x => x.action === 'saveHarianLPDH');
-    assert(popSent && popSent.params.data.sekolah.length === 3 && popSent.params.data.sekolah[0].dikirim === false && popSent.params.data.produksi.total === 100,
-      'saveHarianLPDH harus menyimpan 3 sekolah basis (SDN A dikirim=false) & total=100: ' + JSON.stringify(popSent && popSent.params.data));
+    assert(popSent && popSent.params.data.sekolah.length === 3 && popSent.params.data.sekolah[0].dikirim === false && popSent.params.data.produksi.total === 110,
+      'saveHarianLPDH salah: ' + JSON.stringify(popSent && popSent.params.data));
+    const kwSent = srv.log.posts.find(x => x.action === 'terbitkanKwitansi');
+    const ids = (kwSent && kwSent.params.rows || []).map(r => r.penerima_id);
+    assert(kwSent && kwSent.params.simpan_saja === true && !ids.includes('PIC1') && ids.includes('PIC2') && kwSent.params.rows.find(r => r.penerima_id === 'DP1').pengganti === 'AB',
+      'terbitkanKwitansi salah: ' + JSON.stringify(kwSent));
   });
 
   console.log(all ? 'SEMUA LULUS' : 'ADA YANG GAGAL');

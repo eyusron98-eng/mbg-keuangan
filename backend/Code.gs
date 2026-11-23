@@ -4244,7 +4244,8 @@ function getRencanaOps(p) {
       const totSk = (jd.sekolah || []).length
         ? jd.sekolah.filter(function(s) { return s.dikirim !== false; }).reduce(function(a, s) { return a + (Number(s.besar) || 0) + (Number(s.kecil) || 0); }, 0)
         : (jd.pm || []).reduce(function(a, x) { return a + (Number(x.distribusi) || 0); }, 0);
-      pmPop[tgl] = totSk;
+      const totProd = Number(jd.produksi && jd.produksi.total) || 0;
+      pmPop[tgl] = totProd > 0 ? totProd : totSk;
     }
   } catch (e) {}
   return { ok: true, data: {

@@ -2920,7 +2920,8 @@ function PopLapanganPage({ session, scope, toast }) {
   const totB = dikirimList.reduce(function(a, x) { return a + (Number(x.besar) || 0); }, 0);
   const totK = dikirimList.reduce(function(a, x) { return a + (Number(x.kecil) || 0); }, 0);
   const totPM = totB + totK;
-  const selisihPM = pmRencana != null ? (totPM - pmRencana) : null;
+  const totProd = Number(h.produksi.total) || totPM;
+  const selisihPM = pmRencana != null ? (totProd - pmRencana) : null;
   const tanpaJenjang = d.sekolah.filter(function(x) { return !x.jenjang; });
   async function simpan() {
     if (tanpaJenjang.length) { toast('Pilih jenjang untuk: ' + tanpaJenjang.map(function(x) { return x.nama || '(tanpa nama)'; }).join(', '), 'error'); return; }
@@ -2928,7 +2929,7 @@ function PopLapanganPage({ session, scope, toast }) {
     const r = await apiPost('saveHarianLPDH', { dapur: dapurId, tanggal: tanggal, data: h });
     setSaving(false);
     if (r.ok) {
-      toast('Pengiriman POP disimpan (' + dikirimList.length + ' sekolah/posyandu, ' + fmtNoRp(totPM) + ' PM)');
+      toast('Pengiriman POP disimpan (' + dikirimList.length + ' sekolah/posyandu, diproduksi ' + fmtNoRp(totProd) + ' PM)');
       load();
     } else toast(r.error, 'error');
   }
@@ -2943,8 +2944,8 @@ function PopLapanganPage({ session, scope, toast }) {
       {sumber.indexOf('disalin') === 0 && <div className="text-xs rounded-lg p-2.5 mb-2" style={{ background: '#EAF0F8', color: COLORS.blue }}>Daftar sekolah {sumber}. Centang yang dikirim hari ini lalu sesuaikan porsinya.</div>}
       {pmRencana != null && <div className="text-xs rounded-lg p-2.5 font-medium" style={{ background: selisihPM === 0 ? '#E8F1EC' : '#FBF3E2', color: selisihPM === 0 ? COLORS.green : '#7A5408' }}>
         {selisihPM === 0
-          ? '✓ Total PM dikirim (' + fmtNoRp(totPM) + ') cocok dengan PM Rencana Ops Akuntan (' + fmtNoRp(pmRencana) + ').'
-          : '⚠️ Total PM dikirim (' + fmtNoRp(totPM) + ') berbeda dengan PM Rencana Ops Akuntan (' + fmtNoRp(pmRencana) + ', selisih ' + (selisihPM > 0 ? '+' : '') + fmtNoRp(selisihPM) + '). Koordinasikan dengan Akuntan agar sama.'}
+          ? '✓ Total PM diproduksi (' + fmtNoRp(totProd) + ') cocok dengan PM Rencana Ops Akuntan (' + fmtNoRp(pmRencana) + ').'
+          : '⚠️ Total PM diproduksi (' + fmtNoRp(totProd) + '; dikirim ' + fmtNoRp(totPM) + ') berbeda dengan PM Rencana Ops Akuntan (' + fmtNoRp(pmRencana) + ', selisih ' + (selisihPM > 0 ? '+' : '') + fmtNoRp(selisihPM) + '). Koordinasikan dengan Akuntan agar sama.'}
       </div>}
     </Card>
     <Card pad={false}>
@@ -3006,11 +3007,385 @@ function PopLapanganPage({ session, scope, toast }) {
     <Card>
       <div className="flex justify-between text-sm mb-2" style={{ color: COLORS.ink }}>
         <span><b>{dikirimList.length}</b> dari {d.sekolah.length} sekolah/posyandu dikirim</span>
-        <b className="num" style={{ color: COLORS.green }}>{fmtNoRp(totPM)} PM</b>
+        <b className="num" style={{ color: COLORS.green }}>{fmtNoRp(totProd)} PM diproduksi</b>
       </div>
-      <div className="text-xs mb-3" style={{ color: COLORS.muted }}>Porsi besar: {fmtNoRp(totB)} · Porsi kecil: {fmtNoRp(totK)} · Total diproduksi: <b>{fmtNoRp(h.produksi.total)}</b> · Otomatis masuk ke LPDH Harian PIC.</div>
+      <div className="text-xs mb-3" style={{ color: COLORS.muted }}>Dikirim: {fmtNoRp(totPM)} (Besar {fmtNoRp(totB)} · Kecil {fmtNoRp(totK)}) · Otomatis masuk ke LPDH Harian PIC.</div>
       <Btn full disabled={saving} onClick={simpan}>{saving ? I.spinner : I.check} Simpan Pengiriman POP</Btn>
     </Card>
+  </div>;
+}
+
+// Pencocokan nama lembaga PIC Sekolah / Kader Posyandu dengan daftar sekolah/posyandu POP
+function normSekolah(s) { return String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim(); }
+function cocokSekolahPop(lembaga, sekolahList) {
+  const lb = normSekolah(lembaga);
+  if (!lb || !sekolahList || !sekolahList.length) return null;
+  let hit = sekolahList.find(function(s) { return normSekolah(s.nama) === lb; });
+  if (hit) return hit;
+  hit = sekolahList.find(function(s) { const sn = normSekolah(s.nama); return sn && (sn.indexOf(lb) >= 0 || lb.indexOf(sn) >= 0); });
+  return hit || null;
+}
+
+// Journey bertahap 3 langkah khusus Aslap: 1) POP & PM → 2) PIC Sekolah & Posyandu (otomatis rekomendasi kosongkan yang tidak dikirim) → 3) Relawan
+function AslapJourneyPage({ session, scope, toast }) {
+  const role = session.user.role;
+  const dapurId = (role === 'akuntan' || role === 'pic' || role === 'aslap') ? session.user.dapur : (scope && scope !== 'ALL' ? scope : '');
+  const [tanggal, setTanggal] = useState(todayISO());
+  const [step, setStep] = useState(1);   // 1 = POP & PM, 2 = PIC & Posyandu, 3 = Relawan
+  const [step1Done, setStep1Done] = useState(false);
+  const [step2Done, setStep2Done] = useState(false);
+  const [selesai, setSelesai] = useState(false);
+
+  // State Langkah 1 (POP & Produksi)
+  const [d, setD] = useState(null);
+  const [sumberPop, setSumberPop] = useState('');
+  const [pmRencana, setPmRencana] = useState(null);
+  const [tempel, setTempel] = useState(null);
+  const [savingPop, setSavingPop] = useState(false);
+
+  // State Langkah 2 & 3 (Kehadiran PIC/Posyandu & Relawan)
+  const [kwData, setKwData] = useState(null);
+  const [kwRows, setKwRows] = useState([]);
+  const [bukaSub, setBukaSub] = useState({});
+  const [savingKw, setSavingKw] = useState(false);
+
+  function loadAll() {
+    if (!dapurId) return;
+    setD(null); setKwData(null); setBukaSub({}); setSelesai(false);
+    Promise.all([
+      api('getHarianLPDH', { dapur: dapurId, tanggal: tanggal }),
+      api('getKwitansiHarian', { dapur: dapurId, tanggal: tanggal }),
+    ]).then(function(res) {
+      const rp = res[0], rk = res[1];
+      let sekolahSaved = [];
+      let popSudah = false;
+      if (rp.ok && rp.data) {
+        const x = rp.data.data || {};
+        const pm = {}; (x.pm || []).forEach(function(p) { pm[p.kode] = p; });
+        sekolahSaved = (x.sekolah || []).map(function(s2) { return { nama: s2.nama, jenjang: s2.jenjang, besar: String(s2.besar || ''), kecil: String(s2.kecil || ''), dikirim: s2.dikirim !== false }; });
+        setD({
+          sekolah: sekolahSaved,
+          pm: LPDH_KELOMPOK.map(function(k) { return Object.assign({ kode: k[0], target: '', distribusi: '', diterima: '', tidak: '', alasan: '', bnba: '', bast: '', link: '' }, pm[k[0]] || {}); }),
+          produksi: Object.assign({ total: '', organoleptik: '', sampel: '', tidak_terdistribusi: '', buffer: '' }, x.produksi || {}),
+          syarat: Object.assign({}, LPDH_SYARAT.reduce(function(o, s2) { o[s2[0]] = s2[2]; return o; }, {}), x.syarat || {}),
+        });
+        setSumberPop(rp.data.sumber || '');
+        setPmRencana(rp.data.pmRencana != null ? Number(rp.data.pmRencana) : null);
+        popSudah = rp.data.sumber === 'tersimpan';
+      } else {
+        if (!rp.ok) toast(rp.error, 'error');
+        setD({ sekolah: [], pm: [], produksi: {}, syarat: {} });
+      }
+      setStep1Done(popSudah);
+      if (rk.ok && rk.data) {
+        setKwData(rk.data);
+        const subInit = {};
+        const sudahTerbit = rk.data.sudahTerbit > 0;
+        const rowsInit = (rk.data.rows || []).map(function(x) {
+          if (x.pengganti) subInit[x.penerima_id] = true;
+          let pilih = x.pilih;
+          let pmVal = x.pm || '';
+          if (!sudahTerbit && x.jenis !== 'RELAWAN' && sekolahSaved.length) {
+            const match = cocokSekolahPop(x.lembaga, sekolahSaved);
+            if (match) {
+              if (match.dikirim === false) pilih = false;
+              else { const totSk = (Number(match.besar) || 0) + (Number(match.kecil) || 0); if (totSk > 0) pmVal = totSk; }
+            }
+          }
+          return Object.assign({}, x, { nominal: x.nominal != null ? String(x.nominal) : '', pm: String(pmVal || ''), pengganti: x.pengganti || '', pilih: pilih });
+        });
+        setBukaSub(subInit);
+        setKwRows(rowsInit);
+        setStep2Done(popSudah && sudahTerbit);
+        setSelesai(popSudah && sudahTerbit);
+        setStep(1);
+      } else {
+        if (!rk.ok) toast(rk.error, 'error');
+        setKwData({ rows: [] }); setKwRows([]); setStep2Done(false); setStep(1);
+      }
+    });
+  }
+  useEffect(loadAll, [dapurId, tanggal]);
+
+  if (!dapurId) return <Card><div className="text-sm" style={{ color: COLORS.muted }}>Pilih satu dapur di atas untuk menjalankan Tugas Harian Aslap.</div></Card>;
+  if (!d || !kwData) return <Card><div className="text-sm flex items-center gap-2" style={{ color: COLORS.muted }}>{I.spinner} Memuat tugas harian Aslap…</div></Card>;
+
+  function ubahSk(i, k, v) { setD(Object.assign({}, d, { sekolah: d.sekolah.map(function(x, j) { return j === i ? Object.assign({}, x, { [k]: v }) : x; }) })); }
+  function setProd(k, v) { const o = {}; o[k] = v; setD(Object.assign({}, d, { produksi: Object.assign({}, d.produksi, o) })); }
+  function ubahKw(id, k, v) { setKwRows(kwRows.map(function(x) { return x.penerima_id === id ? Object.assign({}, x, { [k]: v }) : x; })); }
+  const h = pmTerapkan(d);
+  const hasilTempel = tempel !== null ? bacaTempelSekolah(tempel) : null;
+  function pakaiTempel() {
+    const lama = {}; d.sekolah.forEach(function(x) { lama[x.nama.toLowerCase()] = x.jenjang; });
+    const baru = hasilTempel.sekolah.map(function(x) { return { nama: x.nama, jenjang: lama[x.nama.toLowerCase()] || x.jenjang, besar: String(x.besar), kecil: String(x.kecil), dikirim: true }; });
+    setD(Object.assign({}, d, { sekolah: baru, produksi: hasilTempel.organoleptik !== null ? Object.assign({}, d.produksi, { organoleptik: String(hasilTempel.organoleptik) }) : d.produksi }));
+    setTempel(null);
+  }
+  const dikirimList = d.sekolah.filter(function(x) { return x.dikirim !== false; });
+  const totB = dikirimList.reduce(function(a, x) { return a + (Number(x.besar) || 0); }, 0);
+  const totK = dikirimList.reduce(function(a, x) { return a + (Number(x.kecil) || 0); }, 0);
+  const totPM = totB + totK;
+  const totProd = Number(h.produksi.total) || totPM;
+  const selisihPM = pmRencana != null ? (totProd - pmRencana) : null;
+  const tanpaJenjang = d.sekolah.filter(function(x) { return !x.jenjang; });
+
+  // Terapkan rekomendasi POP ke daftar PIC Sekolah & Kader Posyandu (yang sekolahnya tidak dikirim otomatis direkomendasikan kosong)
+  function terapkanRekomendasiPop(sekolahTerbaru) {
+    setKwRows(function(prev) {
+      return prev.map(function(x) {
+        if (x.jenis === 'RELAWAN') return x;
+        const m = cocokSekolahPop(x.lembaga, sekolahTerbaru);
+        if (!m) return x;
+        if (m.dikirim === false) return Object.assign({}, x, { pilih: false });
+        const totSk = (Number(m.besar) || 0) + (Number(m.kecil) || 0);
+        return Object.assign({}, x, { pilih: true, pm: totSk > 0 ? String(totSk) : x.pm });
+      });
+    });
+  }
+
+  async function simpanStep1() {
+    if (tanpaJenjang.length) { toast('Pilih jenjang untuk: ' + tanpaJenjang.map(function(x) { return x.nama || '(tanpa nama)'; }).join(', '), 'error'); return; }
+    setSavingPop(true);
+    const r = await apiPost('saveHarianLPDH', { dapur: dapurId, tanggal: tanggal, data: h });
+    setSavingPop(false);
+    if (!r.ok) { toast(r.error, 'error'); return; }
+    setStep1Done(true);
+    setSumberPop('tersimpan');
+    terapkanRekomendasiPop(d.sekolah);
+    toast('Langkah 1 (POP & PM) tersimpan! Lanjut ke Langkah 2: PIC Sekolah & Posyandu.');
+    setStep(2);
+  }
+
+  function lanjutStep3() {
+    setStep2Done(true);
+    setStep(3);
+  }
+
+  async function simpanSemuaKehadiran() {
+    const dipilih = kwRows.filter(function(x) { return x.pilih; });
+    if (!dipilih.length) { toast('Pilih minimal 1 orang yang hadir', 'error'); return; }
+    setSavingKw(true);
+    try {
+      const payload = dipilih.map(function(x) {
+        return { penerima_id: x.penerima_id, nominal: 0, pm: Number(x.pm) || 0, keterangan: x.keterangan || '', pengganti: String(x.pengganti || '').trim() };
+      });
+      const r = await apiPost('terbitkanKwitansi', { dapur: dapurId, tanggal: tanggal, simpan_saja: true, rows: payload });
+      if (!r.ok) { toast(r.error, 'error'); return; }
+      const dr = r.data || {};
+      setKwData(function(prev) { return Object.assign({}, prev, { sudahTerbit: dr.sudahTerbit || dipilih.length, totalPilih: dr.totalPilih || prev.totalPilih, tercatat: dr.tercatat || prev.tercatat, anggaran: dr.anggaran || prev.anggaran }); });
+      setStep2Done(true);
+      setSelesai(true);
+      const selisihAda = JENIS_DP.some(function(j) {
+        const totJ = (dr.totalPilih || {})[j[0]] || 0, angJ = (dr.anggaran || dr.tercatat || {})[j[0]] || 0;
+        return (totJ > 0 || angJ > 0) && totJ !== angJ;
+      });
+      toast('Semua kehadiran tersimpan (' + dipilih.length + ' orang).' + (selisihAda ? ' Ada selisih dengan anggaran Akuntan — cek ringkasan.' : ' Semua cocok!'), selisihAda ? 'error' : undefined);
+    } catch (e) { toast('Gagal menyimpan kehadiran: ' + e.message, 'error'); }
+    finally { setSavingKw(false); }
+  }
+
+  const kecilIn = Object.assign({}, inputStyle, { minHeight: 36, padding: '5px 8px', textAlign: 'right' });
+  const picKaderRows = kwRows.filter(function(x) { return x.jenis === 'PIC_SEKOLAH' || x.jenis === 'KADER'; });
+  const relawanRows = kwRows.filter(function(x) { return x.jenis === 'RELAWAN'; });
+  const adaPengganti = kwRows.some(function(x) { return x.pilih && !!String(x.pengganti || '').trim(); });
+
+  function renderKelompokKw(jenisList) {
+    return jenisList.map(function(j) {
+      const g = kwRows.filter(function(x) { return x.jenis === j[0]; });
+      if (!g.length) return null;
+      const nHadir = g.filter(function(x) { return x.pilih; }).length;
+      const tot = (kwData.totalPilih || {})[j[0]] || 0;
+      const ang = (kwData.anggaran || kwData.tercatat || {})[j[0]] || 0;
+      const beda = (ang > 0 || tot > 0) && ang !== tot;
+      const tidakDikirimCount = j[0] !== 'RELAWAN' ? g.filter(function(x) { const m = cocokSekolahPop(x.lembaga, d.sekolah); return m && m.dikirim === false; }).length : 0;
+      return <Card key={j[0]} pad={false} className="mb-3">
+        <div className="px-4 pt-3 text-[11px]" style={{ color: beda ? '#9A6A0B' : COLORS.green }}>
+          Hadir <b>{nHadir}/{g.length}</b> · Total tersimpan <b>{fmt(tot)}</b> · Anggaran Akuntan <b>{fmt(ang)}</b>
+          {beda ? ' — ⚠️ selisih ' + fmt(tot - ang) + ' (koordinasikan dengan Akuntan)' : (ang > 0 ? ' · ✓ cocok' : '')}
+        </div>
+        {tidakDikirimCount > 0 && <div className="px-4 pt-1.5 text-[11px]" style={{ color: '#9A6A0B' }}>
+          ℹ️ {tidakDikirimCount} sekolah/posyandu tidak dikirim di Langkah 1 — otomatis direkomendasikan tidak hadir (dikosongkan).
+        </div>}
+        <div className="px-4 pt-1.5 pb-1 flex justify-between items-center"><Eyebrow>{j[1]}</Eyebrow>
+          <span className="text-xs flex gap-3">
+            <button type="button" onClick={function() { setKwRows(kwRows.map(function(x) { return x.jenis === j[0] ? Object.assign({}, x, { pilih: true }) : x; })); }} style={{ color: COLORS.blue }}>Semua</button>
+            <button type="button" onClick={function() { setKwRows(kwRows.map(function(x) { return x.jenis === j[0] ? Object.assign({}, x, { pilih: false }) : x; })); }} style={{ color: COLORS.blue }}>Kosongkan</button>
+          </span>
+        </div>
+        {g.map(function(x) {
+          const showSub = !!(bukaSub[x.penerima_id] || x.pengganti);
+          const matchPop = x.jenis !== 'RELAWAN' ? cocokSekolahPop(x.lembaga, d.sekolah) : null;
+          const tidakDikirim = matchPop && matchPop.dikirim === false;
+          const pmMatch = matchPop && matchPop.dikirim !== false ? ((Number(matchPop.besar) || 0) + (Number(matchPop.kecil) || 0)) : 0;
+          return <div key={x.penerima_id} className="px-4 py-2.5" style={{ borderTop: '1px solid ' + COLORS.line, opacity: x.pilih ? 1 : 0.55, background: tidakDikirim ? '#FDF8EE' : '#fff' }}>
+            <div className="flex items-center gap-2">
+              <input type="checkbox" checked={!!x.pilih} onChange={function(e) { ubahKw(x.penerima_id, 'pilih', e.target.checked); }} style={{ width: 22, height: 22, flexShrink: 0 }} aria-label={'Pilih ' + x.nama}/>
+              <div className="flex-1 min-w-0">
+                <div className="text-sm truncate" style={{ color: COLORS.ink }}>
+                  {x.pengganti ? <><b>{x.pengganti}</b> <span className="text-[11px]" style={{ color: '#6B3FA0' }}>(pengganti {x.nama} · paraf Aslap)</span></> : x.nama}
+                </div>
+                <div className="text-[11px] truncate" style={{ color: COLORS.muted }}>{x.jenis === 'RELAWAN' ? (x.jabatan || '—') : x.lembaga}</div>
+                {tidakDikirim && <div className="text-[10.5px] font-semibold mt-0.5" style={{ color: '#9A6A0B' }}>⚠️ Tidak dikirim di POP ({matchPop.nama}) — disarankan kosongkan</div>}
+                {!tidakDikirim && matchPop && <div className="text-[10.5px] mt-0.5" style={{ color: COLORS.green }}>✓ Dikirim di POP ({fmtNoRp(pmMatch)} PM)</div>}
+              </div>
+              {x.pilih && <button type="button" onClick={function() { setBukaSub(function(p) { const n = Object.assign({}, p); n[x.penerima_id] = !showSub; return n; }); if (showSub && x.pengganti) ubahKw(x.penerima_id, 'pengganti', ''); }}
+                className="text-[11px] font-semibold rounded px-2 py-1 shrink-0" style={{ color: showSub ? '#6B3FA0' : COLORS.muted, border: '1px solid ' + (showSub ? '#C9B2E3' : COLORS.line), background: showSub ? '#F3EAF8' : 'transparent' }}>
+                {showSub ? 'Batal ganti' : 'Diganti?'}
+              </button>}
+              {x.pilih && x.jenis !== 'RELAWAN' && <input value={x.pm} inputMode="numeric" onChange={function(e) { ubahKw(x.penerima_id, 'pm', e.target.value.replace(/\D/g, '')); }} title="Penerima manfaat"
+                style={Object.assign({}, inputStyle, { width: 58, minHeight: 36, padding: '6px 8px', textAlign: 'center' })} aria-label={'PM ' + x.nama}/>}
+            </div>
+            {x.pilih && showSub && <div className="mt-2 pl-7">
+              <input value={x.pengganti} onChange={function(e) { ubahKw(x.penerima_id, 'pengganti', e.target.value); }}
+                placeholder={'Nama pengganti ' + x.nama + ' (hari ini saja)'} aria-label={'Pengganti ' + x.nama}
+                style={Object.assign({}, inputStyle, { minHeight: 36, padding: '6px 10px', fontSize: 13, borderColor: '#C9B2E3' })}/>
+              <div className="text-[10px] mt-0.5" style={{ color: '#6B3FA0' }}>Hanya untuk tanggal {fmtDDMMYYYY(tanggal)} — basis data besok tetap {x.nama}. Kolom TTD kwitansi otomatis diparaf Aslap.</div>
+            </div>}
+          </div>;
+        })}
+      </Card>;
+    });
+  }
+
+  return <div className="space-y-3">
+    <div>
+      <Eyebrow>Tugas Harian Aslap (Bertahap)</Eyebrow>
+      <div className="text-xs" style={{ color: COLORS.muted }}>Isi secara berurutan: <b>1. POP & PM</b> → <b>2. PIC Sekolah & Posyandu</b> → <b>3. Kehadiran Relawan</b>. Langkah berikutnya terbuka setelah langkah sebelumnya diselesaikan.</div>
+    </div>
+
+    <Card>
+      <Field label="Tanggal tugas"><input type="date" value={tanggal} onChange={function(e) { if (e.target.value) setTanggal(e.target.value); }} style={inputStyle} aria-label="Tanggal tugas Aslap"/></Field>
+      <div className="grid grid-cols-3 gap-1.5 mt-1">
+        {[[1, '1. POP & PM', true, step1Done], [2, '2. PIC & Posyandu', step1Done, step2Done], [3, '3. Relawan', step1Done && step2Done, selesai]].map(function(st) {
+          const aktif = step === st[0], boleh = st[2], done = st[3];
+          return <button key={st[0]} type="button" disabled={!boleh} onClick={function() { if (boleh) setStep(st[0]); }}
+            className="rounded-lg px-2 py-2 text-xs font-semibold text-center transition"
+            style={{
+              background: aktif ? COLORS.green : done ? '#E8F1EC' : COLORS.paper,
+              color: aktif ? '#fff' : done ? COLORS.green : boleh ? COLORS.ink : COLORS.muted,
+              border: '1px solid ' + (aktif ? COLORS.green : done ? '#B9D7C6' : COLORS.line),
+              opacity: boleh ? 1 : 0.6,
+            }}>
+            {done && !aktif ? '✓ ' : !boleh ? '🔒 ' : ''}{st[1]}
+          </button>;
+        })}
+      </div>
+      {!step1Done && <div className="text-[11px] mt-2" style={{ color: '#9A6A0B' }}>Selesaikan & simpan <b>Langkah 1 (POP & PM)</b> dulu untuk membuka Langkah 2 & 3.</div>}
+      {adaPengganti && !kwData.adaParafAslap && <div className="text-xs rounded-lg p-2 mt-2" style={{ background: '#FBF3E2', color: '#7A5408' }}>⚠️ Ada pengganti hari ini, tetapi <b>Paraf Aslap</b> belum disimpan. Simpan paraf Anda di menu <b>Profil & Paraf</b>.</div>}
+    </Card>
+
+    {selesai && <Card style={{ background: '#E8F1EC', borderColor: '#B9D7C6' }}>
+      <div className="text-sm font-bold mb-1" style={{ color: COLORS.green }}>✓ Tugas Harian Aslap Tanggal {fmtDDMMYYYY(tanggal)} Tersimpan</div>
+      <div className="text-xs space-y-0.5" style={{ color: COLORS.ink }}>
+        <div>• <b>POP & Produksi:</b> {dikirimList.length}/{d.sekolah.length} sekolah/posyandu dikirim · Total diproduksi <b>{fmtNoRp(totProd)} PM</b>{pmRencana != null ? (selisihPM === 0 ? ' (✓ cocok dengan Rencana Ops)' : ' (⚠️ selisih ' + (selisihPM > 0 ? '+' : '') + fmtNoRp(selisihPM) + ' dari Rencana Ops ' + fmtNoRp(pmRencana) + ')') : ''}</div>
+        <div>• <b>Kehadiran:</b> {kwRows.filter(function(x) { return x.pilih; }).length} orang tercatat (PIC Sekolah, Posyandu & Relawan). Anda masih bisa klik Langkah 1/2/3 di atas jika perlu mengubah.</div>
+      </div>
+    </Card>}
+
+    {step === 1 && <>
+      {sumberPop.indexOf('disalin') === 0 && <Card><div className="text-xs" style={{ color: COLORS.blue }}>Daftar sekolah {sumberPop}. Centang sekolah/posyandu yang dikirim hari ini (jangan hapus yang libur/tidak dikirim agar basis data tetap ada).</div></Card>}
+      {pmRencana != null && <Card style={{ background: selisihPM === 0 ? '#E8F1EC' : '#FBF3E2' }}>
+        <div className="text-xs font-medium" style={{ color: selisihPM === 0 ? COLORS.green : '#7A5408' }}>
+          {selisihPM === 0
+            ? '✓ Total PM diproduksi (' + fmtNoRp(totProd) + ') cocok dengan PM Rencana Ops Akuntan (' + fmtNoRp(pmRencana) + ').'
+            : '⚠️ Total PM diproduksi (' + fmtNoRp(totProd) + '; dikirim ' + fmtNoRp(totPM) + ') berbeda dengan PM Rencana Ops Akuntan (' + fmtNoRp(pmRencana) + ', selisih ' + (selisihPM > 0 ? '+' : '') + fmtNoRp(selisihPM) + '). Koordinasikan dengan Akuntan agar sama.'}
+        </div>
+      </Card>}
+      <Card pad={false}>
+        <div className="p-3 sm:p-4 flex items-center justify-between gap-2 flex-wrap" style={{ borderBottom: '1px solid ' + COLORS.line }}>
+          <div className="flex gap-2 flex-wrap">
+            <Btn size="sm" onClick={function() { setD(Object.assign({}, d, { sekolah: d.sekolah.concat([{ nama: '', jenjang: '', besar: '', kecil: '', dikirim: true }]) })); }}>{I.plusSm} Tambah sekolah / posyandu</Btn>
+            <Btn size="sm" kind="ghost" onClick={function() { setTempel(tempel === null ? '' : null); }}>{I.file} Tempel tabel POP</Btn>
+          </div>
+          {d.sekolah.length > 0 && <span className="text-xs flex gap-3">
+            <button type="button" onClick={function() { setD(Object.assign({}, d, { sekolah: d.sekolah.map(function(x) { return Object.assign({}, x, { dikirim: true }); }) })); }} style={{ color: COLORS.blue }}>Kirim semua</button>
+            <button type="button" onClick={function() { setD(Object.assign({}, d, { sekolah: d.sekolah.map(function(x) { return Object.assign({}, x, { dikirim: false }); }) })); }} style={{ color: COLORS.blue }}>Kosongkan</button>
+          </span>}
+        </div>
+        {tempel !== null && <div className="p-3 sm:p-4" style={{ borderBottom: '1px solid ' + COLORS.line, background: COLORS.paper }}>
+          <div className="text-xs mb-1.5" style={{ color: COLORS.muted }}>Salin tabel dari Excel/WhatsApp (kolom: Nama sekolah · Porsi besar · Porsi kecil). Baris "Uji Organoleptik" otomatis masuk ke produksi.</div>
+          <textarea value={tempel} onChange={function(e) { setTempel(e.target.value); }} rows={4} style={Object.assign({}, inputStyle, { minHeight: 96, fontFamily: 'inherit' })} aria-label="Tempel tabel POP" placeholder={'SDN CAGAK; 235; 228\nPOSYANDU MELATI; 15; 30'}/>
+          <div className="flex items-center justify-between gap-2 mt-2">
+            <span className="text-xs" style={{ color: COLORS.ink }}>{hasilTempel.sekolah.length} sekolah/posyandu terbaca{hasilTempel.organoleptik !== null ? ' · organoleptik ' + hasilTempel.organoleptik : ''}</span>
+            <Btn size="sm" onClick={pakaiTempel} disabled={!hasilTempel.sekolah.length}>{I.check} Masukkan</Btn>
+          </div>
+        </div>}
+        {!d.sekolah.length && <div className="p-6 text-center text-sm" style={{ color: COLORS.muted }}>Belum ada basis data sekolah / posyandu. Klik <b>Tambah sekolah / posyandu</b> atau <b>Tempel tabel POP</b>.</div>}
+        {d.sekolah.map(function(x, i) {
+          const aktif = x.dikirim !== false;
+          const pmBaris = aktif ? ((Number(x.besar) || 0) + (Number(x.kecil) || 0)) : 0;
+          return <div key={i} className="px-3 sm:px-4 py-2.5" style={{ borderTop: i ? '1px solid ' + COLORS.line : 'none', opacity: aktif ? 1 : 0.55, background: aktif ? '#fff' : COLORS.paper }}>
+            <div className="flex items-center gap-2">
+              <input type="checkbox" checked={aktif} onChange={function(e) { ubahSk(i, 'dikirim', e.target.checked); }} style={{ width: 20, height: 20, flexShrink: 0 }} aria-label={'Dikirim ' + (x.nama || (i + 1))} title="Centang bila dikirim hari ini"/>
+              <input value={x.nama} onChange={function(e) { const v = e.target.value; setD(Object.assign({}, d, { sekolah: d.sekolah.map(function(y, j) { return j === i ? Object.assign({}, y, { nama: v, jenjang: y.jenjang || pmTebakJenjang(v) }) : y; }) })); }}
+                style={Object.assign({}, inputStyle, { minHeight: 36, padding: '5px 8px', flex: 1, minWidth: 0 })} placeholder="Nama sekolah / posyandu…" aria-label={'Nama sekolah ' + (i + 1)}/>
+              <div className="text-xs font-bold num shrink-0" style={{ minWidth: 58, textAlign: 'right', color: aktif ? COLORS.green : COLORS.muted }}>{aktif ? fmtNoRp(pmBaris) + ' PM' : 'Tidak dikirim'}</div>
+              <button type="button" onClick={function() { setD(Object.assign({}, d, { sekolah: d.sekolah.filter(function(y, j) { return j !== i; }) })); }} className="p-1" style={{ color: COLORS.muted }} title="Hapus permanen dari basis data" aria-label={'Hapus permanen ' + (i + 1)}>{I.trash}</button>
+            </div>
+            {aktif && <div className="flex items-center gap-2 mt-1.5 pl-7 flex-wrap">
+              <select value={x.jenjang} onChange={function(e) { ubahSk(i, 'jenjang', e.target.value); }} style={Object.assign({}, inputStyle, { minHeight: 34, padding: '4px 8px', fontSize: 12, flex: '1 1 160px', color: x.jenjang ? COLORS.ink : COLORS.danger })} aria-label={'Jenjang ' + (i + 1)}>
+                <option value="">Pilih jenjang / posyandu…</option>{PM_JENJANG.map(function(j) { return <option key={j[0]} value={j[0]}>{j[1]}</option>; })}
+              </select>
+              <div className="flex items-center gap-1.5">
+                <span className="text-[11px]" style={{ color: COLORS.muted }}>Besar</span>
+                <input value={x.besar} inputMode="numeric" onChange={function(e) { ubahSk(i, 'besar', e.target.value.replace(/\D/g, '')); }} style={Object.assign({}, kecilIn, { width: 62 })} placeholder="0" aria-label={'Besar ' + (i + 1)}/>
+                <span className="text-[11px]" style={{ color: COLORS.muted }}>Kecil</span>
+                <input value={x.kecil} inputMode="numeric" onChange={function(e) { ubahSk(i, 'kecil', e.target.value.replace(/\D/g, '')); }} style={Object.assign({}, kecilIn, { width: 62 })} placeholder="0" aria-label={'Kecil ' + (i + 1)}/>
+              </div>
+            </div>}
+          </div>;
+        })}
+      </Card>
+      <Card>
+        <div className="text-xs font-semibold uppercase mb-2" style={{ color: COLORS.muted }}>Produksi (Uji Organoleptik, Sampel & Lainnya)</div>
+        <div className="grid grid-cols-2 sm:grid-cols-3 gap-x-2">
+          <Field label="Total diproduksi (otomatis)">
+            <div className="num font-bold" style={Object.assign({}, inputStyle, { background: COLORS.paper })} aria-label="Total diproduksi">{fmtNoRp(h.produksi.total)}</div>
+          </Field>
+          {[['organoleptik', 'Uji organoleptik'], ['sampel', 'Sampel makanan'], ['tidak_terdistribusi', 'Tidak terdistribusi'], ['buffer', 'Buffer']].map(function(f) {
+            return <Field key={f[0]} label={f[1]}><LpdhIsian label={f[1]} v={d.produksi[f[0]]} on={function(v) { setProd(f[0], v); }}/></Field>;
+          })}
+        </div>
+      </Card>
+      <Card>
+        <div className="flex justify-between text-sm mb-2" style={{ color: COLORS.ink }}>
+          <span><b>{dikirimList.length}</b>/{d.sekolah.length} sekolah dikirim · Dikirim {fmtNoRp(totPM)} PM</span>
+          <b className="num" style={{ color: COLORS.green }}>{fmtNoRp(totProd)} diproduksi</b>
+        </div>
+        <Btn full disabled={savingPop} onClick={simpanStep1}>{savingPop ? I.spinner : I.check} Simpan POP & Lanjut ke PIC/Posyandu →</Btn>
+      </Card>
+    </>}
+
+    {step === 2 && <>
+      {!picKaderRows.length && <Card><div className="text-sm text-center" style={{ color: COLORS.muted }}>Belum ada data PIC Sekolah / Kader Posyandu di dapur ini.</div></Card>}
+      {renderKelompokKw(JENIS_DP.filter(function(j) { return j[0] !== 'RELAWAN'; }))}
+      <Card>
+        <div className="flex justify-between text-sm mb-3" style={{ color: COLORS.ink }}>
+          <span>PIC Sekolah & Posyandu hadir</span>
+          <b>{picKaderRows.filter(function(x) { return x.pilih; }).length} / {picKaderRows.length} orang</b>
+        </div>
+        <div className="flex gap-2">
+          <Btn kind="ghost" onClick={function() { setStep(1); }}>← Kembali ke POP</Btn>
+          <Btn full onClick={lanjutStep3}>Lanjut ke Kehadiran Relawan →</Btn>
+        </div>
+      </Card>
+    </>}
+
+    {step === 3 && <>
+      {!relawanRows.length && <Card><div className="text-sm text-center" style={{ color: COLORS.muted }}>Belum ada data Relawan di dapur ini.</div></Card>}
+      {renderKelompokKw(JENIS_DP.filter(function(j) { return j[0] === 'RELAWAN'; }))}
+      <Card>
+        <div className="flex justify-between text-sm mb-2" style={{ color: COLORS.ink }}>
+          <span>Relawan hadir: <b>{relawanRows.filter(function(x) { return x.pilih; }).length}/{relawanRows.length}</b></span>
+          <span>Total semua: <b>{kwRows.filter(function(x) { return x.pilih; }).length} orang</b></span>
+        </div>
+        <div className="text-[11px] mb-3" style={{ color: COLORS.muted }}>Total nominal kehadiran vs Anggaran Akuntan diperbarui otomatis saat disimpan.</div>
+        <div className="flex gap-2">
+          <Btn kind="ghost" onClick={function() { setStep(2); }}>← Kembali ke PIC</Btn>
+          <Btn full disabled={savingKw} onClick={simpanSemuaKehadiran}>{savingKw ? I.spinner : I.check} Simpan Semua Kehadiran (Selesai)</Btn>
+        </div>
+      </Card>
+    </>}
   </div>;
 }
 
@@ -3050,6 +3425,7 @@ function LpdhHarianForm({ dapurId, tanggal, toast, onClose, onSaved }) {
   const dikirimSk = d.sekolah.filter(function(x) { return x.dikirim !== false; });
   const totB = dikirimSk.reduce(function(a, x) { return a + (Number(x.besar) || 0); }, 0), totK = dikirimSk.reduce(function(a, x) { return a + (Number(x.kecil) || 0); }, 0);
   const totPM = totB + totK;
+  const totProd = Number(h.produksi.total) || totPM;
   const tidakSeimbang = h.pm.filter(function(x) { return (Number(x.distribusi) || 0) !== (Number(x.diterima) || 0) + (Number(x.tidak) || 0); }).map(function(x) { return x.kode; });
   const tanpaAlasan = h.pm.filter(function(x) { return Number(x.tidak) > 0 && !x.alasan; }).map(function(x) { return x.kode; });
   async function simpan() {
@@ -3062,8 +3438,8 @@ function LpdhHarianForm({ dapurId, tanggal, toast, onClose, onSaved }) {
   const kecilIn = Object.assign({}, inputStyle, { minHeight: 38, padding: '6px 8px', textAlign: 'right' });
   return <Modal title={'Porsi PM (POP) · ' + fmtDDMMYYYY(tanggal)} size="lg" onClose={onClose}>
     {sumber.indexOf('disalin') === 0 && <div className="text-sm rounded-lg p-2.5 mb-3" style={{ background: '#EAF0F8', color: COLORS.blue }}>Daftar & angka {sumber}. Sesuaikan porsi hari ini; nomor & link BAST diisi baru setiap hari.</div>}
-    {pmRencana != null && modeSekolah && <div className="text-xs rounded-lg p-2.5 mb-3" style={{ background: totPM === pmRencana ? '#E8F1EC' : '#FBF3E2', color: totPM === pmRencana ? COLORS.green : '#7A5408' }}>
-      {totPM === pmRencana ? '✓ Total PM dikirim (' + fmtNoRp(totPM) + ') cocok dengan PM Rencana Ops Akuntan.' : '⚠️ Total PM dikirim (' + fmtNoRp(totPM) + ') berbeda dengan PM Rencana Ops Akuntan (' + fmtNoRp(pmRencana) + ', selisih ' + (totPM - pmRencana > 0 ? '+' : '') + fmtNoRp(totPM - pmRencana) + ').'}
+    {pmRencana != null && modeSekolah && <div className="text-xs rounded-lg p-2.5 mb-3" style={{ background: totProd === pmRencana ? '#E8F1EC' : '#FBF3E2', color: totProd === pmRencana ? COLORS.green : '#7A5408' }}>
+      {totProd === pmRencana ? '✓ Total PM diproduksi (' + fmtNoRp(totProd) + ') cocok dengan PM Rencana Ops Akuntan.' : '⚠️ Total PM diproduksi (' + fmtNoRp(totProd) + '; dikirim ' + fmtNoRp(totPM) + ') berbeda dengan PM Rencana Ops Akuntan (' + fmtNoRp(pmRencana) + ', selisih ' + (totProd - pmRencana > 0 ? '+' : '') + fmtNoRp(totProd - pmRencana) + ').'}
     </div>}
     <div className="text-xs font-semibold uppercase mb-1" style={{ color: COLORS.muted }}>Porsi per sekolah / penerima (POP)</div>
     <div className="text-xs mb-2" style={{ color: COLORS.muted }}>Centang sekolah yang dikirim hari ini (yang tidak dikirim cukup hilangkan centangnya agar tetap ada di basis data). Aplikasi mengubahnya otomatis ke kelompok sasaran LPDH.</div>
@@ -7231,7 +7607,7 @@ function ModePeranModal({ dapurList, nilai, onPilih, onClose }) {
 
 // Pengelompokan seluruh fitur ke dalam 6 kategori utama + sub-tab di dalam tiap kategori
 const KATEGORI_FITUR = [
-  { id: 'utama', label: 'Utama', judul: 'Ringkasan & Utama', icon: I.dash, views: ['tugas', 'dash', 'setup'] },
+  { id: 'utama', label: 'Utama', judul: 'Ringkasan & Utama', icon: I.dash, views: ['aslap', 'tugas', 'dash', 'setup'] },
   { id: 'pengajuan', label: 'Pengajuan', judul: 'Pengajuan & Operasional', icon: I.file, views: ['rencana', 'pengajuan', 'persetujuan', 'realmassal'] },
   { id: 'dokumen', label: 'Dokumen', judul: 'Berita Acara, Kehadiran & POP', icon: I.download, views: ['beritaacara', 'kwitansi', 'pop'] },
   { id: 'kas', label: 'Buku Kas', judul: 'Riwayat & Buku Kas', icon: I.list, views: ['riwayat', 'bukubesar', 'perubahan'] },
@@ -7239,6 +7615,7 @@ const KATEGORI_FITUR = [
   { id: 'pengaturan', label: 'Master & Akun', judul: 'Master & Akun', icon: I.settings, views: ['penerima', 'periode', 'users', 'dapur', 'profil'] },
 ];
 const SUB_LABEL_FITUR = {
+  aslap: 'Tugas Harian Aslap',
   laporan: 'Laporan Periode',
   lpdh: 'Laporan LPDH Harian',
   riwayat: 'Riwayat Transaksi',
@@ -7269,7 +7646,7 @@ function App() {
   const aktifSebagai = isAdminAsli && actAs ? actAs : null;
   ACT_AS = aktifSebagai;
   const session = aktifSebagai ? Object.assign({}, authSession, { user: Object.assign({}, authSession.user, { role: aktifSebagai.role, dapur: aktifSebagai.dapur || '' }) }) : authSession;
-  const [view, setView] = useState(function() { const s0 = loadSession(); const r0 = s0 && s0.user && s0.user.role; return r0 === 'pic' ? 'tugas' : r0 === 'aslap' ? 'kwitansi' : 'dash'; });
+  const [view, setView] = useState(function() { const s0 = loadSession(); const r0 = s0 && s0.user && s0.user.role; return r0 === 'pic' ? 'tugas' : r0 === 'aslap' ? 'aslap' : 'dash'; });
   const [scope, setScope] = useState('ALL');
   const [dapurList, setDapurList] = useState([]);
   const [toastData, setToastData] = useState(null);
@@ -7277,7 +7654,7 @@ function App() {
 
   function toast(msg, type) { setToastData({ msg: msg, type: type || 'ok' }); }
   AUTH_TOKEN = authSession ? authSession.token : null;
-  function setActAs(v) { clearApiCache(); saveActAs(v); setActAsState(v); setView(v && v.role === 'pic' ? 'tugas' : v && v.role === 'aslap' ? 'kwitansi' : v && v.role === 'asisten' ? 'pengajuan' : 'dash'); setRefreshKey(function(k) { return k + 1; }); }
+  function setActAs(v) { clearApiCache(); saveActAs(v); setActAsState(v); setView(v && v.role === 'pic' ? 'tugas' : v && v.role === 'aslap' ? 'aslap' : v && v.role === 'asisten' ? 'pengajuan' : 'dash'); setRefreshKey(function(k) { return k + 1; }); }
   ON_SESSION_INVALID = function(msg) { clearApiCache(); clearSession(); setSession(null); toast(msg || 'Sesi berakhir, silakan masuk lagi', 'error'); };
 
   useEffect(function() {
@@ -7297,12 +7674,12 @@ function App() {
   }, [authSession, actAs]);
 
   if (!session) return (<>
-    <Login onLogin={function(s){ clearApiCache(); saveSession(s); setSession(s); const r0 = s.user && s.user.role; setView(r0 === 'pic' ? 'tugas' : r0 === 'aslap' ? 'kwitansi' : 'dash'); }} toast={toast} />
+    <Login onLogin={function(s){ clearApiCache(); saveSession(s); setSession(s); const r0 = s.user && s.user.role; setView(r0 === 'pic' ? 'tugas' : r0 === 'aslap' ? 'aslap' : 'dash'); }} toast={toast} />
     {toastData && <Toast msg={toastData.msg} type={toastData.type} onClose={function(){setToastData(null);}}/>}
   </>);
 
   const role = session.user.role;
-  // Nav: akuntan Pengajuan (realisasi otomatis saat disetujui Yayasan/PIC); yayasan Persetujuan; aslap Kehadiran & POP
+  // Nav: akuntan Pengajuan (realisasi otomatis saat disetujui Yayasan/PIC); yayasan Persetujuan; aslap Journey Bertahap
   const navItems = ({
     akuntan: [
       ['setup','Setup',I.settings],
@@ -7324,8 +7701,7 @@ function App() {
       ['profil','Profil',I.user],
     ],
     aslap: [
-      ['kwitansi','Kehadiran',I.users],
-      ['pop','Pengiriman POP',I.list],
+      ['aslap','Tugas Aslap',I.check],
       ['profil','Profil & Paraf',I.user],
     ],
     pic: [
@@ -7485,6 +7861,7 @@ function App() {
             {view === 'bukubesar' && <BukuBesar session={session} scope={effScope} toast={toast}/>}
             {view === 'periode' && <PeriodeAdmin session={session} toast={toast}/>}
             {view === 'realmassal' && <RealisasiMassalPage session={session} dapurList={dapurList} toast={toast}/>}
+            {view === 'aslap' && <AslapJourneyPage session={session} scope={effScope} toast={toast}/>}
             {view === 'tugas' && <TugasHarianPage session={session} scope={effScope} toast={toast} onBuka={setView}/>}
             {view === 'kwitansi' && <KwitansiPage session={session} scope={effScope} toast={toast}/>}
             {view === 'pop' && <PopLapanganPage session={session} scope={effScope} toast={toast}/>}
