@@ -483,25 +483,25 @@ function Field(p) {
 }
 const inputStyle = { width: '100%', minHeight: 44, border: '1px solid ' + COLORS.line, borderRadius: 12, padding: '10px 12px', fontSize: 15, background: '#fff', color: COLORS.ink, outline: 'none' };
 
-// Header & Stepper modern untuk halaman Journey (Aslap, PIC, Akuntan)
+// Header & Stepper modern, halus & tidak kaku untuk halaman Journey (Aslap, PIC, Akuntan)
 function JourneyHeader({ peranLabel, judul, sub, tanggal, onTanggal, tanggalAria, badge, rightEl }) {
-  return <div className="mbg-hero rounded-2xl p-4 sm:p-5 mb-3">
+  return <div className="mbg-hero rounded-3xl p-4 sm:px-6 sm:py-5 mb-3">
     <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
       <div className="min-w-0">
-        <div className="inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-[11px] font-bold uppercase tracking-wider mb-1.5"
-          style={{ background: 'rgba(255,255,255,0.16)', color: '#EAF4EE' }}>
+        <div className="inline-flex items-center gap-1.5 rounded-full px-3 py-0.5 text-[11px] font-bold uppercase tracking-wider mb-1.5"
+          style={{ background: 'rgba(255,255,255,0.16)', color: '#EAF4EE', backdropFilter: 'blur(6px)' }}>
           <span>{peranLabel}</span>
           {badge && <><span>·</span><span>{badge}</span></>}
         </div>
-        <div className="text-base sm:text-lg font-extrabold leading-snug">{judul}</div>
-        {sub && <div className="text-xs mt-1" style={{ color: 'rgba(255,255,255,0.84)' }}>{sub}</div>}
+        <div className="text-base sm:text-xl font-extrabold leading-snug tracking-tight">{judul}</div>
+        {sub && <div className="text-xs mt-1" style={{ color: 'rgba(255,255,255,0.86)' }}>{sub}</div>}
       </div>
       <div className="flex items-center gap-2 shrink-0 flex-wrap">
-        {onTanggal && <div className="rounded-xl px-3 py-1.5" style={{ background: 'rgba(255,255,255,0.14)', border: '1px solid rgba(255,255,255,0.24)' }}>
-          <div className="text-[10px] font-semibold uppercase tracking-wider" style={{ color: 'rgba(255,255,255,0.78)' }}>Tanggal</div>
+        {onTanggal && <div className="rounded-2xl px-3.5 py-2" style={{ background: 'rgba(255,255,255,0.14)', border: '1px solid rgba(255,255,255,0.22)', backdropFilter: 'blur(8px)' }}>
+          <div className="text-[10px] font-semibold uppercase tracking-wider" style={{ color: 'rgba(255,255,255,0.78)' }}>Tanggal Kerja</div>
           <input type="date" value={tanggal} onChange={function(e) { if (e.target.value) onTanggal(e.target.value); }}
             aria-label={tanggalAria || 'Tanggal tugas'}
-            style={{ background: 'transparent', color: '#fff', border: 'none', outline: 'none', fontWeight: 700, fontSize: 13, minHeight: 24, padding: 0, colorScheme: 'dark' }}/>
+            style={{ background: 'transparent', color: '#fff', border: 'none', outline: 'none', fontWeight: 700, fontSize: 13.5, minHeight: 24, padding: 0, colorScheme: 'dark' }}/>
         </div>}
         {rightEl}
       </div>
@@ -509,29 +509,40 @@ function JourneyHeader({ peranLabel, judul, sub, tanggal, onTanggal, tanggalAria
   </div>;
 }
 function JourneyStepper({ steps, activeStep, onSelect }) {
-  return <div className={'grid gap-2 ' + (steps.length === 4 ? 'grid-cols-2 sm:grid-cols-4' : 'grid-cols-3')}>
-    {steps.map(function(st) {
-      const no = st.no, aktif = activeStep === no, boleh = st.unlocked !== false, done = !!st.done;
-      return <button key={no} type="button" disabled={!boleh} onClick={function() { if (boleh) onSelect(no); }}
-        data-active={aktif ? 'true' : 'false'} data-done={done ? 'true' : 'false'}
-        className="mbg-step transition flex flex-col justify-between"
-        style={{ opacity: boleh ? 1 : 0.58 }}>
-        <div className="flex items-center justify-between gap-1.5 mb-1">
-          <span className="inline-flex items-center justify-center rounded-full text-[11px] font-extrabold"
-            style={{
-              width: 22, height: 22,
-              background: aktif ? 'rgba(255,255,255,0.22)' : done ? COLORS.green : '#E7E4DA',
-              color: aktif || done ? '#fff' : COLORS.ink,
-            }}>
-            {done && !aktif ? '✓' : !boleh ? '🔒' : no}
-          </span>
-          {st.statusText && <span className="text-[10px] font-semibold truncate"
-            style={{ color: aktif ? 'rgba(255,255,255,0.86)' : done ? COLORS.green : COLORS.muted }}>{st.statusText}</span>}
-        </div>
-        <div className="text-xs font-bold leading-tight">{st.label}</div>
-        {st.sub && <div className="text-[10.5px] mt-0.5 truncate" style={{ color: aktif ? 'rgba(255,255,255,0.8)' : COLORS.muted }}>{st.sub}</div>}
-      </button>;
-    })}
+  return <div className="rounded-2xl p-1.5" style={{ background: '#ECE9DF', border: '1px solid rgba(23,42,31,0.06)' }}>
+    <div className={'grid gap-1.5 ' + (steps.length === 4 ? 'grid-cols-2 sm:grid-cols-4' : 'grid-cols-3')}>
+      {steps.map(function(st) {
+        const no = st.no, aktif = activeStep === no, boleh = st.unlocked !== false, done = !!st.done;
+        return <button key={no} type="button" disabled={!boleh} onClick={function() { if (boleh) onSelect(no); }}
+          data-active={aktif ? 'true' : 'false'} data-done={done ? 'true' : 'false'}
+          className="rounded-xl px-3 py-2.5 text-left transition flex flex-col justify-between"
+          style={{
+            background: aktif ? '#FFFFFF' : done ? 'rgba(255,255,255,0.68)' : 'transparent',
+            color: aktif ? COLORS.ink : done ? COLORS.deep : COLORS.muted,
+            boxShadow: aktif ? '0 4px 14px -4px rgba(23,42,31,0.12), 0 1px 3px rgba(23,42,31,0.06)' : 'none',
+            border: aktif ? '1px solid rgba(21,102,62,0.22)' : '1px solid transparent',
+            opacity: boleh ? 1 : 0.55,
+          }}>
+          <div className="flex items-center justify-between gap-1.5 mb-1">
+            <span className="inline-flex items-center justify-center rounded-full text-[11px] font-extrabold"
+              style={{
+                width: 22, height: 22,
+                background: aktif ? COLORS.green : done ? '#D8EFE1' : 'rgba(23,42,31,0.08)',
+                color: aktif ? '#fff' : done ? COLORS.green : COLORS.ink,
+              }}>
+              {done && !aktif ? '✓' : !boleh ? '🔒' : no}
+            </span>
+            {st.statusText && <span className="text-[10px] font-bold px-2 py-0.5 rounded-full truncate"
+              style={{
+                background: aktif ? '#EAF4EE' : done ? '#EAF4EE' : 'rgba(23,42,31,0.05)',
+                color: aktif || done ? COLORS.green : COLORS.muted,
+              }}>{st.statusText}</span>}
+          </div>
+          <div className="text-xs font-extrabold leading-tight" style={{ color: aktif ? COLORS.green : COLORS.ink }}>{st.label}</div>
+          {st.sub && <div className="text-[10.5px] mt-0.5 truncate" style={{ color: COLORS.muted }}>{st.sub}</div>}
+        </button>;
+      })}
+    </div>
   </div>;
 }
 
@@ -6931,7 +6942,7 @@ function TtdCard({ toast, untuk, id, dapur, judul, ket }) {
   </Card>;
 }
 
-// ---------- Journey Harian PIC (3 Tahap Terkunci) & Journey Harian Akuntan (4 Tahap Fleksibel) ----------
+// ---------- Journey Harian PIC (3 Tahap Terkunci · Langsung Eksekusi di Tempat) ----------
 function TugasHarianPage({ session, scope, toast, onBuka }) {
   const role = session.user.role;
   const dapurId = (role === 'akuntan' || role === 'pic') ? session.user.dapur : (scope && scope !== 'ALL' ? scope : '');
@@ -6940,8 +6951,10 @@ function TugasHarianPage({ session, scope, toast, onBuka }) {
   const [step1Reviewed, setStep1Reviewed] = useState(false);
   const [d, setD] = useState(null);
   const [porsi, setPorsi] = useState(false);
+  const [bukaSetujuInline, setBukaSetujuInline] = useState(false);
+  const [bukaLpdhInline, setBukaLpdhInline] = useState(false);
   function load() { if (!dapurId) return; setD(null); api('getTugasHarian', { dapur: dapurId, tanggal: tanggal }).then(function(r) { if (r.ok && r.data && r.data.persetujuan) setD(r.data); else { if (!r.ok) toast(r.error, 'error'); setD(false); } }); }
-  useEffect(function() { setStep1Reviewed(false); setStep(1); load(); }, [dapurId, tanggal]);
+  useEffect(function() { setStep1Reviewed(false); setStep(1); setBukaSetujuInline(false); setBukaLpdhInline(false); load(); }, [dapurId, tanggal]);
   if (!dapurId) return <Card><div className="text-sm" style={{ color: COLORS.muted }}>Pilih satu dapur di atas untuk melihat tugas harian.</div></Card>;
   const tugas = [];
   let step1Ready = false, step2Ready = false, step3Ready = false;
@@ -6988,59 +7001,81 @@ function TugasHarianPage({ session, scope, toast, onBuka }) {
       peranLabel="Journey PIC · 3 Tahap"
       badge={d ? (beres + ' dari ' + wajib.length + ' tugas selesai' + (beres === wajib.length ? ' ✓' : '')) : 'Memuat…'}
       judul="Tugas Harian PIC (Verifikasi, Persetujuan & LPDH)"
-      sub="1. Cek Data Lapangan Aslap vs Akuntan → 2. Persetujuan Pengajuan → 3. Finalisasi & Unduh LPDH Harian"
+      sub="Kerjakan semua tahap langsung di halaman ini tanpa perlu berpindah-pindah menu"
       tanggal={tanggal}
       onTanggal={setTanggal}
       tanggalAria="Tanggal tugas"
     />
-    {d && <Card>
-      <JourneyStepper
-        activeStep={step}
-        onSelect={setStep}
-        steps={[
-          { no: 1, label: '1. Verifikasi Lapangan', sub: d.porsi.ada ? (fmtNoRp(d.porsi.diproduksi || d.porsi.total) + ' PM · Absensi Aslap') : 'Cek POP & Kehadiran', unlocked: true, done: step1Ready, statusText: step1Ready ? 'Terverifikasi' : 'Periksa dulu' },
-          { no: 2, label: '2. Persetujuan', sub: d.persetujuan.baris ? (d.persetujuan.baris + ' baris menunggu') : 'Semua sudah diputuskan', unlocked: step1Ready, done: step2Ready, statusText: step2Ready ? 'Beres' : (step1Ready ? 'Siap ACC' : 'Terkunci') },
-          { no: 3, label: '3. Finalisasi LPDH', sub: d.lpdh.transaksi + ' transaksi tercatat', unlocked: step2Ready, done: step3Ready, statusText: step3Ready ? 'Siap unduh' : (step2Ready ? 'Buka LPDH' : 'Terkunci') },
-        ]}
-      />
-      {!step1Ready && <div className="flex flex-wrap items-center justify-between gap-2 mt-2.5 pt-2.5 text-xs" style={{ borderTop: '1px solid ' + COLORS.line, color: '#9A6A0B' }}>
-        <span>Periksa data POP &amp; Kehadiran Aslap di bawah. Jika sudah sesuai atau Anda siap lanjut ke Persetujuan:</span>
-        <Btn size="sm" onClick={function() { setStep1Reviewed(true); setStep(2); }}>{I.check} Tandai Tahap 1 Terverifikasi → Lanjut Persetujuan</Btn>
-      </div>}
-      {step1Ready && !step2Ready && <div className="flex flex-wrap items-center justify-between gap-2 mt-2.5 pt-2.5 text-xs" style={{ borderTop: '1px solid ' + COLORS.line, color: '#9A6A0B' }}>
-        <span>Masih ada <b>{d.persetujuan.baris} baris pengajuan ({fmt(d.persetujuan.nominal)})</b> yang menunggu keputusan sebelum Tahap 3 (LPDH) terbuka.</span>
-        <Btn size="sm" onClick={function() { onBuka('persetujuan'); }}>{I.arrowR} Buka Persetujuan Sekarang</Btn>
-      </div>}
+    {d && <JourneyStepper
+      activeStep={step}
+      onSelect={setStep}
+      steps={[
+        { no: 1, label: '1. Verifikasi Lapangan', sub: d.porsi.ada ? (fmtNoRp(d.porsi.diproduksi || d.porsi.total) + ' PM · Absensi Aslap') : 'Cek POP & Kehadiran', unlocked: true, done: step1Ready, statusText: step1Ready ? 'Terverifikasi' : 'Periksa dulu' },
+        { no: 2, label: '2. Persetujuan', sub: d.persetujuan.baris ? (d.persetujuan.baris + ' baris menunggu') : 'Semua sudah diputuskan', unlocked: step1Ready, done: step2Ready, statusText: step2Ready ? 'Beres' : (step1Ready ? 'Siap ACC' : 'Terkunci') },
+        { no: 3, label: '3. Finalisasi LPDH', sub: d.lpdh.transaksi + ' transaksi tercatat', unlocked: step2Ready, done: step3Ready, statusText: step3Ready ? 'Siap unduh' : (step2Ready ? 'Siap LPDH' : 'Terkunci') },
+      ]}
+    />}
+
+    {d && !step1Ready && <Card style={{ background: '#FDF8EE', borderColor: '#E6CF9E' }}>
+      <div className="flex flex-wrap items-center justify-between gap-2 text-xs" style={{ color: '#7A5408' }}>
+        <span>Periksa data POP &amp; Kehadiran Aslap di bawah. Jika sudah sesuai, lanjutkan ke Tahap 2 (Persetujuan):</span>
+        <Btn size="sm" onClick={function() { setStep1Reviewed(true); setStep(2); setBukaSetujuInline(true); }}>{I.check} Tandai Tahap 1 Terverifikasi → Lanjut Persetujuan</Btn>
+      </div>
     </Card>}
 
     {d === null ? <div className="text-sm flex items-center gap-2" style={{ color: COLORS.muted }}>{I.spinner} Memuat…</div>
       : d === false ? null
-      : <Card pad={false}>
-        <div className="px-4 py-2.5 flex items-center justify-between text-xs font-semibold" style={{ background: COLORS.paper, borderBottom: '1px solid ' + COLORS.line, color: COLORS.ink, borderRadius: '16px 16px 0 0' }}>
-          <span>Daftar Pemeriksaan Harian PIC ({beres} dari {wajib.length} tugas selesai{beres === wajib.length ? ' ✓' : ''})</span>
-          <span style={{ color: COLORS.muted }}>Tahap aktif: {step}/3</span>
-        </div>
-        {tugas.map(function(t, i) {
-          const isCurrentStep = t.step === step;
-          return <div key={t.id} className="flex items-start gap-3 px-4 py-3" style={{ borderTop: i ? '1px solid ' + COLORS.line : 'none', background: isCurrentStep ? '#FFFFFF' : '#FAF9F5' }}>
-            <div className="shrink-0 rounded-full flex items-center justify-center text-xs font-bold" style={{ width: 26, height: 26, marginTop: 2,
-              background: t.selesai === null ? COLORS.paper : t.selesai ? '#DCEFE3' : '#FBF3E3', color: t.selesai === null ? COLORS.muted : t.selesai ? COLORS.green : '#9A6A0B' }}>{t.selesai === null ? 'i' : t.selesai ? '✓' : '!'}</div>
-            <div className="flex-1 min-w-0">
-              <div className="flex items-center gap-1.5 flex-wrap">
-                <span className="text-[10px] font-bold uppercase px-1.5 py-0.5 rounded" style={{ background: isCurrentStep ? '#E8F1EC' : COLORS.paper, color: isCurrentStep ? COLORS.green : COLORS.muted }}>Tahap {t.step}</span>
-                <span className="text-sm font-semibold" style={{ color: COLORS.ink }}>{t.judul}</span>
-              </div>
-              <div className="text-xs mt-0.5" style={{ color: t.selesai === false ? '#9A6A0B' : COLORS.muted }} aria-label={'Status ' + t.id}>{t.ket}</div>
+      : <>
+        <Card pad={false}>
+          <div className="px-4 py-2.5 flex items-center justify-between text-xs font-semibold" style={{ background: COLORS.paper, borderBottom: '1px solid ' + COLORS.line, color: COLORS.ink, borderRadius: '16px 16px 0 0' }}>
+            <span>Daftar Pemeriksaan Harian PIC ({beres} dari {wajib.length} tugas selesai{beres === wajib.length ? ' ✓' : ''})</span>
+            <div className="flex items-center gap-2">
+              {step === 2 && <button type="button" onClick={function() { setBukaSetujuInline(!bukaSetujuInline); }} className="font-bold underline" style={{ color: COLORS.green }}>{bukaSetujuInline ? 'Tutup panel Persetujuan' : 'Kerjakan Persetujuan di sini'}</button>}
+              {step === 3 && <button type="button" onClick={function() { setBukaLpdhInline(!bukaLpdhInline); }} className="font-bold underline" style={{ color: COLORS.green }}>{bukaLpdhInline ? 'Tutup panel LPDH' : 'Kerjakan LPDH di sini'}</button>}
             </div>
-            <Btn size="sm" kind={t.selesai === false ? 'solid' : 'ghost'} onClick={t.klik}>{t.aksi}</Btn>
-          </div>;
-        })}
-      </Card>}
+          </div>
+          {tugas.map(function(t, i) {
+            const isCurrentStep = t.step === step;
+            return <div key={t.id} className="flex items-start gap-3 px-4 py-3" style={{ borderTop: i ? '1px solid ' + COLORS.line : 'none', background: isCurrentStep ? '#FFFFFF' : '#FAF9F5' }}>
+              <div className="shrink-0 rounded-full flex items-center justify-center text-xs font-bold" style={{ width: 26, height: 26, marginTop: 2,
+                background: t.selesai === null ? COLORS.paper : t.selesai ? '#DCEFE3' : '#FBF3E3', color: t.selesai === null ? COLORS.muted : t.selesai ? COLORS.green : '#9A6A0B' }}>{t.selesai === null ? 'i' : t.selesai ? '✓' : '!'}</div>
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-1.5 flex-wrap">
+                  <span className="text-[10px] font-bold uppercase px-2 py-0.5 rounded-full" style={{ background: isCurrentStep ? '#EAF4EE' : COLORS.paper, color: isCurrentStep ? COLORS.green : COLORS.muted }}>Tahap {t.step}</span>
+                  <span className="text-sm font-semibold" style={{ color: COLORS.ink }}>{t.judul}</span>
+                </div>
+                <div className="text-xs mt-0.5" style={{ color: t.selesai === false ? '#9A6A0B' : COLORS.muted }} aria-label={'Status ' + t.id}>{t.ket}</div>
+              </div>
+              <div className="flex items-center gap-1.5 shrink-0">
+                {t.id === 'setuju' && <Btn size="sm" kind="ghost" onClick={function() { setStep1Reviewed(true); setStep(2); setBukaSetujuInline(!bukaSetujuInline); }}>{bukaSetujuInline ? 'Tutup' : 'Kerjakan di sini'}</Btn>}
+                {t.id === 'lpdh' && <Btn size="sm" kind="ghost" onClick={function() { if (step2Ready) setStep(3); setBukaLpdhInline(!bukaLpdhInline); }}>{bukaLpdhInline ? 'Tutup' : 'Kerjakan di sini'}</Btn>}
+                <Btn size="sm" kind={t.selesai === false ? 'solid' : 'ghost'} onClick={t.klik}>{t.aksi}</Btn>
+              </div>
+            </div>;
+          })}
+        </Card>
+
+        {(step === 2 || bukaSetujuInline) && <div className="space-y-2">
+          <div className="flex items-center justify-between px-1">
+            <Eyebrow>Panel Persetujuan Langsung (Tahap 2)</Eyebrow>
+            <button type="button" onClick={load} className="text-xs font-semibold" style={{ color: COLORS.green }}>Segarkan status</button>
+          </div>
+          <PersetujuanPage session={session} scope={dapurId} dapurList={[{ id: dapurId, nama: dapurId }]} toast={toast}/>
+        </div>}
+
+        {(step === 3 || bukaLpdhInline) && <div className="space-y-2">
+          <div className="flex items-center justify-between px-1">
+            <Eyebrow>Panel Finalisasi &amp; Unduh LPDH Langsung (Tahap 3)</Eyebrow>
+            <button type="button" onClick={load} className="text-xs font-semibold" style={{ color: COLORS.green }}>Segarkan status</button>
+          </div>
+          <LpdhPage session={session} scope={dapurId} toast={toast}/>
+        </div>}
+      </>}
     {porsi && <LpdhHarianForm dapurId={dapurId} tanggal={tanggal} toast={toast} onClose={function() { setPorsi(false); }} onSaved={load}/>}
   </div>;
 }
 
-// ---------- Journey Harian Akuntan (4 Tahap Fleksibel / Soft-Guided — tidak dikunci karena BB sering diajukan duluan / oleh Asisten Admin) ----------
+// ---------- Journey Harian Akuntan (4 Tahap Fleksibel · Langsung Eksekusi di Tempat Tanpa Pindah Laman) ----------
 function AkuntanJourneyPage({ session, scope, toast, onBuka }) {
   const role = session.user.role;
   const dapurId = (role === 'akuntan' || role === 'pic') ? session.user.dapur : (scope && scope !== 'ALL' ? scope : '');
@@ -7048,6 +7083,32 @@ function AkuntanJourneyPage({ session, scope, toast, onBuka }) {
   const [step, setStep] = useState(1);
   const [d, setD] = useState(null);
   const [ro, setRo] = useState(null);
+
+  // State inline Tahap 1: Penyesuaian PM & HPE langsung di sini
+  const [pmInput, setPmInput] = useState('');
+  const [hpeInput, setHpeInput] = useState(true);
+  const [savingPm, setSavingPm] = useState(false);
+
+  // State inline Tahap 2: Ajukan Rencana Ops hari ini / Tambah baris / Buka form Pengajuan BB langsung di sini
+  const [editRoItem, setEditRoItem] = useState(null);
+  const [konfirmAjuHari, setKonfirmAjuHari] = useState(null);
+  const [ajukanBusy, setAjukanBusy] = useState(false);
+  const [bukaFormPengajuan, setBukaFormPengajuan] = useState(false);
+  const [bukaPanelKwitansi, setBukaPanelKwitansi] = useState(false);
+  const [waText, setWaText] = useState(null);
+  const [kategoriOps, setKategoriOps] = useState([]);
+
+  // State inline Tahap 4: Sinkronisasi Saldo VA Akhir & Unduh LPDH langsung di sini
+  const [lpdhInfo, setLpdhInfo] = useState(null);
+  const [loadingLpdh, setLoadingLpdh] = useState(false);
+  const [saldoVaInput, setSaldoVaInput] = useState('');
+  const [penjelasanVa, setPenjelasanVa] = useState('');
+  const [savingVa, setSavingVa] = useState(false);
+  const [bukaPanelLpdh, setBukaPanelLpdh] = useState(false);
+
+  useEffect(function() {
+    api('getKategori').then(function(r) { if (r.ok && r.data) setKategoriOps(r.data['Operasional'] || []); });
+  }, []);
 
   function load() {
     if (!dapurId) return;
@@ -7058,23 +7119,175 @@ function AkuntanJourneyPage({ session, scope, toast, onBuka }) {
     ]).then(function(arr) {
       const rt = arr[0], rr = arr[1];
       if (rt.ok && rt.data) setD(rt.data); else { if (!rt.ok) toast(rt.error, 'error'); setD(false); }
-      if (rr.ok && rr.data) setRo(rr.data); else setRo(null);
+      if (rr.ok && rr.data) {
+        const rData = rr.data;
+        setRo(rData);
+        const rh = (rData.rencana && rData.rencana.hari && rData.rencana.hari[tanggal]) || {};
+        const defPm = rh.pm != null && rh.pm !== '' ? Number(rh.pm) : (rData.periode ? Number(rData.periode.penerima) || 0 : 0);
+        setPmInput(String(defPm || ''));
+        setHpeInput(!rh.libur);
+      } else {
+        setRo(null);
+      }
     });
   }
   useEffect(load, [dapurId, tanggal]);
 
+  // Muat ringkasan saldo VA LPDH hanya saat pengguna membuka Tahap 4 (agar pembukaan awal tetap super ringan)
+  function loadSaldoLpdh() {
+    if (!dapurId) return;
+    setLoadingLpdh(true);
+    api('getDataLPDH', { dapur: dapurId, tanggal: tanggal }).then(function(r) {
+      setLoadingLpdh(false);
+      if (r.ok && r.data) {
+        setLpdhInfo(r.data);
+        const sr = r.data.saldoRekening || {};
+        setSaldoVaInput(sr.saldo_va != null && sr.saldo_va !== '' ? String(sr.saldo_va) : '');
+        setPenjelasanVa(sr.penjelasan || '');
+      }
+    });
+  }
+  useEffect(function() {
+    if (step === 4) loadSaldoLpdh();
+  }, [step, dapurId, tanggal]);
+
   if (!dapurId) return <Card><div className="text-sm" style={{ color: COLORS.muted }}>Pilih satu dapur di atas untuk melihat Journey Harian Akuntan.</div></Card>;
 
-  const rHari = (ro && ro.rencana && ro.rencana.hari && ro.rencana.hari[tanggal]) || null;
+  const rc = (ro && ro.rencana) || {};
+  const rHariMap = rc.hari || {};
+  const rHari = rHariMap[tanggal] || null;
   const pmRencana = rHari && rHari.pm != null && rHari.pm !== '' ? Number(rHari.pm) : (ro && ro.periode ? Number(ro.periode.penerima) || 0 : 0);
   const pmAslap = d && d.porsi && d.porsi.ada ? (d.porsi.diproduksi || d.porsi.dikirim || d.porsi.total || 0) : null;
   const selisihPM = (pmAslap != null && pmRencana > 0) ? (pmAslap - pmRencana) : null;
+  const setelanRo = Object.assign({ indeks: 100, batas: 95, bb: Number((ro && ro.bbDefault) || 0) }, rc.setelan || {});
+  const bisaUbahRo = !!(ro && ro.bisaUbah && ro.periode && ro.periode.status === 'AKTIF');
+  const pmap = {}; ((ro && ro.penerima) || []).forEach(function(p) { pmap[p.id] = p; });
+  const roItemsAll = (rc.items || []).filter(function(x) { return x.pengajuan_id || RO_TANPA.indexOf(x.kategori) < 0; });
+  const roLuarAll = ((ro && ro.luar) || []).map(function(x) { return Object.assign({ luar: true }, x); });
+  const roHariList = ro && ro.periode ? roHari(ro.periode, rHariMap) : [];
+  const hariObj = roHariList.find(function(h) { return h.tanggal === tanggal; }) || { tanggal: tanggal, pm: pmRencana, libur: !hpeInput };
+  const paguHari = roPagu(Object.assign({}, hariObj, { pm: Number(pmInput) || pmRencana, libur: !hpeInput }), setelanRo);
+  const barisRoHari = roItemsAll.concat(roLuarAll).filter(function(x) { return x.tanggal === tanggal; });
+  const stBarisRo = ro ? roStatusBaris(roItemsAll, ro.status) : {};
+  const terkunciRo = function(x) { return !!x.pengajuan_id || !!x.luar; };
+  const barisSiapHari = barisRoHari.filter(function(x) { return !terkunciRo(x) && roSiapAjukan(x); });
+  const pakaiHari = barisRoHari.reduce(function(s, x) { return s + (Number(x.nominal) || 0) + (ro ? roFee(x, pmap, ro.bankVA) : 0); }, 0);
+
+  // Simpan PM & status HPE hari itu langsung dari Tahap 1
+  async function simpanPmHariLangsung(nilaiPmBaru, hpeBaru) {
+    if (!ro || !ro.periode) return;
+    const pmClean = Math.max(0, Number(String(nilaiPmBaru != null ? nilaiPmBaru : pmInput).replace(/\D/g, '')) || 0);
+    const isHpe = hpeBaru != null ? hpeBaru : hpeInput;
+    setSavingPm(true);
+    const hariBaru = Object.assign({}, rHariMap, { [tanggal]: Object.assign({}, rHariMap[tanggal] || {}, { pm: pmClean, libur: !isHpe }) });
+    const r = await apiPost('saveRencanaOps', {
+      dapur: dapurId,
+      periode_id: ro.periode.id,
+      data: { versi: rc.versi || 0, setelan: setelanRo, hari: hariBaru, items: roItemsAll },
+    });
+    setSavingPm(false);
+    if (!r.ok) { toast(r.error || 'Gagal menyimpan PM', 'error'); return; }
+    setPmInput(String(pmClean));
+    setHpeInput(isHpe);
+    setRo(Object.assign({}, ro, { rencana: Object.assign({}, rc, { versi: r.data.versi, hari: hariBaru, items: roItemsAll }) }));
+    toast('Target PM tanggal ' + fmtDDMMYYYY(tanggal) + ' diperbarui menjadi ' + fmtNoRp(pmClean) + ' PM');
+  }
+
+  // Simpan perubahan/penambahan item Rencana Ops hari itu langsung dari Tahap 2
+  async function simpanItemRoLangsung(itemBaru, hapusId) {
+    if (!ro || !ro.periode) return false;
+    const daftarBaru = hapusId
+      ? roItemsAll.filter(function(x) { return x.id !== hapusId; })
+      : itemBaru.baru
+      ? roItemsAll.concat([Object.assign({}, itemBaru, { baru: undefined })])
+      : roItemsAll.map(function(x) { return x.id === itemBaru.id ? Object.assign({}, itemBaru, { baru: undefined }) : x; });
+    setAjukanBusy(true);
+    const r = await apiPost('saveRencanaOps', {
+      dapur: dapurId,
+      periode_id: ro.periode.id,
+      data: { versi: rc.versi || 0, setelan: setelanRo, hari: rHariMap, items: daftarBaru },
+    });
+    setAjukanBusy(false);
+    if (!r.ok) { toast(r.error || 'Gagal menyimpan rencana hari ini', 'error'); return false; }
+    setRo(Object.assign({}, ro, { rencana: Object.assign({}, rc, { versi: r.data.versi, items: daftarBaru }) }));
+    setEditRoItem(null);
+    toast(hapusId ? 'Baris rencana dihapus' : 'Baris rencana hari ini tersimpan');
+    return daftarBaru;
+  }
+
+  // Ajukan baris Rencana Ops hari itu langsung dari Tahap 2
+  function siapkanAjukanHari(hanyaId, daftarOverride) {
+    if (!ro || !ro.periode) return;
+    const sumber = daftarOverride || roItemsAll;
+    const baris = sumber.filter(function(x) { return x.tanggal === tanggal && !terkunciRo(x) && roSiapAjukan(x) && (!hanyaId || x.id === hanyaId); });
+    if (!baris.length) { toast('Lengkapi penerima, rencana realisasi, dan bukti/nota pada baris rencana dulu', 'error'); return; }
+    const nilai = function(a) { return a.reduce(function(sm, x) { return sm + x.nominal + roFee(x, pmap, ro.bankVA); }, 0); };
+    const sudah = nilai(sumber.concat(roLuarAll).filter(function(x) { return x.tanggal === tanggal && terkunciRo(x); }));
+    const lebih = sudah + nilai(baris) - paguHari;
+    setKonfirmAjuHari({ t: tanggal, baris: baris, semua: sumber, lebih: Math.max(0, lebih), pagu: paguHari, pm: pmRencana, sudah: sudah, catatan: '' });
+  }
+
+  async function kirimAjukanHari(k) {
+    setKonfirmAjuHari(null);
+    setAjukanBusy(true);
+    const catatan = k.lebih > 0 ? 'Melebihi pagu harian ' + fmt(k.lebih) + ' (pagu ' + fmt(k.pagu) + ', PM ' + fmtNoRp(k.pm) + '). Alasan: ' + k.catatan.trim() : '';
+    const res = await apiPost('createPengajuan', {
+      tanggal: k.t,
+      request_id: 'RO-' + ro.periode.id + '-' + k.t + '-' + roHash(k.baris.map(function(x) { return x.id + ':' + x.nominal + ':' + x.penerima_id; }).join(',') + '|' + Math.floor(Date.now() / 60000)).toString(36),
+      items: k.baris.map(function(x) {
+        return {
+          jenis: 'Operasional', kategori: x.kategori, uraian: x.uraian + (x.bagian ? ' (bagian ' + x.bagian + ')' : ''), nominal: x.nominal,
+          rencana_riil: butuhRencanaRealisasi('Operasional', x.kategori) ? (Number(x.rencana_riil) > 0 ? Number(x.rencana_riil) : Number(x.nominal)) : x.nominal,
+          biaya_admin: roFee(x, pmap, ro.bankVA), nota_url: x.nota_url || '', nota_no: String(x.nota_no || '').trim(),
+          penerima_id: x.penerima_id, catatan: catatan,
+        };
+      }),
+    });
+    if (!res.ok) { setAjukanBusy(false); toast('Gagal mengajukan: ' + (res.error || ''), 'error'); return; }
+    const ids = {}; k.baris.forEach(function(x) { ids[x.id] = 1; });
+    const baru = k.semua.map(function(x) { return ids[x.id] ? Object.assign({}, x, { pengajuan_id: res.data.id, nomor: res.data.nomor, batal: undefined }) : x; });
+    await apiPost('saveRencanaOps', {
+      dapur: dapurId,
+      periode_id: ro.periode.id,
+      data: { versi: rc.versi || 0, setelan: setelanRo, hari: rHariMap, items: baru },
+    });
+    setAjukanBusy(false);
+    toast(res.data && res.data.backdate
+      ? 'Pengajuan backdate ' + res.data.nomor + ' terkirim — menunggu ACC Admin'
+      : 'Pengajuan ' + res.data.nomor + ' terkirim ke PIC/Yayasan!');
+    setWaText({
+      ids: [res.data.id],
+      text: buildWAPesan({
+        nomor: res.data.nomor, tanggal: k.t, dapurNama: ro.dapurNama || '', oleh: session.user.nama, catatan: catatan,
+        items: k.baris.map(function(x) {
+          const pn = pmap[x.penerima_id] || {};
+          return { uraian: x.uraian + (x.bagian ? ' (bagian ' + x.bagian + ')' : ''), jenis: 'Operasional', nominal: x.nominal, penerima_nama: pn.nama || '', bank: pn.bank || '', no_rek: pn.no_rek || '' };
+        }),
+      }),
+    });
+    load();
+  }
+
+  // Simpan Saldo VA Akhir langsung dari Tahap 4
+  const saldoAkhirApp = lpdhInfo ? Math.round(lpdhInfo.saldoAwal + (lpdhInfo.topups || []).reduce(function(s2, t) { return s2 + t.jumlah; }, 0) - (lpdhInfo.transaksi || []).reduce(function(s2, t) { return s2 + t.riil; }, 0)) : 0;
+  async function simpanSaldoVaLangsung() {
+    setSavingVa(true);
+    const r = await api('saveSaldoLPDH', { dapur: dapurId, tanggal: tanggal, saldo_va: saldoVaInput, penjelasan: penjelasanVa });
+    setSavingVa(false);
+    if (r.ok) {
+      toast('Saldo VA akhir tanggal ' + fmtDDMMYYYY(tanggal) + ' tersimpan');
+      loadSaldoLpdh();
+    } else {
+      toast(r.error || 'Gagal menyimpan saldo VA', 'error');
+    }
+  }
 
   const pjHari = (d && d.persetujuan && d.persetujuan.hariIni) || { total: 0, menunggu: 0, backdate: 0, setuju: 0 };
   const step1Done = !!(pmRencana > 0 && (pmAslap == null || selisihPM === 0));
   const step2Done = pjHari.total > 0 || (d && d.lpdh && d.lpdh.transaksi > 0);
   const step3Done = step2Done && pjHari.menunggu === 0 && pjHari.backdate === 0;
-  const step4Done = step3Done && d && d.lpdh && d.lpdh.transaksi > 0 && d.lpdh.kwitansiPerlu.length === 0;
+  const vaSudahDisimpan = !!(lpdhInfo && lpdhInfo.saldoRekening && lpdhInfo.saldoRekening.saldo_va != null && lpdhInfo.saldoRekening.saldo_va !== '');
+  const step4Done = (step3Done && d && d.lpdh && d.lpdh.transaksi > 0) || vaSudahDisimpan;
   const nDone = (step1Done ? 1 : 0) + (step2Done ? 1 : 0) + (step3Done ? 1 : 0) + (step4Done ? 1 : 0);
 
   return <div className="space-y-3">
@@ -7082,125 +7295,335 @@ function AkuntanJourneyPage({ session, scope, toast, onBuka }) {
       peranLabel="Journey Akuntan · 4 Tahap Fleksibel"
       badge={nDone + '/4 tahap beres'}
       judul="Alur Kerja Harian Akuntan"
-      sub="Bebas berpindah tahap kapan saja (Pengajuan Bahan Baku bisa dibuat duluan atau oleh Asisten Admin)"
+      sub="Kerjakan penyesuaian PM, pengajuan harian, pantau WA/BA, hingga input Saldo VA Akhir langsung di halaman ini"
       tanggal={tanggal}
       onTanggal={setTanggal}
       tanggalAria="Tanggal journey akuntan"
     />
 
-    <Card>
-      <JourneyStepper
-        activeStep={step}
-        onSelect={setStep}
-        steps={[
-          { no: 1, label: '1. Rencana Ops & PM', sub: pmRencana ? (fmtNoRp(pmRencana) + ' PM rencana') : 'Cek target PM', unlocked: true, done: step1Done, statusText: selisihPM && selisihPM !== 0 ? '⚠️ Selisih PM' : (step1Done ? 'Sesuai' : 'Cek') },
-          { no: 2, label: '2. Pengajuan & Absensi', sub: pjHari.total ? (pjHari.total + ' baris hari ini') : 'BB & Operasional', unlocked: true, done: step2Done, statusText: step2Done ? 'Terajukan' : 'Siap ajukan' },
-          { no: 3, label: '3. Pantau ACC & BA', sub: pjHari.menunggu ? (pjHari.menunggu + ' menunggu PIC') : 'Status & WA', unlocked: true, done: step3Done, statusText: step3Done ? 'Terealisasi' : (pjHari.menunggu ? 'Menunggu' : 'Pantau') },
-          { no: 4, label: '4. Sinkron VA & LPDH', sub: d ? (d.lpdh.transaksi + ' transaksi') : 'Buku Kas & LPDH', unlocked: true, done: step4Done, statusText: step4Done ? 'Lengkap' : 'Rekonsiliasi' },
-        ]}
-      />
-    </Card>
+    <JourneyStepper
+      activeStep={step}
+      onSelect={setStep}
+      steps={[
+        { no: 1, label: '1. Rencana Ops & PM', sub: pmRencana ? (fmtNoRp(pmRencana) + ' PM rencana') : 'Atur target PM', unlocked: true, done: step1Done, statusText: selisihPM && selisihPM !== 0 ? '⚠️ Selisih PM' : (step1Done ? 'Sesuai' : 'Atur PM') },
+        { no: 2, label: '2. Pengajuan & Absensi', sub: pjHari.total ? (pjHari.total + ' baris hari ini') : 'Ajukan langsung', unlocked: true, done: step2Done, statusText: step2Done ? 'Terajukan' : 'Siap ajukan' },
+        { no: 3, label: '3. Pantau ACC & BA', sub: pjHari.menunggu ? (pjHari.menunggu + ' menunggu PIC') : 'Salin WA & BA', unlocked: true, done: step3Done, statusText: step3Done ? 'Terealisasi' : (pjHari.menunggu ? 'Menunggu' : 'Pantau') },
+        { no: 4, label: '4. Sinkron VA & LPDH', sub: d ? (d.lpdh.transaksi + ' transaksi') : 'Input VA Akhir', unlocked: true, done: step4Done, statusText: step4Done ? 'Lengkap' : 'Input VA' },
+      ]}
+    />
 
     {!d ? <Card><div className="text-sm flex items-center gap-2" style={{ color: COLORS.muted }}>{I.spinner} Memuat data harian Akuntan…</div></Card> : <>
       {step === 1 && <Card>
-        <Eyebrow>Tahap 1 · Rencana Operasional &amp; Kecocokan PM Diproduksi</Eyebrow>
-        <div className="grid sm:grid-cols-2 gap-3 mt-2">
-          <div className="rounded-xl p-3" style={{ background: COLORS.paper, border: '1px solid ' + COLORS.line }}>
-            <div className="text-xs" style={{ color: COLORS.muted }}>Target PM di Rencana Ops Akuntan</div>
-            <div className="text-lg font-extrabold num mt-0.5" style={{ color: COLORS.ink }}>{pmRencana ? fmtNoRp(pmRencana) + ' PM' : 'Belum diatur'}</div>
-            <div className="text-[11px] mt-1" style={{ color: COLORS.muted }}>Dasar perhitungan pagu operasional harian &amp; jadwal pos biaya.</div>
+        <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
+          <div>
+            <Eyebrow>Tahap 1 · Sesuaikan Target PM &amp; Pagu Harian Langsung di Sini</Eyebrow>
+            <div className="text-xs" style={{ color: COLORS.muted }}>Ubah angka PM atau samakan langsung dengan catatan POP Aslap tanpa perlu pindah ke halaman Rencana Ops.</div>
           </div>
-          <div className="rounded-xl p-3" style={{ background: selisihPM === 0 ? '#EAF4EE' : (selisihPM ? '#FBF3E2' : COLORS.paper), border: '1px solid ' + (selisihPM === 0 ? '#B9D7C6' : (selisihPM ? '#E6CF9E' : COLORS.line)) }}>
-            <div className="text-xs" style={{ color: COLORS.muted }}>Total PM Diproduksi (Catatan POP Aslap)</div>
-            <div className="text-lg font-extrabold num mt-0.5" style={{ color: selisihPM === 0 ? COLORS.green : (selisihPM ? '#9A6A0B' : COLORS.ink) }}>
-              {pmAslap != null ? fmtNoRp(pmAslap) + ' PM' : 'Belum diinput Aslap'}
+          <Btn size="sm" kind="ghost" onClick={function() { onBuka('rencana'); }}>{I.calendar} Matriks Periode Penuh</Btn>
+        </div>
+
+        <div className="grid sm:grid-cols-2 gap-3">
+          <div className="rounded-2xl p-4" style={{ background: COLORS.paper, border: '1px solid ' + COLORS.line }}>
+            <div className="flex items-center justify-between gap-2 mb-2">
+              <span className="text-xs font-semibold" style={{ color: COLORS.muted }}>Target PM Rencana Ops ({fmtDDMMYYYY(tanggal)})</span>
+              <label className="inline-flex items-center gap-1.5 text-xs font-semibold cursor-pointer" style={{ color: COLORS.ink }}>
+                <input type="checkbox" checked={hpeInput} disabled={!bisaUbahRo} onChange={function(e) { setHpeInput(e.target.checked); }} style={{ width: 16, height: 16 }} aria-label="HPE hari ini"/>
+                Hari Pelayanan (HPE)
+              </label>
             </div>
-            <div className="text-[11px] mt-1" style={{ color: selisihPM && selisihPM !== 0 ? '#9A6A0B' : COLORS.muted }}>
-              {pmAslap == null ? 'Aslap belum menyimpan Langkah 1 (POP & PM) untuk tanggal ini.'
-                : selisihPM === 0 ? '✓ Cocok persis dengan PM Rencana Ops Akuntan!'
-                : '⚠️ Selisih ' + (selisihPM > 0 ? '+' : '') + fmtNoRp(selisihPM) + ' PM (dikirim ' + fmtNoRp(d.porsi.dikirim || 0) + ' PM). Sesuaikan PM di Rencana Ops!'}
+            <div className="flex items-center gap-2">
+              <input value={pmInput} inputMode="numeric" disabled={!bisaUbahRo || !hpeInput}
+                onChange={function(e) { setPmInput(e.target.value.replace(/\D/g, '')); }}
+                placeholder="0" aria-label="Input PM Rencana Hari Ini"
+                style={Object.assign({}, inputStyle, { fontWeight: 800, fontSize: 18, minHeight: 44, flex: 1 })}/>
+              <Btn disabled={!bisaUbahRo || savingPm} onClick={function() { simpanPmHariLangsung(pmInput, hpeInput); }}>
+                {savingPm ? I.spinner : I.check} Simpan PM
+              </Btn>
             </div>
+            <div className="flex items-center justify-between text-xs mt-2.5 pt-2" style={{ borderTop: '1px solid ' + COLORS.line, color: COLORS.muted }}>
+              <span>Pagu Operasional Hari Ini:</span>
+              <b className="num" style={{ color: COLORS.green }}>{fmt(paguHari)}</b>
+            </div>
+          </div>
+
+          <div className="rounded-2xl p-4 flex flex-col justify-between" style={{ background: selisihPM === 0 ? '#EAF4EE' : (selisihPM ? '#FBF3E2' : COLORS.paper), border: '1px solid ' + (selisihPM === 0 ? '#B9D7C6' : (selisihPM ? '#E6CF9E' : COLORS.line)) }}>
+            <div>
+              <div className="text-xs font-semibold" style={{ color: COLORS.muted }}>Total PM Diproduksi (Catatan POP Aslap)</div>
+              <div className="text-2xl font-extrabold num mt-1" style={{ color: selisihPM === 0 ? COLORS.green : (selisihPM ? '#9A6A0B' : COLORS.ink) }}>
+                {pmAslap != null ? fmtNoRp(pmAslap) + ' PM' : 'Belum diinput Aslap'}
+              </div>
+              <div className="text-xs mt-1" style={{ color: selisihPM && selisihPM !== 0 ? '#9A6A0B' : COLORS.muted }}>
+                {pmAslap == null ? 'Aslap belum menyimpan Langkah 1 (POP & PM) untuk tanggal ini.'
+                  : selisihPM === 0 ? '✓ Cocok persis dengan PM Rencana Ops Akuntan!'
+                  : '⚠️ Selisih ' + (selisihPM > 0 ? '+' : '') + fmtNoRp(selisihPM) + ' PM (dikirim ke sekolah ' + fmtNoRp(d.porsi.dikirim || 0) + ' PM).'}
+              </div>
+            </div>
+            {pmAslap != null && pmAslap > 0 && pmAslap !== pmRencana && bisaUbahRo && <div className="mt-3">
+              <Btn size="sm" full onClick={function() { simpanPmHariLangsung(pmAslap, true); }} disabled={savingPm}>
+                {savingPm ? I.spinner : I.check} Samakan PM Rencana = {fmtNoRp(pmAslap)} PM (Sesuai POP Aslap)
+              </Btn>
+            </div>}
           </div>
         </div>
-        <div className="flex flex-wrap gap-2 mt-3">
-          <Btn size="sm" onClick={function() { onBuka('rencana'); }}>{I.calendar} Buka Rencana Ops</Btn>
-          <Btn size="sm" kind="ghost" onClick={function() { setStep(2); }}>Lanjut ke Tahap 2 (Pengajuan) {I.arrowR}</Btn>
+
+        <div className="flex justify-end mt-3">
+          <Btn size="sm" onClick={function() { setStep(2); }}>Lanjut ke Tahap 2: Pengajuan Harian &amp; Absensi {I.arrowR}</Btn>
         </div>
       </Card>}
 
-      {step === 2 && <Card>
-        <Eyebrow>Tahap 2 · Pengajuan Bahan Baku &amp; Operasional (Cek Kehadiran Aslap)</Eyebrow>
-        <div className="text-xs mb-3" style={{ color: COLORS.muted }}>
-          Pastikan nominal pengajuan Honor Relawan, Insentif PIC Sekolah, dan Kader Posyandu sama dengan catatan kehadiran Aslap hari ini.
-        </div>
-        <div className="space-y-2 mb-3">
-          {JENIS_DP.map(function(j) {
-            const k = j[0], label = j[1];
-            const nHadir = (d.kwitansi.terbit || {})[k] || 0;
-            const nAktif = (d.penerima.aktif || {})[k] || 0;
-            const totAslap = (d.kwitansi.nilai || {})[k] || 0;
-            const totAkn = ((d.kwitansi.anggaran || {})[k]) || 0;
-            const cocok = totAslap > 0 && totAslap === totAkn;
-            const selisih = totAslap - totAkn;
-            return <div key={k} className="rounded-xl p-3 flex flex-wrap items-center justify-between gap-2"
-              style={{ background: cocok ? '#EAF4EE' : (totAslap !== totAkn && (totAslap > 0 || totAkn > 0) ? '#FBF3E2' : COLORS.paper), border: '1px solid ' + COLORS.line }}>
-              <div>
-                <div className="text-xs font-bold" style={{ color: COLORS.ink }}>{label} · Hadir {nHadir}/{nAktif} orang</div>
-                <div className="text-[11px]" style={{ color: COLORS.muted }}>
-                  Catatan Aslap: <b>{fmt(totAslap)}</b> · Diajukan/Tercatat Akuntan: <b>{fmt(totAkn)}</b>
-                  {cocok ? <span style={{ color: COLORS.green }}> · ✓ Cocok</span>
-                    : (totAslap > 0 || totAkn > 0) ? <span style={{ color: '#9A6A0B' }}> · ⚠️ Selisih {fmt(Math.abs(selisih))}</span> : ''}
+      {step === 2 && <div className="space-y-3">
+        <Card>
+          <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
+            <div>
+              <Eyebrow>Tahap 2A · Rencana Operasional Hari Ini ({fmtDDMMYYYY(tanggal)})</Eyebrow>
+              <div className="text-xs" style={{ color: COLORS.muted }}>
+                Pagu hari ini <b className="num">{fmt(paguHari)}</b> · Terjadwal <b className="num">{fmt(pakaiHari)}</b> · Sisa <b className="num" style={{ color: paguHari >= pakaiHari ? COLORS.green : COLORS.danger }}>{fmt(paguHari - pakaiHari)}</b>
+              </div>
+            </div>
+            <div className="flex flex-wrap gap-1.5">
+              {bisaUbahRo && <Btn size="sm" kind="ghost" onClick={function() { setEditRoItem({ id: 'RO' + Date.now().toString(36), tanggal: tanggal, kategori: '', uraian: '', nominal: 0, penerima_id: '', baru: true }); }}>{I.plusSm} Tambah Pos Hari Ini</Btn>}
+              {bisaUbahRo && barisSiapHari.length > 0 && <Btn size="sm" disabled={ajukanBusy} onClick={function() { siapkanAjukanHari(); }}>
+                {ajukanBusy ? I.spinner : I.file} Ajukan {barisSiapHari.length} Baris Siap ({fmt(barisSiapHari.reduce(function(s, x) { return s + x.nominal; }, 0))})
+              </Btn>}
+            </div>
+          </div>
+
+          {!barisRoHari.length ? <div className="rounded-xl p-4 text-center text-xs" style={{ background: COLORS.paper, color: COLORS.muted }}>
+            Belum ada pos operasional terjadwal di Rencana Ops untuk tanggal {fmtDDMMYYYY(tanggal)}. Klik <b>+ Tambah Pos Hari Ini</b> atau buka form Pengajuan Bahan Baku/Operasional di bawah.
+          </div> : <div className="divide-y" style={{ borderColor: COLORS.line }}>
+            {barisRoHari.map(function(x) {
+              const fee = ro ? roFee(x, pmap, ro.bankVA) : 0, pn = pmap[x.penerima_id];
+              const st = x.luar ? x.status : stBarisRo[x.id];
+              const siap = !terkunciRo(x) && roSiapAjukan(x);
+              return <div key={x.id} className="py-2.5 flex flex-wrap items-center justify-between gap-2">
+                <button type="button" onClick={function() { setEditRoItem(Object.assign({}, x)); }} className="text-left flex-1 min-w-0">
+                  <div className="text-sm font-semibold truncate" style={{ color: COLORS.ink }}>{x.rutin ? '↻ ' : ''}{x.uraian}{x.bagian ? ' · bagian ' + x.bagian : ''}</div>
+                  <div className="text-xs truncate" style={{ color: pn ? COLORS.muted : COLORS.danger }}>
+                    {x.kategori} · {pn ? pn.nama + ' (' + roKodeBank(pn.bank) + ')' : '⚠️ penerima belum dipilih'}
+                    {fee ? ' · admin ' + fmtNoRp(fee) : ''}
+                    {!terkunciRo(x) && !pakaiKuitansi({ jenis: 'Operasional', kategori: x.kategori }) && !x.nota_url ? ' · ⚠️ bukti/nota belum diunggah' : ''}
+                  </div>
+                  {terkunciRo(x) && <div className="text-[11px] font-semibold mt-0.5" style={{ color: x.luar ? COLORS.blue : COLORS.green }}>{x.nomor ? x.nomor + ' · ' : ''}{st || 'Sudah diajukan'}</div>}
+                </button>
+                <div className="flex items-center gap-2 shrink-0">
+                  <div className="text-right">
+                    <div className="text-sm font-bold num" style={{ color: COLORS.ink }}>{fmt(x.nominal)}</div>
+                    {butuhRencanaRealisasi('Operasional', x.kategori) && x.rencana_riil > 0 && <div className="text-[11px] num" style={{ color: COLORS.green }}>Aktual {fmt(x.rencana_riil)}</div>}
+                  </div>
+                  {!terkunciRo(x) && (siap
+                    ? <Btn size="sm" disabled={ajukanBusy} onClick={function() { siapkanAjukanHari(x.id); }}>Ajukan</Btn>
+                    : <Btn size="sm" kind="ghost" onClick={function() { setEditRoItem(Object.assign({}, x)); }}>Lengkapi</Btn>)}
+                </div>
+              </div>;
+            })}
+          </div>}
+        </Card>
+
+        <Card>
+          <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
+            <div>
+              <Eyebrow>Tahap 2B · Kecocokan Kehadiran Aslap vs Anggaran Akuntan</Eyebrow>
+              <div className="text-xs" style={{ color: COLORS.muted }}>Pastikan nominal pengajuan Honor Relawan, Insentif PIC Sekolah, dan Kader Posyandu cocok dengan kehadiran Aslap.</div>
+            </div>
+            <Btn size="sm" kind="ghost" onClick={function() { setBukaPanelKwitansi(!bukaPanelKwitansi); }}>{bukaPanelKwitansi ? 'Tutup Kwitansi' : 'Buka Kwitansi di Sini'}</Btn>
+          </div>
+          <div className="grid sm:grid-cols-3 gap-2">
+            {JENIS_DP.map(function(j) {
+              const k = j[0], label = j[1];
+              const nHadir = (d.kwitansi.terbit || {})[k] || 0;
+              const nAktif = (d.penerima.aktif || {})[k] || 0;
+              const totAslap = (d.kwitansi.nilai || {})[k] || 0;
+              const totAkn = ((d.kwitansi.anggaran || {})[k]) || 0;
+              const cocok = totAslap > 0 && totAslap === totAkn;
+              const selisih = totAslap - totAkn;
+              return <div key={k} className="rounded-xl p-3"
+                style={{ background: cocok ? '#EAF4EE' : (totAslap !== totAkn && (totAslap > 0 || totAkn > 0) ? '#FBF3E2' : COLORS.paper), border: '1px solid ' + COLORS.line }}>
+                <div className="text-xs font-bold" style={{ color: COLORS.ink }}>{label} ({nHadir}/{nAktif} hadir)</div>
+                <div className="text-[11px] mt-1" style={{ color: COLORS.muted }}>Aslap: <b style={{ color: COLORS.ink }}>{fmt(totAslap)}</b></div>
+                <div className="text-[11px]" style={{ color: COLORS.muted }}>Akuntan: <b style={{ color: COLORS.ink }}>{fmt(totAkn)}</b></div>
+                <div className="text-[11px] font-bold mt-1" style={{ color: cocok ? COLORS.green : '#9A6A0B' }}>
+                  {cocok ? '✓ Cocok' : (totAslap > 0 || totAkn > 0) ? '⚠️ Selisih ' + fmt(Math.abs(selisih)) : 'Belum ada data'}
+                </div>
+              </div>;
+            })}
+          </div>
+          {bukaPanelKwitansi && <div className="mt-3 pt-3" style={{ borderTop: '1px solid ' + COLORS.line }}>
+            <KwitansiPage session={session} scope={dapurId} toast={toast}/>
+          </div>}
+        </Card>
+
+        <Card>
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <Eyebrow>Tahap 2C · Pengajuan Bahan Baku &amp; Operasional Lainnya</Eyebrow>
+              <div className="text-xs" style={{ color: COLORS.muted }}>Ajukan nota Bahan Baku atau tambah pengajuan baru langsung di bawah tanpa meninggalkan alur kerja.</div>
+            </div>
+            <div className="flex gap-2">
+              <Btn size="sm" onClick={function() { setBukaFormPengajuan(!bukaFormPengajuan); }}>{I.file} {bukaFormPengajuan ? 'Tutup Form Pengajuan' : 'Buat / Lihat Pengajuan di Sini'}</Btn>
+              <Btn size="sm" kind="ghost" onClick={function() { setStep(3); }}>Lanjut ke Tahap 3 {I.arrowR}</Btn>
+            </div>
+          </div>
+          {bukaFormPengajuan && <div className="mt-3 pt-3" style={{ borderTop: '1px solid ' + COLORS.line }}>
+            <PengajuanPage session={session} scope={dapurId} dapurList={[{ id: dapurId, nama: (ro && ro.dapurNama) || dapurId }]} toast={toast}/>
+          </div>}
+        </Card>
+      </div>}
+
+      {step === 3 && <div className="space-y-3">
+        <Card>
+          <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
+            <div>
+              <Eyebrow>Tahap 3 · Pantau Status ACC, Salin Pesan WA &amp; Cetak Berita Acara</Eyebrow>
+              <div className="text-xs" style={{ color: COLORS.muted }}>Semua daftar pengajuan hari ini, tombol Salin WA, dan unduh Berita Acara tampil langsung di bawah.</div>
+            </div>
+            <Btn size="sm" kind="ghost" onClick={function() { setStep(4); }}>Lanjut ke Tahap 4 (Sinkron VA &amp; LPDH) {I.arrowR}</Btn>
+          </div>
+          <div className="grid grid-cols-3 gap-2 my-2">
+            <div className="rounded-xl p-3 text-center" style={{ background: COLORS.paper }}>
+              <div className="text-[11px]" style={{ color: COLORS.muted }}>Total Baris Hari Ini</div>
+              <div className="text-lg font-extrabold num">{pjHari.total}</div>
+            </div>
+            <div className="rounded-xl p-3 text-center" style={{ background: (pjHari.menunggu + pjHari.backdate) > 0 ? '#FBF3E2' : COLORS.paper }}>
+              <div className="text-[11px]" style={{ color: COLORS.muted }}>Menunggu ACC</div>
+              <div className="text-lg font-extrabold num" style={{ color: (pjHari.menunggu + pjHari.backdate) > 0 ? '#9A6A0B' : COLORS.ink }}>{pjHari.menunggu + pjHari.backdate}</div>
+            </div>
+            <div className="rounded-xl p-3 text-center" style={{ background: pjHari.setuju > 0 ? '#EAF4EE' : COLORS.paper }}>
+              <div className="text-[11px]" style={{ color: COLORS.muted }}>Disetujui / Terealisasi</div>
+              <div className="text-lg font-extrabold num" style={{ color: COLORS.green }}>{pjHari.setuju}</div>
+            </div>
+          </div>
+        </Card>
+        <PengajuanPage session={session} scope={dapurId} dapurList={[{ id: dapurId, nama: (ro && ro.dapurNama) || dapurId }]} toast={toast}/>
+      </div>}
+
+      {step === 4 && <div className="space-y-3">
+        <Card>
+          <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
+            <div>
+              <Eyebrow>Tahap 4 · Input Saldo VA Akhir Rekening &amp; Rekonsiliasi LPDH ({fmtDDMMYYYY(tanggal)})</Eyebrow>
+              <div className="text-xs" style={{ color: COLORS.muted }}>Ketik saldo akhir rekening VA dari mobile banking/rekening koran langsung di sini untuk syarat LPDH PPK.</div>
+            </div>
+            <Btn size="sm" kind="ghost" onClick={function() { setBukaPanelLpdh(!bukaPanelLpdh); }}>{I.download} {bukaPanelLpdh ? 'Sembunyikan Detail LPDH' : 'Buka LPDH Lengkap di Sini'}</Btn>
+          </div>
+
+          {loadingLpdh && !lpdhInfo ? <div className="text-xs flex items-center gap-2 py-2" style={{ color: COLORS.muted }}>{I.spinner} Memuat saldo VA hari ini…</div>
+            : lpdhInfo ? <div className="rounded-2xl p-4 mt-2" style={{ background: COLORS.paper, border: '1px solid ' + COLORS.line }}>
+              <div className="grid sm:grid-cols-3 gap-3 mb-3 text-xs">
+                <div className="rounded-xl p-2.5" style={{ background: '#fff', border: '1px solid ' + COLORS.line }}>
+                  <div style={{ color: COLORS.muted }}>Saldo Awal Hari Ini</div>
+                  <div className="text-sm font-extrabold num mt-0.5">{fmt(lpdhInfo.saldoAwal)}</div>
+                </div>
+                <div className="rounded-xl p-2.5" style={{ background: '#fff', border: '1px solid ' + COLORS.line }}>
+                  <div style={{ color: COLORS.muted }}>Transaksi Hari Ini ({(lpdhInfo.transaksi || []).length} baris)</div>
+                  <div className="text-sm font-extrabold num mt-0.5">{fmt((lpdhInfo.transaksi || []).reduce(function(s, t) { return s + t.riil; }, 0))}</div>
+                </div>
+                <div className="rounded-xl p-2.5" style={{ background: '#EAF4EE', border: '1px solid #B9D7C6' }}>
+                  <div style={{ color: COLORS.deep }}>Saldo Akhir Menurut Aplikasi</div>
+                  <div className="text-sm font-extrabold num mt-0.5" style={{ color: COLORS.green }}>{fmt(saldoAkhirApp)}</div>
                 </div>
               </div>
-              <Btn size="sm" kind="ghost" onClick={function() { onBuka('kwitansi'); }}>Cek Kwitansi</Btn>
-            </div>;
-          })}
-        </div>
-        <div className="flex flex-wrap gap-2">
-          <Btn size="sm" onClick={function() { onBuka('pengajuan'); }}>{I.file} Buka Pengajuan Anggaran</Btn>
-          <Btn size="sm" kind="ghost" onClick={function() { onBuka('rencana'); }}>{I.calendar} Ajukan dari Rencana Ops</Btn>
-          <Btn size="sm" kind="ghost" onClick={function() { setStep(3); }}>Lanjut ke Tahap 3 {I.arrowR}</Btn>
-        </div>
-      </Card>}
 
-      {step === 3 && <Card>
-        <Eyebrow>Tahap 3 · Pantau Persetujuan, Salin Pesan WA &amp; Berita Acara</Eyebrow>
-        <div className="grid grid-cols-3 gap-2 my-2.5">
-          <div className="rounded-xl p-2.5 text-center" style={{ background: COLORS.paper }}>
-            <div className="text-[11px]" style={{ color: COLORS.muted }}>Total Baris Hari Ini</div>
-            <div className="text-base font-extrabold num">{pjHari.total}</div>
-          </div>
-          <div className="rounded-xl p-2.5 text-center" style={{ background: (pjHari.menunggu + pjHari.backdate) > 0 ? '#FBF3E2' : COLORS.paper }}>
-            <div className="text-[11px]" style={{ color: COLORS.muted }}>Menunggu ACC</div>
-            <div className="text-base font-extrabold num" style={{ color: (pjHari.menunggu + pjHari.backdate) > 0 ? '#9A6A0B' : COLORS.ink }}>{pjHari.menunggu + pjHari.backdate}</div>
-          </div>
-          <div className="rounded-xl p-2.5 text-center" style={{ background: pjHari.setuju > 0 ? '#EAF4EE' : COLORS.paper }}>
-            <div className="text-[11px]" style={{ color: COLORS.muted }}>Disetujui / Terealisasi</div>
-            <div className="text-base font-extrabold num" style={{ color: COLORS.green }}>{pjHari.setuju}</div>
-          </div>
-        </div>
-        <div className="text-xs mb-3" style={{ color: COLORS.muted }}>
-          Salin teks WhatsApp pengajuan yang baru diajukan atau sudah disetujui untuk dikirim ke grup/PIC, lalu unduh Berita Acara bila semua baris hari ini sudah diputuskan.
-        </div>
-        <div className="flex flex-wrap gap-2">
-          <Btn size="sm" onClick={function() { onBuka('pengajuan'); }}>{I.file} Buka Pengajuan &amp; Salin WA</Btn>
-          <Btn size="sm" kind="ghost" onClick={function() { onBuka('beritaacara'); }}>{I.download} Cetak Berita Acara</Btn>
-          <Btn size="sm" kind="ghost" onClick={function() { setStep(4); }}>Lanjut ke Tahap 4 {I.arrowR}</Btn>
-        </div>
-      </Card>}
+              <div className="grid sm:grid-cols-3 gap-2 items-end">
+                <div className="sm:col-span-2">
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="text-xs font-semibold" style={{ color: COLORS.ink }}>Saldo VA Akhir Menurut Rekening Koran / M-Banking</span>
+                    <button type="button" onClick={function() { setSaldoVaInput(String(Math.max(0, saldoAkhirApp))); }} className="text-[11px] font-bold underline" style={{ color: COLORS.green }}>
+                      Isi sama dengan aplikasi ({fmt(saldoAkhirApp)})
+                    </button>
+                  </div>
+                  <RupiahInput value={saldoVaInput} onChange={setSaldoVaInput} label="Saldo VA rekening"/>
+                </div>
+                <Btn onClick={simpanSaldoVaLangsung} disabled={savingVa || saldoVaInput === ''}>
+                  {savingVa ? I.spinner : I.check} Simpan Saldo VA Akhir
+                </Btn>
+              </div>
 
-      {step === 4 && <Card>
-        <Eyebrow>Tahap 4 · Sinkronisasi Saldo VA, Kwitansi &amp; LPDH Harian</Eyebrow>
-        <div className="text-xs mb-3" style={{ color: COLORS.muted }}>
-          Pastikan transaksi hari ini ({d.lpdh.transaksi} transaksi) sudah sinkron dengan saldo rekening VA dan semua kwitansi harian siap untuk LPDH.
-        </div>
-        <div className="flex flex-wrap gap-2">
-          <Btn size="sm" onClick={function() { onBuka('lpdh'); }}>{I.download} Buka LPDH Harian</Btn>
-          <Btn size="sm" kind="ghost" onClick={function() { onBuka('kwitansi'); }}>{I.download} Kwitansi Harian / Periode</Btn>
-          <Btn size="sm" kind="ghost" onClick={function() { onBuka('bukubesar'); }}>{I.trend} Cek Buku Besar</Btn>
-        </div>
-      </Card>}
+              {saldoVaInput !== '' && Number(saldoVaInput) !== saldoAkhirApp && <div className="mt-2.5">
+                <div className="text-xs font-semibold mb-1" style={{ color: COLORS.danger }}>
+                  ⚠️ Selisih {fmt(saldoAkhirApp - Number(saldoVaInput))} dengan saldo aplikasi — wajib isi penjelasan untuk LPDH:
+                </div>
+                <input value={penjelasanVa} onChange={function(e) { setPenjelasanVa(e.target.value); }} style={inputStyle} placeholder="Penjelasan selisih (cth. kas kecil di tangan / transfer belum kliring)" aria-label="Penjelasan selisih VA"/>
+              </div>}
+              {saldoVaInput !== '' && Number(saldoVaInput) === saldoAkhirApp && <div className="text-xs font-semibold mt-2" style={{ color: COLORS.green }}>
+                ✓ Saldo VA rekening cocok persis dengan saldo akhir aplikasi ({fmt(saldoAkhirApp)}).
+              </div>}
+            </div> : null}
+        </Card>
+
+        {bukaPanelLpdh && <LpdhPage session={session} scope={dapurId} toast={toast}/>}
+      </div>}
     </>}
+
+    {waText && <WAModal text={waText.text} ids={waText.ids} toast={toast} onClose={function() { setWaText(null); }}/>}
+
+    {konfirmAjuHari && (function() {
+      const totAng = konfirmAjuHari.baris.reduce(function(a, x) { return a + x.nominal; }, 0);
+      const totAdm = konfirmAjuHari.baris.reduce(function(a, x) { return a + (ro ? roFee(x, pmap, ro.bankVA) : 0); }, 0);
+      return <Modal title={'Ajukan ' + konfirmAjuHari.baris.length + ' baris untuk ' + fmtDateLong(konfirmAjuHari.t) + '?'} onClose={function() { setKonfirmAjuHari(null); }}>
+        <div className="text-sm mb-2" style={{ color: COLORS.ink }}>Pengajuan dikirim ke PIC/Yayasan untuk <b>hari H {fmtDateLong(konfirmAjuHari.t)}</b>. Bila disetujui, otomatis terealisasi menjadi transaksi.</div>
+        {konfirmAjuHari.baris.map(function(x) {
+          const fAdm = ro ? roFee(x, pmap, ro.bankVA) : 0, bRiil = butuhRencanaRealisasi('Operasional', x.kategori);
+          return <div key={x.id} className="flex justify-between gap-2 py-1.5 text-sm" style={{ borderTop: '1px solid ' + COLORS.line }}>
+            <div className="min-w-0 truncate">
+              <div className="truncate">{x.uraian} · {(pmap[x.penerima_id] || {}).nama}</div>
+              {bRiil && <div className="text-xs" style={{ color: COLORS.green }}>Rencana realisasi (aktual): {fmt(Number(x.rencana_riil) > 0 ? x.rencana_riil : x.nominal)}</div>}
+              {fAdm > 0 && <div className="text-xs" style={{ color: '#9A6A0B' }}>+ biaya admin {fmt(fAdm)}</div>}
+            </div>
+            <b className="num shrink-0">{fmt(x.nominal)}</b>
+          </div>;
+        })}
+        <div className="flex justify-between py-1.5 text-sm font-bold" style={{ borderTop: '1px solid ' + COLORS.line }}><span>Total potong VA</span><span className="num">{fmt(totAng + totAdm)}</span></div>
+        {konfirmAjuHari.lebih > 0 && <div className="rounded-lg p-2.5 mt-2 text-xs" style={{ background: '#F8E9E5', color: COLORS.danger }}>
+          <div className="font-semibold">⚠️ Melebihi pagu harian {fmt(konfirmAjuHari.lebih)}</div>
+          <textarea value={konfirmAjuHari.catatan} onChange={function(e) { setKonfirmAjuHari(Object.assign({}, konfirmAjuHari, { catatan: e.target.value })); }} rows={3} aria-label="Catatan untuk Yayasan"
+            placeholder="Alasan melebihi pagu (wajib, min. 10 karakter)" style={Object.assign({}, inputStyle, { marginTop: 8, fontSize: 13, minHeight: 64 })}/>
+        </div>}
+        <div className="flex gap-2 justify-end mt-3">
+          <Btn kind="ghost" onClick={function() { setKonfirmAjuHari(null); }}>Batal</Btn>
+          <Btn kind={konfirmAjuHari.lebih > 0 ? 'danger' : 'solid'} disabled={konfirmAjuHari.lebih > 0 && konfirmAjuHari.catatan.trim().length < 10} onClick={function() { kirimAjukanHari(konfirmAjuHari); }}>
+            {I.file} {konfirmAjuHari.lebih > 0 ? 'Ajukan dengan catatan' : 'Ya, ajukan sekarang'}
+          </Btn>
+        </div>
+      </Modal>;
+    })()}
+
+    {editRoItem && ro && <RencanaItemModal
+      x={editRoItem}
+      ctx={ro}
+      hari={roRingkas(roItemsAll.concat(roLuarAll), ro, setelanRo, rHariMap, todayISO()).hari}
+      kategori={kategoriOps.filter(function(k) { return RO_TANPA.indexOf(k) < 0; })}
+      bisaUbah={bisaUbahRo && !terkunciRo(editRoItem)}
+      pmap={pmap}
+      lewat={function(t) { return !!t && t < todayISO(); }}
+      busy={ajukanBusy}
+      toast={toast}
+      statusBaris={editRoItem.luar ? editRoItem.status : stBarisRo[editRoItem.id]}
+      onWa={function(x) {
+        setEditRoItem(null);
+        const pn = pmap[x.penerima_id] || {};
+        setWaText({ ids: [x.pengajuan_id], text: buildWAPesan({ nomor: x.nomor, tanggal: x.tanggal, dapurNama: ro.dapurNama || '', oleh: session.user.nama, items: [{ uraian: x.uraian, jenis: 'Operasional', nominal: x.nominal, penerima_nama: pn.nama || '', bank: pn.bank || '', no_rek: pn.no_rek || '' }] }) });
+      }}
+      bisaBatal={role === 'akuntan' && ro.periode && ro.periode.status === 'AKTIF'}
+      onBatal={async function(x, alasan) {
+        const idPItem = roIdItemPengajuan(roItemsAll);
+        const r = await apiPost('batalkanItem', { item_id: x.pitem_id || idPItem[x.id], alasan: alasan || 'Dibatalkan dari Alur Harian' });
+        if (!r.ok) { toast('Gagal membatalkan: ' + (r.error || ''), 'error'); return; }
+        setEditRoItem(null); toast('Pengajuan ' + x.nomor + ' dibatalkan'); load();
+      }}
+      onPenerima={function(saved) {
+        setRo(function(c) {
+          const ada = c.penerima.some(function(p) { return p.id === saved.id; });
+          return Object.assign({}, c, { penerima: (ada ? c.penerima.map(function(p) { return p.id === saved.id ? Object.assign({}, p, saved) : p; }) : c.penerima.concat([saved])).sort(function(a, b) { return a.nama.localeCompare(b.nama); }) });
+        });
+      }}
+      onAjukan={async function(v) {
+        const daftar = await simpanItemRoLangsung(v);
+        if (daftar) siapkanAjukanHari(v.id, daftar);
+      }}
+      onClose={function() { setEditRoItem(null); }}
+      onSave={function(v) { simpanItemRoLangsung(v); }}
+      onDelete={function() { simpanItemRoLangsung(null, editRoItem.id); }}
+    />}
   </div>;
 }
 
@@ -8185,30 +8608,31 @@ function App() {
         </nav>
 
         <div className="flex-1 flex flex-col min-w-0">
-          {activeKat && <div className="no-print px-4 sm:px-6 pt-3 pb-0">
-            <div className="mbg-card rounded-2xl p-2 sm:p-2.5 flex flex-col gap-2" style={{ background: COLORS.surface, border: '1px solid ' + COLORS.line }}>
-              <div className="flex items-center gap-1.5 overflow-x-auto pb-0.5">
+          {activeKat && (function() {
+            const isJourneyView = view === 'aslap' || view === 'tugas' || view === 'alurakuntan';
+            if (isJourneyView && kategoriGroups.length <= 1) return null;
+            return <div className="no-print px-4 sm:px-6 pt-2.5 pb-0">
+              <div className="rounded-2xl px-2.5 py-1.5 flex items-center gap-1.5 overflow-x-auto" style={{ background: 'rgba(255,255,255,0.72)', border: '1px solid rgba(23,42,31,0.07)' }}>
                 {kategoriGroups.map(function(kat) {
                   const isKat = kat.id === activeKat.id;
                   return <button key={kat.id} onClick={function() { if (!isKat && kat.items[0]) setView(kat.items[0][0]); }}
-                    className="inline-flex items-center gap-1.5 rounded-xl px-2.5 py-1.5 text-xs font-bold whitespace-nowrap transition shrink-0"
-                    style={{ background: isKat ? '#EAF4EE' : 'transparent', color: isKat ? COLORS.green : COLORS.muted, border: '1px solid ' + (isKat ? '#B9D7C6' : 'transparent') }}>
+                    className="inline-flex items-center gap-1.5 rounded-xl px-2.5 py-1 text-xs font-semibold whitespace-nowrap transition shrink-0"
+                    style={{ background: isKat ? '#EAF4EE' : 'transparent', color: isKat ? COLORS.green : COLORS.muted }}>
                     {kat.icon} <span>{kat.judul}</span>
                   </button>;
                 })}
-              </div>
-              {activeKat.items.length > 1 && <div className="flex flex-wrap gap-1.5 pt-1.5" style={{ borderTop: '1px solid ' + COLORS.line }}>
-                {activeKat.items.map(function(item) {
-                  const k = item[0], label = SUB_LABEL_FITUR[k] || item[1], icon = item[2], on = view === k;
+                {activeKat.items.length > 1 && <span className="mx-1" style={{ color: COLORS.line }}>|</span>}
+                {activeKat.items.length > 1 && activeKat.items.map(function(item) {
+                  const k = item[0], label = SUB_LABEL_FITUR[k] || item[1], on = view === k;
                   return <button key={k} onClick={function() { setView(k); }}
-                    className="inline-flex items-center gap-1.5 rounded-xl px-3 py-1.5 text-xs font-semibold transition"
-                    style={{ background: on ? COLORS.green : COLORS.paper, color: on ? '#fff' : COLORS.ink, border: '1px solid ' + (on ? COLORS.green : COLORS.line) }}>
-                    {icon} <span>{label}</span>
+                    className="inline-flex items-center gap-1 rounded-xl px-2.5 py-1 text-xs font-semibold whitespace-nowrap transition shrink-0"
+                    style={{ background: on ? COLORS.green : 'transparent', color: on ? '#fff' : COLORS.ink }}>
+                    <span>{label}</span>
                   </button>;
                 })}
-              </div>}
-            </div>
-          </div>}
+              </div>
+            </div>;
+          })()}
 
           <main className="app-main flex-1 p-4 sm:p-6 md:!pb-6" style={{ paddingBottom: 'calc(env(safe-area-inset-bottom, 0px) + 88px)' }}>
             {view === 'setup'   && <SetupPeriode session={session} toast={toast}/>}

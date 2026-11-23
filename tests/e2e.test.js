@@ -1592,15 +1592,29 @@ async function isiBahanBaku(page, uraian, volume, harga) {
       'terbitkanKwitansi salah: ' + JSON.stringify(kwSent));
   });
 
-  all &= await run('Journey PIC & Akuntan: PIC terkunci antar tahap & menu ringkas; Akuntan 4 tahap bebas (tidak dikunci)', { role: 'akuntan',
+  all &= await run('Journey PIC & Akuntan: PIC terkunci antar tahap & menu ringkas; Akuntan 4 tahap bebas + langsung ubah PM, ajukan rencana hari ini & input VA Akhir di tempat', { role: 'akuntan',
     override: (a, m, p) => a === 'getTugasHarian' ? { ok: true, data: {
         tanggal: p.tanggal, bisaSetuju: false,
         persetujuan: { baris: 1, nominal: 500000, tanggal: [p.tanggal], hariIni: { total: 2, menunggu: 1, backdate: 0, setuju: 1 } },
-        porsi: { ada: true, sekolah: 3, dikirimSekolah: 2, total: 100, dikirim: 100, diproduksi: 110, syarat: true },
+        porsi: { ada: true, sekolah: 3, dikirimSekolah: 2, total: 100, dikirim: 100, diproduksi: 2550, syarat: true },
         penerima: { aktif: { RELAWAN: 10, PIC_SEKOLAH: 3, KADER: 2 }, tanpaTtd: { RELAWAN: 0, PIC_SEKOLAH: 0, KADER: 0 } },
         kwitansi: { terbit: { RELAWAN: 10, PIC_SEKOLAH: 2, KADER: 2 }, nilai: { RELAWAN: 1100000, PIC_SEKOLAH: 100000, KADER: 100000 }, honor: 1100000,
           anggaran: { RELAWAN: 1100000, PIC_SEKOLAH: 100000, KADER: 100000 } },
-        ttd: { kepala: true, pic: true, akuntan: true }, lpdh: { transaksi: 4, kwitansiPerlu: [] } } } : null }, async (page) => {
+        ttd: { kepala: true, pic: true, akuntan: true }, lpdh: { transaksi: 4, kwitansiPerlu: [] } } }
+      : a === 'getRencanaOps' ? { ok: true, data: {
+          bisaUbah: true, dapurNama: 'SPPG Satu', bankVA: 'BNI', bbDefault: 5,
+          periode: { id: 'P1', periode_no: 1, tanggal_mulai: '2026-01-01', tanggal_akhir: '2026-12-31', penerima: 2600, status: 'AKTIF' },
+          penerima: [{ id: 'PN1', nama: 'Agen Gas', bank: 'BNI', no_rek: '112233' }],
+          rencana: { versi: 1, setelan: { indeks: 100, batas: 95, bb: 5 }, hari: {},
+            items: [{ id: 'RO1', tanggal: JAM_UJI.slice(0, 10), kategori: 'Insentif Guru/PIC Sekolah', uraian: 'Insentif PIC', nominal: 250000, penerima_id: 'PN1' }] },
+          status: {}, luar: [], pmPop: {} } }
+      : a === 'saveRencanaOps' ? { ok: true, data: { versi: 2 } }
+      : a === 'getDataLPDH' ? { ok: true, data: {
+          dapur: { id: 'D1', nama: 'SPPG Satu', kode: 'S1' }, identitas: {}, tanggal: p.tanggal,
+          periode: { id: 'P1', periode_no: 1, tanggal_mulai: '2026-01-01', tanggal_akhir: '2026-12-31', status: 'AKTIF' },
+          saldoAwal: 10000000, topups: [], transaksi: [{ id: 'T1', tanggal: p.tanggal, no_bukti: 'NB1', jenis: 'Operasional', kategori: 'Gas', uraian: 'Gas', sumber: 'VA', riil: 500000 }],
+          saldoRekening: null } }
+      : a === 'saveSaldoLPDH' ? { ok: true } : null }, async (page, srv) => {
     await login(page, 'siti');
     await page.waitForSelector('header');
     // Akuntan tetap memiliki akses LPDH Harian & Kwitansi + menu Alur Harian (4 tahap bebas tidak dikunci)
@@ -1611,8 +1625,26 @@ async function isiBahanBaku(page, uraian, volume, harga) {
     assert(!(await page.isDisabled('button:has-text("2. Pengajuan & Absensi")')), 'Tahap 2 Akuntan tidak boleh dikunci');
     assert(!(await page.isDisabled('button:has-text("3. Pantau ACC & BA")')), 'Tahap 3 Akuntan tidak boleh dikunci');
     assert(!(await page.isDisabled('button:has-text("4. Sinkron VA & LPDH")')), 'Tahap 4 Akuntan tidak boleh dikunci');
+    // Tahap 1: Samakan PM langsung di tempat tanpa pindah ke halaman Rencana Ops
+    await page.click('button:has-text("Samakan PM Rencana = 2.550 PM")');
+    await page.waitForSelector('text=diperbarui menjadi 2.550 PM');
+    const roSaved = srv.log.posts.find(x => x.action === 'saveRencanaOps');
+    assert(roSaved, 'saveRencanaOps harus langsung terpanggil dari Tahap 1');
+    // Tahap 2: Rencana Operasional hari ini langsung tampil & bisa diajukan di tempat
     await page.click('button:has-text("2. Pengajuan & Absensi")');
-    await page.waitForSelector('text=Pastikan nominal pengajuan Honor Relawan');
+    await page.waitForSelector('text=Tahap 2A · Rencana Operasional Hari Ini');
+    await page.waitForSelector('text=Insentif PIC');
+    await page.click('button:has-text("Ajukan 1 Baris Siap")');
+    await page.waitForSelector('text=Ya, ajukan sekarang');
+    await page.click('button:has-text("Batal")');
+    // Tahap 4: Input Saldo VA Akhir langsung di tempat tanpa pindah ke halaman LPDH
+    await page.click('button:has-text("4. Sinkron VA & LPDH")');
+    await page.waitForSelector('text=Saldo Akhir Menurut Aplikasi');
+    await page.click('button:has-text("Isi sama dengan aplikasi")');
+    await page.click('button:has-text("Simpan Saldo VA Akhir")');
+    await page.waitForSelector('text=tersimpan');
+    const vaSaved = srv.log.urls.find(u => u.includes('action=saveSaldoLPDH'));
+    assert(vaSaved && vaSaved.includes('saldo_va=9500000'), 'saveSaldoLPDH harus menyimpan 9500000 langsung dari Tahap 4: ' + vaSaved);
   });
 
   console.log(all ? 'SEMUA LULUS' : 'ADA YANG GAGAL');
