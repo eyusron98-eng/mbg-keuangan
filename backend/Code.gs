@@ -1193,7 +1193,7 @@ function authUser(p) {
   const me = authUserAsli(p);
   if (!me || me.role !== 'admin' || !p.sebagai || PERAN_SEBAGAI.indexOf(String(p.sebagai)) < 0) return me;
   const peran = String(p.sebagai);
-  const perluDapur = peran === 'akuntan' || peran === 'pic';
+  const perluDapur = peran === 'akuntan' || peran === 'pic' || peran === 'aslap';
   const dapur = perluDapur ? String(p.sebagai_dapur || '') : '';
   if (perluDapur && !dapur) return me;
   return Object.assign({}, me, { role: peran, dapur: dapur, sebagai: true });
