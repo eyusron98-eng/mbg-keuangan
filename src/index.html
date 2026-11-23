@@ -2187,12 +2187,12 @@ function RencanaOpsPage({ session, scope, toast }) {
   const stAju = function(x) { return x.luar ? x.status : stBaris[x.id]; };
   function grupAju(t) {
     const g = {};
-    items.concat(luarItems).forEach(function(x) { if (!x.pengajuan_id || (t && x.tanggal !== t) || ['MENUNGGU_ADMIN', 'DIAJUKAN', 'REVISI', 'DISETUJUI'].indexOf(stAju(x)) < 0) return; (g[x.pengajuan_id] = g[x.pengajuan_id] || []).push(x); });
+    items.concat(luarItems).forEach(function(x) { if (!x.pengajuan_id || (t && x.tanggal !== t) || ['MENUNGGU_ADMIN', 'DIAJUKAN', 'REVISI', 'DISETUJUI', 'TEREALISASI'].indexOf(stAju(x)) < 0) return; (g[x.pengajuan_id] = g[x.pengajuan_id] || []).push(x); });
     return g;
   }
   function waGrup(g) {
     const ids = Object.keys(g);
-    return { ids: ids, text: ids.map(function(pid) { const a = g[pid]; return teksWaRencana(a[0].nomor, a[0].tanggal, a, '', a.every(function(x) { return stAju(x) === 'DISETUJUI'; })); }).join('\n\n— — —\n\n') };
+    return { ids: ids, text: ids.map(function(pid) { const a = g[pid]; return teksWaRencana(a[0].nomor, a[0].tanggal, a, '', a.every(function(x) { return stAju(x) === 'DISETUJUI' || stAju(x) === 'TEREALISASI'; })); }).join('\n\n— — —\n\n') };
   }
   function waBaris(x) { setEdit(null); const g = {}; g[x.pengajuan_id] = grupAju(x.tanggal)[x.pengajuan_id] || [x]; setWaText(waGrup(g)); }
   async function batalAju(x, alasan) {
@@ -2527,7 +2527,7 @@ function RencanaItemModal({ x, ctx, hari, kategori, bisaUbah, pmap, onClose, onS
     {x.pengajuan_id && x.luar && <div className="rounded-lg p-2.5 mb-1 text-xs" style={{ background: '#E3ECF7', color: COLORS.blue }}>Diajukan di luar rencana, lewat menu Pengajuan. Ikut dihitung dalam pagu hari itu.</div>}
     {x.pengajuan_id && <div className="rounded-lg p-2.5 mb-3 text-xs" style={{ background: '#E8F1EC', color: COLORS.deep }}>
       Sudah diajukan ({x.nomor}) — <b>{labelSt}</b>, hari H {fmtDateLong(x.tanggal)}. Lihat di menu <b>Pengajuan</b> → tampilan <b>Periode aktif</b>.
-      {['DIAJUKAN', 'REVISI', 'DISETUJUI'].indexOf(statusBaris) >= 0 && <div className="mt-2"><Btn size="sm" kind="ghost" onClick={function() { onWa(x); }}>{I.file} Salin teks WA pengajuan ini</Btn></div>}
+      {['MENUNGGU_ADMIN', 'DIAJUKAN', 'REVISI', 'DISETUJUI', 'TEREALISASI'].indexOf(statusBaris) >= 0 && <div className="mt-2"><Btn size="sm" kind="ghost" onClick={function() { onWa(x); }}>{I.file} Salin teks WA pengajuan ini</Btn></div>}
       {bolehBatal && <div className="mt-2">
         {!mauBatal ? <Btn size="sm" kind="ghost" onClick={function() { setMauBatal(true); }}>{I.x} Batalkan pengajuan baris ini</Btn>
           : <div><input value={alasan} onChange={function(e) { setAlasan(e.target.value); }} placeholder="Alasan pembatalan (cth. salah tanggal)" style={Object.assign({}, inputStyle, { minHeight: 36, fontSize: 13 })} aria-label="Alasan batal"/>
@@ -5026,8 +5026,8 @@ function PengajuanPage({ session, scope, dapurList, toast }) {
           <div className="sm:text-right shrink-0">
             <StatusBadge status={h.status}/>
             <div className="text-xs mt-1 num" style={{ color: COLORS.muted }}>Diajukan {fmt(h.total_diajukan)} · <span style={{ color: COLORS.green }}>Disetujui {fmt(h.total_disetujui)}</span></div>
-            {canCreate && mode !== 'lalu' && h.items.some(function(i){ return ['MENUNGGU_ADMIN', 'DIAJUKAN', 'REVISI', 'DISETUJUI'].indexOf(i.status) >= 0; }) && <div className="mt-1.5 flex sm:justify-end items-center gap-1.5 flex-wrap">
-              {!waSudah(h.id) && <MiniBadge bg="#FBF3E3" fg="#9A6A0B">Belum disalin ke WA</MiniBadge>}
+            {h.items.some(function(i){ return ['MENUNGGU_ADMIN', 'DIAJUKAN', 'REVISI', 'DISETUJUI', 'TEREALISASI'].indexOf(i.status) >= 0; }) && <div className="mt-1.5 flex sm:justify-end items-center gap-1.5 flex-wrap">
+              {canCreate && mode !== 'lalu' && !waSudah(h.id) && h.items.some(function(i){ return ['MENUNGGU_ADMIN', 'DIAJUKAN', 'REVISI', 'DISETUJUI'].indexOf(i.status) >= 0; }) && <MiniBadge bg="#FBF3E3" fg="#9A6A0B">Belum disalin ke WA</MiniBadge>}
               <button onClick={function(){ setWaText({ text: waPengajuan(h, dapurMap[h.dapur]), ids: [h.id] }); }}
                 className="text-[11px] font-semibold rounded px-2 py-1" style={{ color: COLORS.green, border: '1px solid ' + COLORS.line }}>{waSudah(h.id) ? 'Salin lagi pesan WA' : 'Salin pesan WA'}</button></div>}
           </div>
@@ -5167,12 +5167,12 @@ function LogoKopCard({ toast }) {
 // Penanda "teks WA sudah disalin" per pengajuan (disimpan di perangkat ini)
 function waSudah(id) { try { return !!localStorage.getItem('waDisalin:' + id); } catch (e) { return false; } }
 function waTandai(ids) { (ids || []).forEach(function(id) { try { if (id) localStorage.setItem('waDisalin:' + id, String(Date.now())); } catch (e) {} }); }
-// Teks WA satu pengajuan dari daftar baris (menunggu / revisi / disetujui; yang batal & sudah direalisasi tidak ikut)
+// Teks WA satu pengajuan dari daftar baris (menunggu / revisi / disetujui / terealisasi; yang batal & ditolak tidak ikut)
 function waPengajuan(h, dapurNama) {
-  const aktif = (h.items || []).filter(function(i) { return ['MENUNGGU_ADMIN', 'DIAJUKAN', 'REVISI', 'DISETUJUI'].indexOf(i.status) >= 0; });
+  const aktif = (h.items || []).filter(function(i) { return ['MENUNGGU_ADMIN', 'DIAJUKAN', 'REVISI', 'DISETUJUI', 'TEREALISASI'].indexOf(i.status) >= 0; });
   const cat = aktif.map(function(i) { const c = String(i.catatan || ''), k = c.indexOf('Catatan akuntan: '); return k < 0 ? '' : c.substring(k + 17); }).filter(Boolean)[0] || '';
   return buildWAPesan({ nomor: h.nomor, tanggal: h.tanggal, dapurNama: dapurNama || '', oleh: h.created_by_nama, items: aktif, catatan: cat,
-    disetujui: aktif.length > 0 && aktif.every(function(i) { return i.status === 'DISETUJUI'; }) });
+    disetujui: aktif.length > 0 && aktif.every(function(i) { return i.status === 'DISETUJUI' || i.status === 'TEREALISASI'; }) });
 }
 function buildWAPesan(d) {
   const tg = tglPanjang(d.tanggal);
@@ -5186,7 +5186,7 @@ function buildWAPesan(d) {
     '',
   ];
   items.forEach(function(it, k) {
-    lines.push((k + 1) + '. ' + it.uraian + ' (' + it.jenis + (it.susulan ? ', susulan' : '') + ')' + (!d.disetujui && it.status === 'DISETUJUI' ? ' ✅ disetujui' : ''));
+    lines.push((k + 1) + '. ' + it.uraian + ' (' + it.jenis + (it.susulan ? ', susulan' : '') + ')' + (!d.disetujui && (it.status === 'DISETUJUI' || it.status === 'TEREALISASI') ? ' ✅ disetujui' : ''));
     lines.push('   Nominal: ' + fmt(it.nominal));
     lines.push('   Transfer ke: ' + it.penerima_nama + ' - ' + it.bank + ' ' + it.no_rek);
   });
@@ -6684,6 +6684,7 @@ function PersetujuanPage({ session, scope, dapurList, toast }) {
   const [mode, setMode] = useState('menunggu');   // 'menunggu' | 'hari' | 'aktif' | 'lalu'
   const [per, setPer] = useState('');
   const [nMenunggu, setNMenunggu] = useState(null);
+  const [waText, setWaText] = useState(null);
   const multi = session.user.role !== 'pic' && (!scope || scope === 'ALL');
   const scopeDapur = session.user.role === 'pic' ? '' : (scope && scope !== 'ALL' ? scope : '');
   const periodesTutup = usePeriodeTutup(session, mode === 'lalu', scopeDapur, setPer);
@@ -6716,12 +6717,19 @@ function PersetujuanPage({ session, scope, dapurList, toast }) {
     if (h.status === 'MENUNGGU') {
       return <PersetujuanCard key={h.id + '-' + h.items.length} h={h} va={tutup ? null : data.va[h.dapur]} tutup={tutup} dapurNama={dapurMap[h.dapur] || h.dapur} toast={toast} onDone={load}/>;
     }
+    const bisaWa = (h.items || []).some(function(i){ return ['MENUNGGU_ADMIN', 'DIAJUKAN', 'REVISI', 'DISETUJUI', 'TEREALISASI'].indexOf(i.status) >= 0; });
     return <Card key={h.id} pad={false} className="mb-3">
       <div className="p-3 sm:p-4 flex justify-between gap-2" style={{ background: COLORS.paper, borderRadius: '12px 12px 0 0' }}>
         <div className="min-w-0"><div className="text-sm font-bold" style={{ color: COLORS.ink }}>{dapurMap[h.dapur] || h.dapur}</div>
           <div className="font-mono text-xs break-all">{h.nomor}</div>
           <div className="text-xs" style={{ color: COLORS.muted }}>{fmtDDMMYYYY(h.tanggal)} · disetujui {fmt(h.total_disetujui)}{h.decided_by_nama ? ' · oleh ' + oleh(h.decided_by_nama, h.decided_by_role) : ''}</div></div>
-        <StatusBadge status={h.status}/>
+        <div className="text-right shrink-0">
+          <StatusBadge status={h.status}/>
+          {bisaWa && <div className="mt-1.5">
+            <button onClick={function(){ setWaText({ text: waPengajuan(h, dapurMap[h.dapur]), ids: [h.id] }); }}
+              className="text-[11px] font-semibold rounded px-2 py-1" style={{ color: COLORS.green, border: '1px solid ' + COLORS.line }}>Salin pesan WA</button>
+          </div>}
+        </div>
       </div>
       {h.status === 'MENUNGGU_ADMIN' && <div className="px-3 sm:px-4 py-2 text-xs" style={{ background: '#F3EAF8', color: '#6B3FA0' }}>
         Pengajuan backdate ini sedang menunggu ACC Admin sebelum dapat diputuskan PIC/Yayasan.
@@ -6746,6 +6754,7 @@ function PersetujuanPage({ session, scope, dapurList, toast }) {
           {grp.list.map(kartu)}
         </React.Fragment>; })
     : list.map(kartu)}
+    {waText && <WAModal text={waText.text} ids={waText.ids} toast={toast} onClose={function(){ setWaText(null); }}/>}
   </div>;
 }
 
