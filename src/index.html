@@ -5631,6 +5631,7 @@ function PengajuanPage({ session, scope, dapurList, toast }) {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [kategoriMap, setKategoriMap] = useState({});
+  const [allKategoriMap, setAllKategoriMap] = useState({});
   const [tab, setTab] = useState(isAsisten ? 'buat' : 'daftar');   // 'buat' = formulir, 'daftar' = sudah diajukan
   const [formKey, setFormKey] = useState(0);        // naik setelah kirim/batal → formulir kosong lagi
   const [baru, setBaru] = useState(null);           // nomor pengajuan yang baru saja terkirim (banner sukses)
@@ -5671,7 +5672,10 @@ function PengajuanPage({ session, scope, dapurList, toast }) {
     return function(){ live = false; };
   }, [mode, per, scope]);
   useEffect(function(){ load(); api('getKategori').then(function(r){
-    if (r.ok) setKategoriMap(isAsisten ? { 'Bahan Baku': r.data['Bahan Baku'] || ['Semua Kategori'] } : r.data);
+    if (r.ok) {
+      setAllKategoriMap(r.data);
+      setKategoriMap(isAsisten ? { 'Bahan Baku': r.data['Bahan Baku'] || ['Semua Kategori'] } : r.data);
+    }
   }); }, [load]);
 
   if (loading && !data) return <Card><div className="flex items-center gap-2 text-sm" style={{ color: COLORS.muted }}>{I.spinner} Memuat…</div></Card>;
@@ -5796,7 +5800,7 @@ function PengajuanPage({ session, scope, dapurList, toast }) {
 
     </>}
 
-    {editItem && <ItemEditModal item={editItem} kategoriMap={kategoriMap} penerima={penerima} upsertPenerima={upsertPenerima}
+    {editItem && <ItemEditModal item={editItem} kategoriMap={isAsisten && editItem.jenis !== 'Bahan Baku' && Object.keys(allKategoriMap).length ? allKategoriMap : kategoriMap} penerima={penerima} upsertPenerima={upsertPenerima}
       toast={toast} onClose={function(){ setEditItem(null); }} onSaved={load}/>}
     {batalItem && <BatalModal item={batalItem} toast={toast} onClose={function(){ setBatalItem(null); }} onSaved={load}/>}
     {waText && <WAModal text={waText.text} ids={waText.ids} toast={toast} onDisalin={function(){ setWaVer(function(v){ return v + 1; }); }} onClose={function(){ setWaText(null); }}/>}

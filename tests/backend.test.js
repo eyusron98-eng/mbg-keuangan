@@ -1332,6 +1332,65 @@ const ok = (c, m) => { console.log((c ? 'PASS ' : 'FAIL ') + m); if (!c) fails++
       'getRelawanBayar juga otomatis menarik daftar hadir relawan dari Aslap');
   }
 
+  // 27. Pengajuan yang dibuat oleh Super Admin tampil dan bisa diedit/dibatalkan juga oleh Asisten
+  {
+    const e27 = makeEnv([
+      ['U1', 'adm', 'AdmPass1', 'Super Admin', 'admin', '', 'YA'],
+      ['U2', 'akn', 'AknPass1', 'Akuntan', 'akuntan', 'D001', 'YA'],
+      ['U3', 'ast', 'AstPass1', 'Asisten', 'asisten', '', 'YA'],
+    ]);
+    e27.__today = '2026-10-15';
+    e27.__book.Penerima = [['id', 'nama', 'bank', 'no_rek', 'aktif'], ['pn1', 'Toko Sayur', 'BRI', '1234567890', 'YA']];
+    const tok = (u, p) => call(e27, 'POST', { action: 'login', username: u, password: p }).data.token;
+    const tAdm = tok('adm', 'AdmPass1'), tAkn = tok('akn', 'AknPass1'), tAst = tok('ast', 'AstPass1');
+
+    // Super Admin membuat pengajuan Bahan Baku (bertindak sebagai asisten) & Operasional (bertindak sebagai akuntan)
+    const pAdmBB = call(e27, 'POST', { action: 'createPengajuan', token: tAdm, sebagai: 'asisten', dapur: 'D001', tanggal: '2026-10-15', items: [
+      { jenis: 'Bahan Baku', kategori: 'Semua Kategori', uraian: 'Beras Admin', nominal: 100000, penerima_id: 'pn1',
+        nota_url: 'https://drive.google.com/adm-bb', rincian: [{ nama: 'Beras', kategori: 'Karbohidrat', volume: 10, satuan: 'kg', harga: 10000 }] }
+    ] });
+    ok(pAdmBB.ok, 'Super Admin membuat pengajuan Bahan Baku berhasil');
+
+    const pAdmOps = call(e27, 'POST', { action: 'createPengajuan', token: tAdm, sebagai: 'akuntan', sebagai_dapur: 'D001', tanggal: '2026-10-15', items: [
+      { jenis: 'Operasional', kategori: 'Gas', uraian: 'Gas Admin', nominal: 80000, rencana_riil: 80000, penerima_id: 'pn1', nota_url: 'https://drive.google.com/adm-ops' }
+    ] });
+    ok(pAdmOps.ok, 'Super Admin membuat pengajuan Operasional berhasil');
+
+    // Akuntan membuat pengajuan sendiri (tidak boleh muncul/diedit asisten)
+    const pAkn = call(e27, 'POST', { action: 'createPengajuan', token: tAkn, tanggal: '2026-10-15', items: [
+      { jenis: 'Operasional', kategori: 'Listrik', uraian: 'Listrik Akuntan', nominal: 90000, rencana_riil: 90000, penerima_id: 'pn1', nota_url: 'https://drive.google.com/akn-ops' }
+    ] });
+    ok(pAkn.ok, 'Akuntan membuat pengajuan sendiri berhasil');
+
+    // Asisten melihat kedua pengajuan Super Admin, tapi TIDAK melihat pengajuan Akuntan
+    let r = call(e27, 'POST', { action: 'getPengajuan', token: tAst });
+    const idsAst = r.ok ? r.data.pengajuan.map(h => h.id) : [];
+    ok(idsAst.includes(pAdmBB.data.id) && idsAst.includes(pAdmOps.data.id) && !idsAst.includes(pAkn.data.id),
+      'Asisten melihat pengajuan Super Admin (BB & Ops) dan tidak melihat pengajuan Akuntan');
+
+    // Asisten bisa edit baris Bahan Baku buatan Super Admin
+    r = call(e27, 'POST', { action: 'updatePengajuanItem', token: tAst, item_id: pAdmBB.data.id + '-1',
+      jenis: 'Bahan Baku', kategori: 'Semua Kategori', uraian: 'Beras Diedit Asisten', nominal: 120000, penerima_id: 'pn1',
+      nota_url: 'https://drive.google.com/adm-bb', rincian: [{ nama: 'Beras', kategori: 'Karbohidrat', volume: 12, satuan: 'kg', harga: 10000 }] });
+    ok(r.ok, 'Asisten dapat mengedit pengajuan Bahan Baku buatan Super Admin: ' + (r.error || ''));
+
+    // Asisten bisa edit baris Operasional buatan Super Admin
+    r = call(e27, 'POST', { action: 'updatePengajuanItem', token: tAst, item_id: pAdmOps.data.id + '-1',
+      jenis: 'Operasional', kategori: 'Gas', uraian: 'Gas Diedit Asisten', nominal: 85000, rencana_riil: 85000, penerima_id: 'pn1',
+      nota_url: 'https://drive.google.com/adm-ops' });
+    ok(r.ok, 'Asisten dapat mengedit pengajuan Operasional buatan Super Admin: ' + (r.error || ''));
+
+    // Asisten tetap TIDAK boleh mengedit pengajuan Akuntan
+    r = call(e27, 'POST', { action: 'updatePengajuanItem', token: tAst, item_id: pAkn.data.id + '-1',
+      jenis: 'Operasional', kategori: 'Listrik', uraian: 'Hack', nominal: 10000, rencana_riil: 10000, penerima_id: 'pn1',
+      nota_url: 'https://drive.google.com/akn-ops' });
+    ok(!r.ok && /Bukan pengajuan Anda/.test(r.error), 'Asisten tetap ditolak saat mencoba mengedit pengajuan Akuntan');
+
+    // Asisten bisa membatalkan baris buatan Super Admin
+    r = call(e27, 'POST', { action: 'batalkanItem', token: tAst, item_id: pAdmOps.data.id + '-1', alasan: 'diganti supplier' });
+    ok(r.ok, 'Asisten dapat membatalkan baris buatan Super Admin: ' + (r.error || ''));
+  }
+
   console.log(fails ? '\n' + fails + ' GAGAL' : '\nSEMUA LULUS');
   process.exit(fails ? 1 : 0);
 })();

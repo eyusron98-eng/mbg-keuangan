@@ -1565,9 +1565,9 @@ function getPengajuan(p) {
     allItems.forEach(i => { if (i.status === 'DIAJUKAN' || (me.role === 'admin' && i.status === 'MENUNGGU_ADMIN')) adaMenunggu[i.pengajuan_id] = 1; });
     heads = heads.filter(h => adaMenunggu[h.id]);
   }
-  if (me.role === 'asisten') heads = heads.filter(h => h.created_by === me.id);
   const userNames = {}, userRoles = {};
   getSheet(SHEETS.USERS).getDataRange().getValues().slice(1).forEach(u => { userNames[u[0]] = u[3]; userRoles[u[0]] = String(u[4]).toLowerCase(); });
+  if (me.role === 'asisten') heads = heads.filter(h => h.created_by === me.id || userRoles[h.created_by] === 'admin');
 
   let out = heads.map(function(h) {
     const items = allItems.filter(i => i.pengajuan_id === h.id).sort((a, b) => a.urut - b.urut);
@@ -1607,12 +1607,21 @@ function findItem(itemId) {
   return readAllItems().find(i => i.id === itemId);
 }
 
-// Siapa boleh mengubah baris: akuntan dapur tsb, atau asisten pembuat pengajuan (hanya sebelum disetujui)
+function isPengajuanMilikAdmin(createdBy) {
+  if (!createdBy) return false;
+  const users = getSheet(SHEETS.USERS).getDataRange().getValues();
+  for (let i = 1; i < users.length; i++) {
+    if (users[i][0] === createdBy) return String(users[i][4] || '').toLowerCase() === 'admin';
+  }
+  return false;
+}
+
+// Siapa boleh mengubah baris: akuntan dapur tsb, atau asisten (pengajuan miliknya sendiri / buatan super admin, sebelum disetujui)
 function canModifyItem(me, it) {
   if (me.role === 'akuntan') return it.dapur === me.dapur ? null : 'Bukan dapur Anda';
   if (me.role === 'asisten') {
     const head = readAllPengajuan().find(h => h.id === it.pengajuan_id);
-    if (!head || head.created_by !== me.id) return 'Bukan pengajuan Anda';
+    if (!head || (head.created_by !== me.id && !isPengajuanMilikAdmin(head.created_by))) return 'Bukan pengajuan Anda';
     if (it.status !== 'MENUNGGU_ADMIN' && it.status !== 'DIAJUKAN' && it.status !== 'REVISI') return 'Baris yang sudah disetujui hanya bisa diubah akuntan';
     return null;
   }
@@ -1628,7 +1637,9 @@ function updatePengajuanItem(p) {
     const deny = canModifyItem(me, it);
     if (deny) return { ok: false, error: deny };
     if (it.status !== 'MENUNGGU_ADMIN' && it.status !== 'DIAJUKAN' && it.status !== 'REVISI') return { ok: false, error: 'Baris berstatus ' + it.status + ', tidak bisa diedit' };
-    if (me.role === 'asisten' && p.jenis !== 'Bahan Baku') return { ok: false, error: 'Asisten hanya dapat mengajukan Bahan Baku' };
+    const headEdit = me.role === 'asisten' ? readAllPengajuan().find(h => h.id === it.pengajuan_id) : null;
+    const dariAdmin = !!(headEdit && isPengajuanMilikAdmin(headEdit.created_by));
+    if (me.role === 'asisten' && !dariAdmin && p.jenis !== 'Bahan Baku') return { ok: false, error: 'Asisten hanya dapat mengajukan Bahan Baku' };
     const penerimaMap = {};
     readPenerima().forEach(r => { penerimaMap[r.id] = r; });
     const input = { jenis: p.jenis, kategori: p.kategori, uraian: p.uraian, nominal: p.nominal, penerima_id: p.penerima_id };
@@ -1686,7 +1697,8 @@ function batalkanItem(p) {
     if (['MENUNGGU_ADMIN', 'DIAJUKAN', 'REVISI', 'DISETUJUI'].indexOf(it.status) < 0) return { ok: false, error: 'Baris berstatus ' + it.status + ', tidak bisa dibatalkan' };
     const sh = getSheet(SHEETS.PITEM);
     const alasan = String(p.alasan || '').trim();
-    sh.getRange(it._row, 15, 1, 2).setValues([['DIBATALKAN', 'Dibatalkan akuntan' + (alasan ? ': ' + alasan : '') + (it.catatan ? ' | ' + it.catatan : '')]]);
+    const olehBatal = me.role === 'asisten' ? 'Dibatalkan asisten' : 'Dibatalkan akuntan';
+    sh.getRange(it._row, 15, 1, 2).setValues([['DIBATALKAN', olehBatal + (alasan ? ': ' + alasan : '') + (it.catatan ? ' | ' + it.catatan : '')]]);
     sh.getRange(it._row, 22).setValue(new Date());
     refreshHeaderStatus(it.pengajuan_id);
     logActivity(me.id, 'batalkanItem', it.id + ' (' + it.status + ')');
