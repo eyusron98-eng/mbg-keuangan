@@ -3173,6 +3173,7 @@ function AslapJourneyPage({ session, scope, toast }) {
   const [step1Done, setStep1Done] = useState(false);
   const [step2Done, setStep2Done] = useState(false);
   const [selesai, setSelesai] = useState(false);
+  const [lihatRekap, setLihatRekap] = useState(false);
 
   // State Langkah 1 (POP & Produksi)
   const [d, setD] = useState(null);
@@ -3189,7 +3190,7 @@ function AslapJourneyPage({ session, scope, toast }) {
 
   function loadAll() {
     if (!dapurId) return;
-    setD(null); setKwData(null); setBukaSub({}); setSelesai(false);
+    setD(null); setKwData(null); setBukaSub({}); setSelesai(false); setLihatRekap(false);
     Promise.all([
       api('getHarianLPDH', { dapur: dapurId, tanggal: tanggal }),
       api('getKwitansiHarian', { dapur: dapurId, tanggal: tanggal }),
@@ -3237,12 +3238,14 @@ function AslapJourneyPage({ session, scope, toast }) {
         });
         setBukaSub(subInit);
         setKwRows(rowsInit);
-        setStep2Done(popSudah && sudahTerbit);
-        setSelesai(popSudah && sudahTerbit);
-        setStep(1);
+        const semuaSelesai = popSudah && sudahTerbit;
+        setStep2Done(semuaSelesai);
+        setSelesai(semuaSelesai);
+        setLihatRekap(semuaSelesai);
+        setStep(popSudah && !sudahTerbit ? 2 : 1);
       } else {
         if (!rk.ok) toast(rk.error, 'error');
-        setKwData({ rows: [] }); setKwRows([]); setStep2Done(false); setStep(1);
+        setKwData({ rows: [] }); setKwRows([]); setStep2Done(false); setLihatRekap(false); setStep(1);
       }
     });
   }
@@ -3326,6 +3329,8 @@ function AslapJourneyPage({ session, scope, toast }) {
       setKwData(function(prev) { return Object.assign({}, prev, { sudahTerbit: dr.sudahTerbit || dipilih.length, totalPilih: dr.totalPilih || prev.totalPilih, tercatat: dr.tercatat || prev.tercatat, anggaran: dr.anggaran || prev.anggaran }); });
       setStep2Done(true);
       setSelesai(true);
+      setLihatRekap(true);
+      try { window.scrollTo({ top: 0, behavior: 'smooth' }); } catch (e) {}
       const adaAnggaran = JENIS_DP.some(function(j) { return ((dr.anggaran || dr.tercatat || {})[j[0]] || 0) > 0; });
       const selisihAda = JENIS_DP.some(function(j) {
         const totJ = (dr.totalPilih || {})[j[0]] || 0, angJ = (dr.anggaran || dr.tercatat || {})[j[0]] || 0;
@@ -3423,6 +3428,16 @@ function AslapJourneyPage({ session, scope, toast }) {
   }
 
   const nDoneAslap = (step1Done ? 1 : 0) + (step2Done ? 1 : 0) + (selesai ? 1 : 0);
+  const picRows = kwRows.filter(function(x) { return x.jenis === 'PIC_SEKOLAH'; });
+  const kaderRows = kwRows.filter(function(x) { return x.jenis === 'KADER'; });
+  const nPicHadir = picRows.filter(function(x) { return x.pilih; }).length;
+  const nKaderHadir = kaderRows.filter(function(x) { return x.pilih; }).length;
+  const nRelHadir = relawanRows.filter(function(x) { return x.pilih; }).length;
+  const totalHadir = kwRows.filter(function(x) { return x.pilih; }).length;
+  const takDikirimList = d.sekolah.filter(function(x) { return x.dikirim === false; });
+  const penggantiList = kwRows.filter(function(x) { return x.pilih && !!String(x.pengganti || '').trim(); });
+  function bukaEditTahap(no) { setLihatRekap(false); setStep(no); }
+
   return <div className="space-y-3">
     <JourneyHeader
       peranLabel="Journey Aslap · 3 Tahap"
@@ -3436,27 +3451,100 @@ function AslapJourneyPage({ session, scope, toast }) {
 
     <Card>
       <JourneyStepper
-        activeStep={step}
-        onSelect={setStep}
+        activeStep={lihatRekap ? 0 : step}
+        onSelect={bukaEditTahap}
         steps={[
           { no: 1, label: '1. POP & PM', sub: fmtNoRp(totProd) + ' PM diproduksi', unlocked: true, done: step1Done, statusText: step1Done ? 'Tersimpan' : 'Isi dulu' },
-          { no: 2, label: '2. PIC & Posyandu', sub: picKaderRows.filter(function(x) { return x.pilih; }).length + '/' + picKaderRows.length + ' hadir', unlocked: step1Done, done: step2Done, statusText: step2Done ? 'Selesai' : (step1Done ? 'Siap' : 'Terkunci') },
-          { no: 3, label: '3. Relawan', sub: relawanRows.filter(function(x) { return x.pilih; }).length + '/' + relawanRows.length + ' hadir', unlocked: step1Done && step2Done, done: selesai, statusText: selesai ? 'Tersimpan' : ((step1Done && step2Done) ? 'Siap' : 'Terkunci') },
+          { no: 2, label: '2. PIC & Posyandu', sub: (nPicHadir + nKaderHadir) + '/' + picKaderRows.length + ' hadir', unlocked: step1Done, done: step2Done, statusText: step2Done ? 'Selesai' : (step1Done ? 'Siap' : 'Terkunci') },
+          { no: 3, label: '3. Relawan', sub: nRelHadir + '/' + relawanRows.length + ' hadir', unlocked: step1Done && step2Done, done: selesai, statusText: selesai ? 'Tersimpan' : ((step1Done && step2Done) ? 'Siap' : 'Terkunci') },
         ]}
       />
       {!step1Done && <div className="text-[11px] mt-2" style={{ color: '#9A6A0B' }}>Selesaikan & simpan <b>Langkah 1 (POP & PM)</b> dulu untuk membuka Langkah 2 & 3.</div>}
       {adaPengganti && !kwData.adaParafAslap && <div className="text-xs rounded-lg p-2 mt-2" style={{ background: '#FBF3E2', color: '#7A5408' }}>⚠️ Ada pengganti hari ini, tetapi <b>Paraf Aslap</b> belum disimpan. Simpan paraf Anda di menu <b>Profil & Paraf</b>.</div>}
     </Card>
 
-    {selesai && <Card style={{ background: '#E8F1EC', borderColor: '#B9D7C6' }}>
-      <div className="text-sm font-bold mb-1" style={{ color: COLORS.green }}>✓ Tugas Harian Aslap Tanggal {fmtDDMMYYYY(tanggal)} Tersimpan</div>
-      <div className="text-xs space-y-0.5" style={{ color: COLORS.ink }}>
-        <div>• <b>POP & Produksi:</b> {dikirimList.length}/{d.sekolah.length} sekolah/posyandu dikirim · Total diproduksi <b>{fmtNoRp(totProd)} PM</b>{pmRencana != null ? (selisihPM === 0 ? ' (✓ cocok dengan Rencana Ops)' : ' (⚠️ selisih ' + (selisihPM > 0 ? '+' : '') + fmtNoRp(selisihPM) + ' dari Rencana Ops ' + fmtNoRp(pmRencana) + ')') : ''}</div>
-        <div>• <b>Kehadiran:</b> {kwRows.filter(function(x) { return x.pilih; }).length} orang tercatat (PIC Sekolah, Posyandu & Relawan). Anda masih bisa klik Langkah 1/2/3 di atas jika perlu mengubah.</div>
+    {selesai && lihatRekap && <div className="space-y-3">
+      <Card style={{ background: 'linear-gradient(135deg, #E8F4ED 0%, #F4FAF6 100%)', borderColor: '#B5D9C4' }}>
+        <div className="flex flex-wrap items-start justify-between gap-2">
+          <div>
+            <div className="inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-[11px] font-bold mb-1.5" style={{ background: COLORS.green, color: '#fff' }}>
+              ✓ 3/3 Tahap Selesai
+            </div>
+            <div className="text-base font-extrabold" style={{ color: COLORS.green }}>Rekap Penyelesaian Tugas Harian Aslap</div>
+            <div className="text-xs mt-0.5" style={{ color: COLORS.ink }}>
+              Tanggal <b>{fmtDDMMYYYY(tanggal)}</b> · Semua data lapangan sudah tersimpan &amp; tersinkron otomatis ke Akuntan dan LPDH PIC.
+            </div>
+          </div>
+          <div className="rounded-xl px-3 py-2 text-right" style={{ background: '#fff', border: '1px solid #C8E2D2' }}>
+            <div className="text-[10.5px] font-semibold uppercase" style={{ color: COLORS.muted }}>Total Hadir</div>
+            <div className="text-lg font-extrabold num" style={{ color: COLORS.green }}>{totalHadir} <span className="text-xs font-semibold">orang</span></div>
+          </div>
+        </div>
+      </Card>
+
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+        <Card className="flex flex-col justify-between gap-3">
+          <div>
+            <div className="flex items-center justify-between gap-2 mb-1.5">
+              <span className="text-[11px] font-bold uppercase tracking-wide" style={{ color: COLORS.muted }}>1. POP &amp; Produksi</span>
+              <MiniBadge bg="#E8F1EC" fg={COLORS.green}>Tersimpan</MiniBadge>
+            </div>
+            <div className="text-2xl font-extrabold num" style={{ color: COLORS.ink }}>{fmtNoRp(totProd)} <span className="text-xs font-semibold" style={{ color: COLORS.muted }}>PM diproduksi</span></div>
+            <div className="text-xs mt-2 space-y-1" style={{ color: COLORS.ink }}>
+              <div>• Dikirim: <b>{fmtNoRp(totPM)} PM</b> ({dikirimList.length}/{d.sekolah.length} sekolah/posyandu)</div>
+              {takDikirimList.length > 0 && <div style={{ color: '#9A6A0B' }}>• Tidak dikirim ({takDikirimList.length}): {takDikirimList.slice(0, 3).map(function(x) { return x.nama; }).join(', ')}{takDikirimList.length > 3 ? ', …' : ''}</div>}
+              {pmRencana != null && <div style={{ color: selisihPM === 0 ? COLORS.green : '#9A6A0B' }}>• vs Rencana Ops: {selisihPM === 0 ? '✓ Cocok (' + fmtNoRp(pmRencana) + ')' : '⚠️ Selisih ' + (selisihPM > 0 ? '+' : '') + fmtNoRp(selisihPM)}</div>}
+            </div>
+          </div>
+          <Btn size="sm" kind="ghost" full onClick={function() { bukaEditTahap(1); }}>{I.edit} Edit POP &amp; PM</Btn>
+        </Card>
+
+        <Card className="flex flex-col justify-between gap-3">
+          <div>
+            <div className="flex items-center justify-between gap-2 mb-1.5">
+              <span className="text-[11px] font-bold uppercase tracking-wide" style={{ color: COLORS.muted }}>2. PIC &amp; Posyandu</span>
+              <MiniBadge bg="#E8F1EC" fg={COLORS.green}>Tersimpan</MiniBadge>
+            </div>
+            <div className="text-2xl font-extrabold num" style={{ color: COLORS.ink }}>{nPicHadir + nKaderHadir}<span className="text-sm font-semibold" style={{ color: COLORS.muted }}>/{picKaderRows.length} hadir</span></div>
+            <div className="text-xs mt-2 space-y-1" style={{ color: COLORS.ink }}>
+              <div>• PIC Sekolah: <b>{nPicHadir}/{picRows.length}</b> orang</div>
+              <div>• Kader Posyandu: <b>{nKaderHadir}/{kaderRows.length}</b> orang</div>
+              {picKaderRows.length - (nPicHadir + nKaderHadir) > 0 && <div style={{ color: COLORS.muted }}>• Tidak hadir / libur: {picKaderRows.length - (nPicHadir + nKaderHadir)} orang</div>}
+            </div>
+          </div>
+          <Btn size="sm" kind="ghost" full onClick={function() { bukaEditTahap(2); }}>{I.edit} Edit PIC &amp; Posyandu</Btn>
+        </Card>
+
+        <Card className="flex flex-col justify-between gap-3">
+          <div>
+            <div className="flex items-center justify-between gap-2 mb-1.5">
+              <span className="text-[11px] font-bold uppercase tracking-wide" style={{ color: COLORS.muted }}>3. Kehadiran Relawan</span>
+              <MiniBadge bg="#E8F1EC" fg={COLORS.green}>Sinkron LPDH</MiniBadge>
+            </div>
+            <div className="text-2xl font-extrabold num" style={{ color: COLORS.ink }}>{nRelHadir}<span className="text-sm font-semibold" style={{ color: COLORS.muted }}>/{relawanRows.length} hadir</span></div>
+            <div className="text-xs mt-2 space-y-1" style={{ color: COLORS.ink }}>
+              {relawanRows.length - nRelHadir > 0 && <div style={{ color: COLORS.muted }}>• Tidak hadir: {relawanRows.length - nRelHadir} orang</div>}
+              {penggantiList.length > 0
+                ? <div style={{ color: '#6B3FA0' }}>• Pengganti ({penggantiList.length}): {penggantiList.slice(0, 3).map(function(x) { return x.pengganti + ' → ' + x.nama; }).join(', ')}{penggantiList.length > 3 ? ', …' : ''}</div>
+                : <div style={{ color: COLORS.muted }}>• Tanpa relawan pengganti hari ini</div>}
+              <div style={{ color: COLORS.green }}>• ✓ Otomatis masuk ke Lembar C1 LPDH PIC</div>
+            </div>
+          </div>
+          <Btn size="sm" kind="ghost" full onClick={function() { bukaEditTahap(3); }}>{I.edit} Edit Relawan</Btn>
+        </Card>
+      </div>
+    </div>}
+
+    {selesai && !lihatRekap && <Card style={{ background: '#E8F1EC', borderColor: '#B9D7C6' }}>
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="text-xs" style={{ color: COLORS.green }}>
+          <b>✓ Mode Edit · Tugas {fmtDDMMYYYY(tanggal)} sudah tersimpan.</b> Simpan setelah selesai mengubah.
+        </div>
+        <Btn size="sm" kind="ghost" onClick={function() { setLihatRekap(true); }}>← Kembali ke Rekap</Btn>
       </div>
     </Card>}
 
-    {step === 1 && <>
+    {!lihatRekap && step === 1 && <>
       {sumberPop.indexOf('disalin') === 0 && <Card><div className="text-xs" style={{ color: COLORS.blue }}>Daftar sekolah {sumberPop}. Centang sekolah/posyandu yang dikirim hari ini (jangan hapus yang libur/tidak dikirim agar basis data tetap ada).</div></Card>}
       {pmRencana != null && <Card style={{ background: selisihPM === 0 ? '#E8F1EC' : '#FBF3E2' }}>
         <div className="text-xs font-medium" style={{ color: selisihPM === 0 ? COLORS.green : '#7A5408' }}>
@@ -3530,7 +3618,7 @@ function AslapJourneyPage({ session, scope, toast }) {
       </Card>
     </>}
 
-    {step === 2 && <>
+    {!lihatRekap && step === 2 && <>
       {!picKaderRows.length && <Card><div className="text-sm text-center" style={{ color: COLORS.muted }}>Belum ada data PIC Sekolah / Kader Posyandu di dapur ini.</div></Card>}
       {renderKelompokKw(JENIS_DP.filter(function(j) { return j[0] !== 'RELAWAN'; }))}
       <Card>
@@ -3546,7 +3634,7 @@ function AslapJourneyPage({ session, scope, toast }) {
       </Card>
     </>}
 
-    {step === 3 && <>
+    {!lihatRekap && step === 3 && <>
       {!relawanRows.length && <Card><div className="text-sm text-center" style={{ color: COLORS.muted }}>Belum ada data Relawan di dapur ini.</div></Card>}
       {renderKelompokKw(JENIS_DP.filter(function(j) { return j[0] === 'RELAWAN'; }))}
       <Card>
@@ -8502,7 +8590,12 @@ function App() {
   const aktifSebagai = isAdminAsli && actAs ? actAs : null;
   ACT_AS = aktifSebagai;
   const session = aktifSebagai ? Object.assign({}, authSession, { user: Object.assign({}, authSession.user, { role: aktifSebagai.role, dapur: aktifSebagai.dapur || '' }) }) : authSession;
-  const [view, setView] = useState(function() { const s0 = loadSession(); const r0 = s0 && s0.user && s0.user.role; return r0 === 'pic' ? 'tugas' : r0 === 'aslap' ? 'aslap' : 'dash'; });
+  function defaultViewForRole(r) { return r === 'pic' ? 'tugas' : r === 'aslap' ? 'aslap' : r === 'asisten' ? 'pengajuan' : 'dash'; }
+  const [view, setView] = useState(function() {
+    const s0 = loadSession(), a0 = loadActAs();
+    const r0 = s0 && s0.user ? (s0.user.role === 'admin' && a0 && a0.role ? a0.role : s0.user.role) : '';
+    return defaultViewForRole(r0);
+  });
   const [scope, setScope] = useState('ALL');
   const [dapurList, setDapurList] = useState([]);
   const [toastData, setToastData] = useState(null);
@@ -8510,7 +8603,7 @@ function App() {
 
   function toast(msg, type) { setToastData({ msg: msg, type: type || 'ok' }); }
   AUTH_TOKEN = authSession ? authSession.token : null;
-  function setActAs(v) { clearApiCache(); saveActAs(v); setActAsState(v); setView(v && v.role === 'pic' ? 'tugas' : v && v.role === 'aslap' ? 'aslap' : v && v.role === 'asisten' ? 'pengajuan' : 'dash'); setRefreshKey(function(k) { return k + 1; }); }
+  function setActAs(v) { clearApiCache(); saveActAs(v); setActAsState(v); setView(defaultViewForRole(v && v.role ? v.role : 'admin')); setRefreshKey(function(k) { return k + 1; }); }
   ON_SESSION_INVALID = function(msg) { clearApiCache(); clearSession(); setSession(null); toast(msg || 'Sesi berakhir, silakan masuk lagi', 'error'); };
 
   useEffect(function() {
@@ -8534,7 +8627,7 @@ function App() {
   }, [authSession, actAs]);
 
   if (!session) return (<>
-    <Login onLogin={function(s){ clearApiCache(); saveSession(s); setSession(s); const r0 = s.user && s.user.role; setView(r0 === 'pic' ? 'tugas' : r0 === 'aslap' ? 'aslap' : 'dash'); }} toast={toast} />
+    <Login onLogin={function(s){ clearApiCache(); saveSession(s); setSession(s); setView(defaultViewForRole(s.user && s.user.role)); }} toast={toast} />
     {toastData && <Toast msg={toastData.msg} type={toastData.type} onClose={function(){setToastData(null);}}/>}
   </>);
 
@@ -8613,12 +8706,13 @@ function App() {
     const items = navItems.filter(function(it) { return kat.views.indexOf(it[0]) >= 0; });
     return items.length ? Object.assign({}, kat, { items: items }) : null;
   }).filter(Boolean);
+  const safeView = (navItems.length && !navItems.some(function(n){ return n[0] === view; })) ? navItems[0][0] : view;
   const activeKat = kategoriGroups.find(function(kat) {
-    return kat.items.some(function(it) { return it[0] === view; });
+    return kat.items.some(function(it) { return it[0] === safeView; });
   }) || kategoriGroups[0] || null;
 
   const canPickScope = role === 'yayasan' || role === 'admin';
-  if (navItems.length && !navItems.some(function(n){ return n[0] === view; })) setTimeout(function(){ setView(navItems[0][0]); }, 0);
+  if (safeView !== view) setTimeout(function(){ setView(safeView); }, 0);
   const effScope = canPickScope ? scope : session.user.dapur;
   function logout() { clearApiCache(); saveActAs(null); setActAsState(null); clearSession(); setSession(null); }
 
@@ -8639,7 +8733,7 @@ function App() {
           </div>
         </div>
         <div className="flex items-center gap-2 shrink-0">
-          {canPickScope && (view==='dash'||view==='riwayat'||view==='laporan'||view==='lpdh'||view==='bukubesar'||view==='pengajuan'||view==='persetujuan'||view==='beritaacara'||view==='kwitansi'||view==='pop'||view==='tugas'||view==='alurakuntan') && (
+          {canPickScope && (safeView==='dash'||safeView==='riwayat'||safeView==='laporan'||safeView==='lpdh'||safeView==='bukubesar'||safeView==='pengajuan'||safeView==='persetujuan'||safeView==='beritaacara'||safeView==='kwitansi'||safeView==='pop'||safeView==='tugas'||safeView==='alurakuntan') && (
             <select value={scope} onChange={function(e){setScope(e.target.value);}}
               style={Object.assign({}, inputStyle, { width: 'auto', maxWidth: 130, padding: '6px 8px', fontSize: 12 })}>
               <option value="ALL">Semua dapur</option>
@@ -8670,7 +8764,7 @@ function App() {
                 const k = item[0], label = item[1], icon = item[2];
                 return <button key={k} onClick={function(){setView(k);}}
                   className="flex items-center gap-2.5 rounded-xl px-3 py-2 text-sm font-semibold text-left transition"
-                  style={{ background: view===k ? 'linear-gradient(135deg, #15663E 0%, #0E4429 100%)' : 'transparent', color: view===k ? '#fff' : COLORS.ink, boxShadow: view===k ? '0 4px 10px -3px rgba(21,102,62,0.35)' : 'none' }}>
+                  style={{ background: safeView===k ? 'linear-gradient(135deg, #15663E 0%, #0E4429 100%)' : 'transparent', color: safeView===k ? '#fff' : COLORS.ink, boxShadow: safeView===k ? '0 4px 10px -3px rgba(21,102,62,0.35)' : 'none' }}>
                   {icon} {label}
                 </button>;
               })}
@@ -8679,8 +8773,8 @@ function App() {
         </nav>
 
         <div className="flex-1 flex flex-col min-w-0">
-          {activeKat && (function() {
-            const isJourneyView = view === 'aslap' || view === 'tugas' || view === 'alurakuntan';
+          {activeKat && role !== 'aslap' && (function() {
+            const isJourneyView = safeView === 'aslap' || safeView === 'tugas' || safeView === 'alurakuntan';
             if (isJourneyView && kategoriGroups.length <= 1) return null;
             return <div className="no-print px-4 sm:px-6 pt-2.5 pb-0">
               <div className="rounded-2xl px-2.5 py-1.5 flex items-center gap-1.5 overflow-x-auto" style={{ background: 'rgba(255,255,255,0.72)', border: '1px solid rgba(23,42,31,0.07)' }}>
@@ -8694,7 +8788,7 @@ function App() {
                 })}
                 {activeKat.items.length > 1 && <span className="mx-1" style={{ color: COLORS.line }}>|</span>}
                 {activeKat.items.length > 1 && activeKat.items.map(function(item) {
-                  const k = item[0], label = SUB_LABEL_FITUR[k] || item[1], on = view === k;
+                  const k = item[0], label = SUB_LABEL_FITUR[k] || item[1], on = safeView === k;
                   return <button key={k} onClick={function() { setView(k); }}
                     className="inline-flex items-center gap-1 rounded-xl px-2.5 py-1 text-xs font-semibold whitespace-nowrap transition shrink-0"
                     style={{ background: on ? COLORS.green : 'transparent', color: on ? '#fff' : COLORS.ink }}>
@@ -8706,28 +8800,28 @@ function App() {
           })()}
 
           <main className="app-main flex-1 p-4 sm:p-6 md:!pb-6" style={{ paddingBottom: 'calc(env(safe-area-inset-bottom, 0px) + 88px)' }}>
-            {view === 'setup'   && <SetupPeriode session={session} toast={toast}/>}
-            {view === 'dash'    && <Dashboard key={'d'+refreshKey} session={session} scope={effScope} toast={toast} onGoSetup={function(){ setView('setup'); }}/>}
-            {view === 'pengajuan' && <PengajuanPage session={session} scope={effScope} dapurList={dapurList} toast={toast}/>}
-            {view === 'beritaacara' && <BeritaAcaraPage session={session} scope={effScope} dapurList={dapurList} toast={toast}/>}
-            {view === 'persetujuan' && <PersetujuanPage session={session} scope={effScope} dapurList={dapurList} toast={toast}/>}
-            {view === 'perubahan' && <PerubahanAdminPage session={session} dapurList={dapurList} toast={toast}/>}
-            {view === 'laporan' && <Laporan session={session} scope={effScope} toast={toast}/>}
-            {view === 'lpdh' && <LpdhPage session={session} scope={effScope} toast={toast}/>}
-            {view === 'rencana' && <RencanaOpsPage session={session} scope={effScope} toast={toast}/>}
-            {view === 'riwayat' && <Riwayat session={session} scope={effScope} toast={toast} refreshKey={refreshKey}/>}
-            {view === 'bukubesar' && <BukuBesar session={session} scope={effScope} toast={toast}/>}
-            {view === 'periode' && <PeriodeAdmin session={session} toast={toast}/>}
-            {view === 'realmassal' && <RealisasiMassalPage session={session} dapurList={dapurList} toast={toast}/>}
-            {view === 'aslap' && <AslapJourneyPage session={session} scope={effScope} toast={toast}/>}
-            {view === 'tugas' && <TugasHarianPage session={session} scope={effScope} toast={toast} onBuka={setView}/>}
-            {view === 'alurakuntan' && <AkuntanJourneyPage session={session} scope={effScope} toast={toast} onBuka={setView}/>}
-            {view === 'kwitansi' && <KwitansiPage session={session} scope={effScope} toast={toast}/>}
-            {view === 'pop' && <PopLapanganPage session={session} scope={effScope} toast={toast}/>}
-            {view === 'penerima' && <DataPenerimaPage session={session} scope={effScope} toast={toast}/>}
-            {view === 'profil'  && <Profil session={session} toast={toast} onUpdated={onProfileUpdated}/>}
-            {view === 'users'   && <Pengguna session={session} toast={toast}/>}
-            {view === 'dapur'   && <DapurPage session={session} toast={toast}/>}
+            {safeView === 'setup'   && <SetupPeriode session={session} toast={toast}/>}
+            {safeView === 'dash' && role !== 'aslap' && role !== 'asisten' && <Dashboard key={'d'+refreshKey} session={session} scope={effScope} toast={toast} onGoSetup={function(){ setView('setup'); }}/>}
+            {safeView === 'pengajuan' && <PengajuanPage session={session} scope={effScope} dapurList={dapurList} toast={toast}/>}
+            {safeView === 'beritaacara' && <BeritaAcaraPage session={session} scope={effScope} dapurList={dapurList} toast={toast}/>}
+            {safeView === 'persetujuan' && <PersetujuanPage session={session} scope={effScope} dapurList={dapurList} toast={toast}/>}
+            {safeView === 'perubahan' && <PerubahanAdminPage session={session} dapurList={dapurList} toast={toast}/>}
+            {safeView === 'laporan' && <Laporan session={session} scope={effScope} toast={toast}/>}
+            {safeView === 'lpdh' && <LpdhPage session={session} scope={effScope} toast={toast}/>}
+            {safeView === 'rencana' && <RencanaOpsPage session={session} scope={effScope} toast={toast}/>}
+            {safeView === 'riwayat' && <Riwayat session={session} scope={effScope} toast={toast} refreshKey={refreshKey}/>}
+            {safeView === 'bukubesar' && <BukuBesar session={session} scope={effScope} toast={toast}/>}
+            {safeView === 'periode' && <PeriodeAdmin session={session} toast={toast}/>}
+            {safeView === 'realmassal' && <RealisasiMassalPage session={session} dapurList={dapurList} toast={toast}/>}
+            {safeView === 'aslap' && <AslapJourneyPage session={session} scope={effScope} toast={toast}/>}
+            {safeView === 'tugas' && <TugasHarianPage session={session} scope={effScope} toast={toast} onBuka={setView}/>}
+            {safeView === 'alurakuntan' && <AkuntanJourneyPage session={session} scope={effScope} toast={toast} onBuka={setView}/>}
+            {safeView === 'kwitansi' && <KwitansiPage session={session} scope={effScope} toast={toast}/>}
+            {safeView === 'pop' && <PopLapanganPage session={session} scope={effScope} toast={toast}/>}
+            {safeView === 'penerima' && <DataPenerimaPage session={session} scope={effScope} toast={toast}/>}
+            {safeView === 'profil'  && <Profil session={session} toast={toast} onUpdated={onProfileUpdated}/>}
+            {safeView === 'users'   && <Pengguna session={session} toast={toast}/>}
+            {safeView === 'dapur'   && <DapurPage session={session} toast={toast}/>}
           </main>
         </div>
       </div>
@@ -8739,7 +8833,7 @@ function App() {
             return <div key={kat.id} className="flex items-stretch" style={{ flex: navItems.length > 5 ? '0 0 auto' : (kat.items.length + ' 1 0'), borderLeft: gi > 0 ? '1px solid ' + COLORS.line : 'none' }}>
               {kat.items.map(function(item){
                 const k = item[0], label = item[1], icon = item[2];
-                const active = view === k;
+                const active = safeView === k;
                 return <button key={k} onClick={function(){setView(k);}}
                   className="flex flex-col items-center justify-center gap-0.5 py-2 px-1.5 shrink-0"
                   style={{ color: active?COLORS.green:COLORS.muted, flex: navItems.length > 5 ? '0 0 auto' : '1 1 0',

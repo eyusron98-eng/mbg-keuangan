@@ -1583,6 +1583,13 @@ async function isiBahanBaku(page, uraian, volume, harga) {
     await page.fill('[aria-label="Pengganti Relawan A"]', 'AB');
     await page.click('button:has-text("Simpan Semua Kehadiran")');
     await page.waitForSelector('text=Semua kehadiran tersimpan');
+    await page.waitForSelector('text=Rekap Penyelesaian Tugas Harian Aslap');
+    await page.waitForSelector('text=AB → Relawan A');
+    assert(!srv.log.urls.some(u => u.includes('action=getDashboard')), 'Aslap tidak boleh memanggil getDashboard');
+    assert((await page.locator('nav >> text=Dashboard').count()) === 0, 'Aslap tidak boleh punya menu Dashboard');
+    // Masih bisa diedit lagi lewat tombol Edit di rekap
+    await page.click('button:has-text("Edit Relawan")');
+    await page.waitForSelector('button:has-text("Simpan Perubahan Kehadiran")');
     const popSent = srv.log.posts.find(x => x.action === 'saveHarianLPDH');
     assert(popSent && popSent.params.data.sekolah.length === 3 && popSent.params.data.sekolah[0].dikirim === false && popSent.params.data.produksi.total === 110,
       'saveHarianLPDH salah: ' + JSON.stringify(popSent && popSent.params.data));
