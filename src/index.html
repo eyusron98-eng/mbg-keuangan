@@ -3229,7 +3229,7 @@ function AslapJourneyPage({ session, scope, toast }) {
             const dikirimPop = !!(match && match.dikirim !== false && totSk > 0);
             if (!dikirimPop) {
               if (!sudahTerbit) pilih = false;
-            } else {
+            } else if (!sudahTerbit || !pmVal) {
               pmVal = totSk;
             }
           }
@@ -3326,11 +3326,12 @@ function AslapJourneyPage({ session, scope, toast }) {
       setKwData(function(prev) { return Object.assign({}, prev, { sudahTerbit: dr.sudahTerbit || dipilih.length, totalPilih: dr.totalPilih || prev.totalPilih, tercatat: dr.tercatat || prev.tercatat, anggaran: dr.anggaran || prev.anggaran }); });
       setStep2Done(true);
       setSelesai(true);
+      const adaAnggaran = JENIS_DP.some(function(j) { return ((dr.anggaran || dr.tercatat || {})[j[0]] || 0) > 0; });
       const selisihAda = JENIS_DP.some(function(j) {
         const totJ = (dr.totalPilih || {})[j[0]] || 0, angJ = (dr.anggaran || dr.tercatat || {})[j[0]] || 0;
-        return (totJ > 0 || angJ > 0) && totJ !== angJ;
+        return angJ > 0 && totJ !== angJ;
       });
-      toast('Semua kehadiran tersimpan (' + dipilih.length + ' orang).' + (selisihAda ? ' Ada selisih dengan anggaran Akuntan — cek ringkasan.' : ' Semua cocok!'), selisihAda ? 'error' : undefined);
+      toast('Semua kehadiran tersimpan (' + dipilih.length + ' orang) & tetap bisa diedit kapan saja.' + (selisihAda ? ' Catatan: ada selisih dengan anggaran Akuntan.' : (adaAnggaran ? ' Cocok dengan anggaran Akuntan.' : '')));
     } catch (e) { toast('Gagal menyimpan kehadiran: ' + e.message, 'error'); }
     finally { setSavingKw(false); }
   }
@@ -3347,15 +3348,18 @@ function AslapJourneyPage({ session, scope, toast }) {
       const nHadir = g.filter(function(x) { return x.pilih; }).length;
       const tot = (kwData.totalPilih || {})[j[0]] || 0;
       const ang = (kwData.anggaran || kwData.tercatat || {})[j[0]] || 0;
-      const beda = (ang > 0 || tot > 0) && ang !== tot;
+      const adaAng = ang > 0;
+      const beda = adaAng && ang !== tot;
       const rekTidakCeklis = j[0] !== 'RELAWAN' && d.sekolah.length > 0
         ? g.filter(function(x) { return !statusPopPenerima(x, d.sekolah).dikirim; })
         : [];
       const masihTerceklis = rekTidakCeklis.filter(function(x) { return x.pilih; });
       return <Card key={j[0]} pad={false} className="mb-3">
         <div className="px-4 pt-3 text-[11px]" style={{ color: beda ? '#9A6A0B' : COLORS.green }}>
-          Hadir <b>{nHadir}/{g.length}</b> · Total tersimpan <b>{fmt(tot)}</b> · Anggaran Akuntan <b>{fmt(ang)}</b>
-          {beda ? ' — ⚠️ selisih ' + fmt(tot - ang) + ' (koordinasikan dengan Akuntan)' : (ang > 0 ? ' · ✓ cocok' : '')}
+          Hadir <b>{nHadir}/{g.length}</b> · Total tersimpan <b>{fmt(tot)}</b>
+          {adaAng
+            ? <> · Anggaran Akuntan <b>{fmt(ang)}</b>{beda ? ' — ⚠️ selisih ' + fmt(tot - ang) + ' (data tetap tersimpan, koordinasikan dengan Akuntan)' : ' · ✓ cocok'}</>
+            : ' · Menunggu pengajuan Akuntan'}
         </div>
         {rekTidakCeklis.length > 0 && <div className="mx-4 mt-2 rounded-xl p-2.5 text-xs" style={{ background: '#FBF3E2', border: '1px solid #E6CF9E', color: '#7A5408' }}>
           <div className="flex flex-wrap items-center justify-between gap-2">
@@ -3534,8 +3538,9 @@ function AslapJourneyPage({ session, scope, toast }) {
           <span>PIC Sekolah & Posyandu hadir</span>
           <b>{picKaderRows.filter(function(x) { return x.pilih; }).length} / {picKaderRows.length} orang</b>
         </div>
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2">
           <Btn kind="ghost" onClick={function() { setStep(1); }}>← Kembali ke POP</Btn>
+          {selesai && <Btn kind="ghost" disabled={savingKw} onClick={simpanSemuaKehadiran}>{savingKw ? I.spinner : I.check} Simpan Perubahan</Btn>}
           <Btn full onClick={lanjutStep3}>Lanjut ke Kehadiran Relawan →</Btn>
         </div>
       </Card>
@@ -3545,14 +3550,17 @@ function AslapJourneyPage({ session, scope, toast }) {
       {!relawanRows.length && <Card><div className="text-sm text-center" style={{ color: COLORS.muted }}>Belum ada data Relawan di dapur ini.</div></Card>}
       {renderKelompokKw(JENIS_DP.filter(function(j) { return j[0] === 'RELAWAN'; }))}
       <Card>
+        {selesai && <div className="rounded-xl p-2.5 mb-3 text-xs" style={{ background: '#E8F1EC', border: '1px solid #B9D7C6', color: COLORS.green }}>
+          <b>✓ Tersimpan ({kwData.sudahTerbit || kwRows.filter(function(x) { return x.pilih; }).length} orang)</b> untuk tanggal {fmtDDMMYYYY(tanggal)}. Data tetap aman dan bisa diedit kapan saja — ubah ceklis/pengganti lalu klik <b>Simpan Perubahan</b>.
+        </div>}
         <div className="flex justify-between text-sm mb-2" style={{ color: COLORS.ink }}>
           <span>Relawan hadir: <b>{relawanRows.filter(function(x) { return x.pilih; }).length}/{relawanRows.length}</b></span>
           <span>Total semua: <b>{kwRows.filter(function(x) { return x.pilih; }).length} orang</b></span>
         </div>
-        <div className="text-[11px] mb-3" style={{ color: COLORS.muted }}>Total nominal kehadiran vs Anggaran Akuntan diperbarui otomatis saat disimpan.</div>
+        <div className="text-[11px] mb-3" style={{ color: COLORS.muted }}>Kehadiran langsung tersimpan & tersinkron ke LPDH PIC. Masih bisa diedit kapan saja.</div>
         <div className="flex gap-2">
           <Btn kind="ghost" onClick={function() { setStep(2); }}>← Kembali ke PIC</Btn>
-          <Btn full disabled={savingKw} onClick={simpanSemuaKehadiran}>{savingKw ? I.spinner : I.check} Simpan Semua Kehadiran (Selesai)</Btn>
+          <Btn full disabled={savingKw} onClick={simpanSemuaKehadiran}>{savingKw ? I.spinner : I.check} {selesai ? 'Simpan Perubahan Kehadiran' : 'Simpan Semua Kehadiran (Selesai)'}</Btn>
         </div>
       </Card>
     </>}
@@ -6654,9 +6662,9 @@ function KwitansiPage({ session, scope, toast }) {
       const d = r.data || {};
       const selisihAda = JENIS_DP.some(function(j) {
         const totJ = (d.totalPilih || {})[j[0]] || 0, angJ = (d.anggaran || d.tercatat || {})[j[0]] || 0;
-        return (totJ > 0 || angJ > 0) && totJ !== angJ;
+        return angJ > 0 && totJ !== angJ;
       });
-      toast('Kehadiran tersimpan (' + dipilih.length + ' orang). PDF kwitansi otomatis dibuat & diunggah ke Drive saat LPDH diunduh.' + (selisihAda ? ' Ada selisih dengan anggaran Akuntan — cek ringkasan.' : ''), selisihAda ? 'error' : undefined);
+      toast('Kehadiran tersimpan (' + dipilih.length + ' orang) & tetap bisa diedit. PDF kwitansi otomatis dibuat saat LPDH diunduh.' + (selisihAda ? ' Catatan: ada selisih dengan anggaran Akuntan.' : ''));
       load();
     } catch (e) { toast('Gagal menyimpan kehadiran: ' + e.message, 'error'); }
     finally { setBusy(false); }
