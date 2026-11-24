@@ -3130,29 +3130,83 @@ function jarakEdit(a, b) {
   }
   return dp[lb];
 }
+// Padanan nama khusus POP ↔ Data Penerima (mis. SPPG Cipeujeuh 2: B3 RW 01/02/05 = Sarimekar 01/02/05)
+const ALIAS_SEKOLAH_POP = [
+  ['b3 rw 1', 'sarimekar 1'],
+  ['b3 rw 2', 'sarimekar 2'],
+  ['b3 rw 5', 'sarimekar 5'],
+];
+function normAliasSekolah(s) {
+  return normSekolah(s)
+    .replace(/^(posyandu|pos\s*kb)\s+/g, '')
+    .replace(/\bb3\s*rw\s*0*(\d+)\b/g, 'b3 rw $1')
+    .replace(/\bsari\s*mekar\s*(?:rw\s*)?0*(\d+)\b/g, 'sarimekar $1')
+    .replace(/\brw\s*0*(\d+)\b/g, 'rw $1')
+    .replace(/\b0+(\d+)\b/g, '$1')
+    .trim();
+}
+function kandidatAliasSekolah(s) {
+  const k = normAliasSekolah(s);
+  const out = k ? [k] : [];
+  ALIAS_SEKOLAH_POP.forEach(function(pair) {
+    if (pair.indexOf(k) >= 0) pair.forEach(function(p) { if (out.indexOf(p) < 0) out.push(p); });
+  });
+  return out;
+}
+function angkaSekolah(s) {
+  const m = String(s || '').match(/\d+/g);
+  return m ? m.map(function(n) { return String(Number(n)); }).join(',') : '';
+}
 function cocokSekolahPop(lembaga, sekolahList) {
   const lb = normSekolah(lembaga);
   if (!lb || !sekolahList || !sekolahList.length) return null;
   // 1. Sama persis
   let hit = sekolahList.find(function(s) { return normSekolah(s.nama) === lb; });
   if (hit) return hit;
+  // 1b. Padanan / alias khusus (termasuk variasi "01"/"1", "Posyandu", "RW", spasi)
+  const lbAlias = kandidatAliasSekolah(lembaga);
+  if (lbAlias.length) {
+    hit = sekolahList.find(function(s) {
+      const sa = kandidatAliasSekolah(s.nama);
+      return sa.some(function(x) { return lbAlias.indexOf(x) >= 0; });
+    });
+    if (hit) return hit;
+  }
+  const lbAngka = angkaSekolah(lembaga);
+  function angkaCocok(namaPop) {
+    const sa = angkaSekolah(namaPop);
+    return !lbAngka || !sa || lbAngka === sa;
+  }
   // 2. Sama setelah lepas spasi ("almuslim" == "al muslim")
   const lbRapat = lb.replace(/\s+/g, '');
-  hit = sekolahList.find(function(s) { const sr = normSekolah(s.nama).replace(/\s+/g, ''); return sr && (sr === lbRapat || sr.indexOf(lbRapat) >= 0 || lbRapat.indexOf(sr) >= 0); });
+  hit = sekolahList.find(function(s) {
+    if (!angkaCocok(s.nama)) return false;
+    const sr = normSekolah(s.nama).replace(/\s+/g, '');
+    return sr && (sr === lbRapat || sr.indexOf(lbRapat) >= 0 || lbRapat.indexOf(sr) >= 0);
+  });
   if (hit) return hit;
   // 3. Sama pada nama inti tanpa awalan jenjang ("KB Al Muslim" == "RA Al-Muslim")
   const lbInti = intiSekolah(lembaga).replace(/\s+/g, '');
   if (lbInti.length >= 3) {
-    hit = sekolahList.find(function(s) { const si = intiSekolah(s.nama).replace(/\s+/g, ''); return si.length >= 3 && (si === lbInti || si.indexOf(lbInti) >= 0 || lbInti.indexOf(si) >= 0); });
+    hit = sekolahList.find(function(s) {
+      if (!angkaCocok(s.nama)) return false;
+      const si = intiSekolah(s.nama).replace(/\s+/g, '');
+      return si.length >= 3 && (si === lbInti || si.indexOf(lbInti) >= 0 || lbInti.indexOf(si) >= 0);
+    });
     if (hit) return hit;
   }
   // 4. Sama secara fonetik / kemiripan ejaan ("Raudhotussalikin" vs "Raudhatus Salikin" / "Roudhotus Sholihin")
   const lbFon = fonetikSekolah(lembaga);
   if (lbFon.length >= 4) {
-    hit = sekolahList.find(function(s) { const sf = fonetikSekolah(s.nama); return sf.length >= 4 && (sf === lbFon || sf.indexOf(lbFon) >= 0 || lbFon.indexOf(sf) >= 0); });
+    hit = sekolahList.find(function(s) {
+      if (!angkaCocok(s.nama)) return false;
+      const sf = fonetikSekolah(s.nama);
+      return sf.length >= 4 && (sf === lbFon || sf.indexOf(lbFon) >= 0 || lbFon.indexOf(sf) >= 0);
+    });
     if (hit) return hit;
     let best = null, bestDist = 999;
     sekolahList.forEach(function(s) {
+      if (!angkaCocok(s.nama)) return;
       const sf = fonetikSekolah(s.nama);
       if (sf.length < 4) return;
       const d = jarakEdit(lbFon, sf);

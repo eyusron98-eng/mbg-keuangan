@@ -1551,13 +1551,15 @@ async function isiBahanBaku(page, uraian, volume, harga) {
           { penerima_id: 'DP2', jenis: 'RELAWAN', nama: 'Relawan B', jabatan: 'Cuci', lembaga: '', ada_ttd: true, pm: 0, nominal: null, pengganti: '', pilih: true },
           { penerima_id: 'PIC1', jenis: 'PIC_SEKOLAH', nama: 'Pak Budi', jabatan: '', lembaga: 'SDN A', ada_ttd: true, pm: 50, nominal: null, pengganti: '', pilih: true },
           { penerima_id: 'PIC2', jenis: 'PIC_SEKOLAH', nama: 'Bu Ani', jabatan: '', lembaga: 'Kb Raudhotussalikin', ada_ttd: true, pm: 50, nominal: null, pengganti: '', pilih: true },
+          { penerima_id: 'KD1', jenis: 'KADER', nama: 'Bu Siti', jabatan: '', lembaga: 'Sarimekar 01', ada_ttd: true, pm: 10, nominal: null, pengganti: '', pilih: true },
         ] } }
-      : a === 'terbitkanKwitansi' ? { ok: true, data: { sudahTerbit: p.rows.length, totalPilih: { RELAWAN: 220000, PIC_SEKOLAH: 50000, KADER: 0 }, anggaran: { RELAWAN: 220000, PIC_SEKOLAH: 50000, KADER: 0 } } }
-      : a === 'getHarianLPDH' ? { ok: true, data: { sumber: 'disalin dari 2026-10-14', pmRencana: 110, data: {
+      : a === 'terbitkanKwitansi' ? { ok: true, data: { sudahTerbit: p.rows.length, totalPilih: { RELAWAN: 220000, PIC_SEKOLAH: 50000, KADER: 50000 }, anggaran: { RELAWAN: 220000, PIC_SEKOLAH: 50000, KADER: 50000 } } }
+      : a === 'getHarianLPDH' ? { ok: true, data: { sumber: 'disalin dari 2026-10-14', pmRencana: 120, data: {
           sekolah: [
             { nama: 'SDN A', jenjang: 'SD', besar: 30, kecil: 20, dikirim: true },
             { nama: 'PAUD Raudhatus Salikin', jenjang: 'PAUD', besar: 40, kecil: 10, dikirim: true },
             { nama: 'RA Al-Muslim', jenjang: 'PAUD', besar: 25, kecil: 25, dikirim: true },
+            { nama: 'B3 RW 01', jenjang: 'B3_HAMIL', besar: 10, kecil: 0, dikirim: true },
           ], pm: [], produksi: { organoleptik: 0 }, syarat: {} } } }
       : a === 'saveHarianLPDH' ? { ok: true } : null }, async (page, srv) => {
     await login(page, 'aslap1');
@@ -1565,16 +1567,18 @@ async function isiBahanBaku(page, uraian, volume, harga) {
     // Langkah 2 & 3 terkunci sebelum Langkah 1 disimpan
     assert(await page.isDisabled('button:has-text("2. PIC & Posyandu")'), 'Langkah 2 harus terkunci sebelum Langkah 1 selesai');
     assert(await page.isDisabled('button:has-text("3. Relawan")'), 'Langkah 3 harus terkunci sebelum Langkah 2 selesai');
-    // Langkah 1: hilangkan centang SDN A (dikirim=100), isi Uji organoleptik=10 → total diproduksi=110 cocok dengan pmRencana=110
+    // Langkah 1: hilangkan centang SDN A (dikirim=110), isi Uji organoleptik=10 → total diproduksi=120 cocok dengan pmRencana=120
     await page.uncheck('[aria-label="Dikirim SDN A"]');
     await page.fill('[aria-label="Uji organoleptik"]', '10');
-    await page.waitForSelector('text=Total PM diproduksi (110) cocok dengan PM Rencana Ops Akuntan');
+    await page.waitForSelector('text=Total PM diproduksi (120) cocok dengan PM Rencana Ops Akuntan');
     await page.click('button:has-text("Simpan POP & Lanjut ke PIC/Posyandu")');
-    // Langkah 2: Pak Budi (SDN A) otomatis di-uncheck + Bu Ani ("Kb Raudhotussalikin") cocok dengan "PAUD Raudhatus Salikin"
+    // Langkah 2: Pak Budi (SDN A) otomatis di-uncheck + Bu Ani cocok PAUD Raudhatus Salikin + Bu Siti ("Sarimekar 01") cocok "B3 RW 01"
     await page.waitForSelector('text=Tidak dikirim di POP (SDN A)');
     await page.waitForSelector('text=Dikirim di POP (50 PM · PAUD Raudhatus Salikin)');
+    await page.waitForSelector('text=Dikirim di POP (10 PM · B3 RW 01)');
     assert(!(await page.isChecked('[aria-label="Pilih Pak Budi"]')), 'PIC sekolah tidak dikirim harus otomatis direkomendasikan kosong');
     assert(await page.isChecked('[aria-label="Pilih Bu Ani"]'), 'PIC sekolah dikirim harus tetap dicentang');
+    assert(await page.isChecked('[aria-label="Pilih Bu Siti"]'), 'Kader Sarimekar 01 harus cocok dengan B3 RW 01 dan tetap dicentang');
     assert((await page.locator('[aria-label^="Nominal "]').count()) === 0, 'Aslap tidak boleh melihat nominal per orang');
     await page.click('button:has-text("Lanjut ke Kehadiran Relawan")');
     // Langkah 3: Relawan A diganti AB → Simpan Semua Kehadiran
@@ -1591,11 +1595,11 @@ async function isiBahanBaku(page, uraian, volume, harga) {
     await page.click('button:has-text("Edit Relawan")');
     await page.waitForSelector('button:has-text("Simpan Perubahan Kehadiran")');
     const popSent = srv.log.posts.find(x => x.action === 'saveHarianLPDH');
-    assert(popSent && popSent.params.data.sekolah.length === 3 && popSent.params.data.sekolah[0].dikirim === false && popSent.params.data.produksi.total === 110,
+    assert(popSent && popSent.params.data.sekolah.length === 4 && popSent.params.data.sekolah[0].dikirim === false && popSent.params.data.produksi.total === 120,
       'saveHarianLPDH salah: ' + JSON.stringify(popSent && popSent.params.data));
     const kwSent = srv.log.posts.find(x => x.action === 'terbitkanKwitansi');
     const ids = (kwSent && kwSent.params.rows || []).map(r => r.penerima_id);
-    assert(kwSent && kwSent.params.simpan_saja === true && !ids.includes('PIC1') && ids.includes('PIC2') && kwSent.params.rows.find(r => r.penerima_id === 'DP1').pengganti === 'AB',
+    assert(kwSent && kwSent.params.simpan_saja === true && !ids.includes('PIC1') && ids.includes('PIC2') && ids.includes('KD1') && kwSent.params.rows.find(r => r.penerima_id === 'DP1').pengganti === 'AB',
       'terbitkanKwitansi salah: ' + JSON.stringify(kwSent));
   });
 
